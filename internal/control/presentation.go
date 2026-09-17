@@ -31,12 +31,19 @@ func (a *PresentationArbiter) AcceptBackground(job Job, publication session.Publ
 	}
 	a.lastAutoID = publication.ID
 	a.ObserveJob(job)
-	if job.Running || publication.Text == "" {
+	if (isManualPresentationJob(job) && job.Running) || publication.Text == "" {
 		return false
 	}
 	return publication.TriggeredAt.After(a.manualFence)
 }
 
 func isManualPresentationJob(job Job) bool {
-	return job.ID != "" && job.Purpose != "connection_test"
+	if job.ID == "" {
+		return false
+	}
+	return job.Purpose == "pipeline" || job.Purpose == "command"
+}
+
+func PresentsInOverlay(job Job) bool {
+	return isManualPresentationJob(job)
 }

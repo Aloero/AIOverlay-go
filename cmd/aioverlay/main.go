@@ -165,7 +165,7 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 		case <-ticker.C:
 			job := s.CurrentJob()
 			presentation.ObserveJob(job)
-			manual := job.ID != "" && job.Purpose != "connection_test"
+			manual := control.PresentsInOverlay(job)
 			if manual && job.Cleared {
 				if job.ID != lastID || lastText != "" || lastMeta != "" {
 					ov.Clear()

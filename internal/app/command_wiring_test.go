@@ -40,7 +40,7 @@ func TestServerScreenContextCommandUsesAppSessionRuntimeWithoutAI(t *testing.T) 
 		time.Sleep(time.Millisecond)
 	}
 	job := server.CurrentJob()
-	if job.ID != jobID || job.Running || job.Error != "" || job.Trace.Outcome != domain.OutcomeContextOnly {
+	if job.ID != jobID || job.Running || job.Error != "" || job.Purpose != "context_command" || job.Trace.Purpose != "context_command" || job.Trace.Outcome != domain.OutcomeContextOnly {
 		t.Fatalf("context command job=%+v", job)
 	}
 	if len(job.Trace.Events) != 0 || len(a.Traces()) != 0 {

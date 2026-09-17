@@ -42,7 +42,8 @@ func (s *Server) StartCommand(action string) (string, error) {
 		return "", fmt.Errorf("live execution unavailable")
 	}
 	pipelineID := s.backend.GetConfig().ActivePipelineID
-	return s.jobs.startTaskPurpose(s.ctx, pipelineID, "command", func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+	purpose := commandPurpose(action)
+	return s.jobs.startTaskPurpose(s.ctx, pipelineID, purpose, func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
 		prepared, err := b.PrepareCommand(ctx, action, func(callCtx context.Context) ([]byte, error) {
 			if s.Capture == nil {
 				return nil, fmt.Errorf("capture unavailable")
@@ -53,7 +54,7 @@ func (s *Server) StartCommand(action string) (string, error) {
 			return engine.Result{}, nil, err
 		}
 		if prepared.SkipRun {
-			return engine.Result{Trace: emptyCommandTrace(prepared.PipelineID, prepared.Command.ID)}, nil, nil
+			return engine.Result{Trace: emptyCommandTrace(prepared.PipelineID, prepared.Command.ID, purpose)}, nil, nil
 		}
 		res, err := live.Run(ctx, prepared.PipelineID, prepared.Input, opt)
 		if err == nil {
@@ -62,10 +63,17 @@ func (s *Server) StartCommand(action string) (string, error) {
 		return res, nil, err
 	})
 }
-func emptyCommandTrace(pipeline, source string) (tr domain.ExecutionTrace) {
+func commandPurpose(action string) string {
+	if action == "screen_context" {
+		return "context_command"
+	}
+	return "command"
+}
+
+func emptyCommandTrace(pipeline, source, purpose string) (tr domain.ExecutionTrace) {
 	tr.PipelineID = pipeline
 	tr.SourceID = source
-	tr.Purpose = "command"
+	tr.Purpose = purpose
 	tr.Outcome = domain.OutcomeContextOnly
 	tr.StartedAt = time.Now()
 	tr.FinishedAt = tr.StartedAt
