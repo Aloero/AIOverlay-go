@@ -1148,3 +1148,99 @@ func TestSessionRestartDropsPauseAndStartNowRuntimeState(t *testing.T) {
 		t.Fatal("Start-now override survived into a new session")
 	}
 }
+
+func TestScreenCooldownUpdatesContextWithoutStartingAITurn(t *testing.T) {
+	cfg := managerConfig()
+	contextCfg := cfg.Pipelines[0].Contexts[0]
+	source := domain.EventSource{
+		ID: "screen", Name: "screen", Kind: domain.SourceScreenTimer, Enabled: true,
+		EntryNodeID: "decision", Intent: domain.IntentDecide, ContextID: contextCfg.ID,
+	}
+	cfg.Pipelines[0].Sources = []domain.EventSource{source}
+	manager := NewManager(nil)
+	manager.cfg = cfg
+	manager.started = true
+	runtime := &sourceRuntime{
+		pipelineID: "p", cfg: source, epoch: 1, turns: make(chan backgroundTurn, 1),
+		status: SourceStatus{ID: source.ID, Running: true},
+	}
+	runtime.cooldownUntil = time.Now().Add(time.Minute)
+	manager.sources[source.ID] = runtime
+
+	at := time.Now()
+	manager.processScreenFrame("p", runtime, cfg, []byte("cooldown-frame"), at)
+	if len(runtime.turns) != 0 {
+		t.Fatal("screen cooldown still started an AI turn")
+	}
+	snapshot := manager.contexts.Snapshot(contextCfg, "p", at.Add(time.Millisecond))
+	if string(snapshot.ImageJPEG) != "cooldown-frame" {
+		t.Fatalf("screen context was not updated during cooldown: %q", snapshot.ImageJPEG)
+	}
+	runtime.mu.RLock()
+	suppression := runtime.status.LastSuppression
+	runtime.mu.RUnlock()
+	if suppression != "cooldown_after_auto_answer" {
+		t.Fatalf("screen cooldown reason=%q", suppression)
+	}
+
+	runtime.mu.Lock()
+	runtime.cooldownUntil = time.Now().Add(-time.Second)
+	runtime.mu.Unlock()
+	manager.processScreenFrame("p", runtime, cfg, []byte("after-cooldown"), at.Add(time.Second))
+	if len(runtime.turns) != 1 {
+		t.Fatal("screen AI turn did not resume after cooldown")
+	}
+	runtime.mu.RLock()
+	suppression = runtime.status.LastSuppression
+	runtime.mu.RUnlock()
+	if suppression != "" {
+		t.Fatalf("expired screen cooldown reason remained visible: %q", suppression)
+	}
+}
+
+func TestAudioCooldownUsesContextOnlyOrSkipsWhenNoContextExists(t *testing.T) {
+	cfg := managerConfig()
+	manager := NewManager(nil)
+	manager.cfg = cfg
+	manager.started = true
+	source := cfg.Pipelines[0].Sources[0]
+	source.Intent = domain.IntentDecide
+	runtime := &sourceRuntime{
+		pipelineID: "p", cfg: source, epoch: 1, turns: make(chan backgroundTurn, 1),
+		status: SourceStatus{ID: source.ID, Running: true}, cooldownUntil: time.Now().Add(time.Minute),
+	}
+	manager.sources[source.ID] = runtime
+	segment := paudio.Segment{
+		Started: time.Now(), Ended: time.Now().Add(100 * time.Millisecond),
+		Clip: domain.AudioClip{PCM16: make([]int16, 1600), SampleRate: 16000, Channels: 1, DurationMS: 100, Final: true},
+	}
+	manager.processAudioSegment(context.Background(), "p", runtime, segment)
+	select {
+	case turn := <-runtime.turns:
+		if turn.input.Intent != string(domain.IntentContext) {
+			t.Fatalf("audio cooldown intent=%q", turn.input.Intent)
+		}
+		manager.finishPending(turn.input.EventID)
+	default:
+		t.Fatal("audio cooldown with context stopped transcript/context processing")
+	}
+
+	withoutContext := source
+	withoutContext.ID = "no-context"
+	withoutContext.ContextID = ""
+	noContextRuntime := &sourceRuntime{
+		pipelineID: "p", cfg: withoutContext, epoch: 2, turns: make(chan backgroundTurn, 1),
+		status: SourceStatus{ID: withoutContext.ID, Running: true}, cooldownUntil: time.Now().Add(time.Minute),
+	}
+	manager.sources[withoutContext.ID] = noContextRuntime
+	manager.processAudioSegment(context.Background(), "p", noContextRuntime, segment)
+	if len(noContextRuntime.turns) != 0 {
+		t.Fatal("audio cooldown without context spent an AI turn")
+	}
+	noContextRuntime.mu.RLock()
+	suppression := noContextRuntime.status.LastSuppression
+	noContextRuntime.mu.RUnlock()
+	if suppression != "cooldown_after_auto_answer" {
+		t.Fatalf("audio cooldown reason=%q", suppression)
+	}
+}

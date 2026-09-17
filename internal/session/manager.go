@@ -45,6 +45,7 @@ type SourceStatus struct {
 	Dropped         uint64  `json:"dropped,omitempty"`
 	LastError       string  `json:"last_error,omitempty"`
 	LastOutcome     string  `json:"last_outcome,omitempty"`
+	LastSuppression string  `json:"last_suppression,omitempty"`
 	TransportState  string  `json:"transport_state,omitempty"`
 	SignalState     string  `json:"signal_state,omitempty"`
 	LastEvent       string  `json:"last_event,omitempty"`
@@ -822,11 +823,14 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 	if !clip.Final {
 		intent = domain.IntentContext
 	}
-	r.mu.RLock()
-	cool := r.cooldownUntil
-	r.mu.RUnlock()
-	if !cool.IsZero() && time.Now().Before(cool) && hasCtx {
+	if clip.Final && sourceCooldownActive(r, time.Now()) {
+		setSourceSuppression(r, "cooldown_after_auto_answer")
+		if !hasCtx {
+			return
+		}
 		intent = domain.IntentContext
+	} else {
+		clearSourceSuppression(r)
 	}
 	input := engine.Input{Audio: &clip, ContextText: snap.Text, ImageJPEG: snap.ImageJPEG, EntryNodeID: r.cfg.EntryNodeID, Intent: string(intent), SourceID: r.cfg.ID, EventID: clip.SegmentID}
 	if hasCtx {
@@ -870,32 +874,66 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 			if !changeGate.Accept(img, at) {
 				continue
 			}
-			r.mu.Lock()
-			r.status.LastEvent = at.Format(time.RFC3339Nano)
-			r.mu.Unlock()
-			p := activePipeline(cfg)
-			if p == nil || p.ID != pipelineID {
-				continue
-			}
-			ctxCfg, has := findContext(p, r.cfg.ContextID)
-			gen := uint64(0)
-			if has {
-				gen = m.contexts.Generation(pipelineID, ctxCfg.ID)
-				m.contexts.SetScreen(ctxCfg, pipelineID, gen, img, at)
-				if r.cfg.Intent == domain.IntentContext {
-					setSourceOutcome(r, domain.OutcomeContextOnly, nil)
-					continue
-				}
-			}
-			snap := ContextSnapshot{}
-			if has {
-				snap = m.contexts.Snapshot(ctxCfg, pipelineID, at)
-			}
-			input := engine.Input{ImageJPEG: append([]byte(nil), img...), ContextText: snap.Text, EntryNodeID: r.cfg.EntryNodeID, Intent: string(r.cfg.Intent), SourceID: r.cfg.ID, EventID: fmt.Sprintf("%s-%d", r.cfg.ID, m.eventSeq.Add(1))}
-			m.enqueueBackgroundTurn(r, backgroundTurn{pipelineID: pipelineID, ctxCfg: ctxCfg, generation: gen, input: input, at: at})
+			m.processScreenFrame(pipelineID, r, cfg, img, at)
 		}
 	}
 }
+func (m *Manager) processScreenFrame(pipelineID string, runtime *sourceRuntime, cfg domain.Config, image []byte, at time.Time) {
+	runtime.mu.Lock()
+	runtime.status.LastEvent = at.Format(time.RFC3339Nano)
+	runtime.mu.Unlock()
+
+	pipeline := activePipeline(cfg)
+	if pipeline == nil || pipeline.ID != pipelineID {
+		return
+	}
+	contextCfg, hasContext := findContext(pipeline, runtime.cfg.ContextID)
+	generation := uint64(0)
+	if hasContext {
+		generation = m.contexts.Generation(pipelineID, contextCfg.ID)
+		m.contexts.SetScreen(contextCfg, pipelineID, generation, image, at)
+	}
+	if runtime.cfg.Intent == domain.IntentContext {
+		clearSourceSuppression(runtime)
+		setSourceOutcome(runtime, domain.OutcomeContextOnly, nil)
+		return
+	}
+	if sourceCooldownActive(runtime, time.Now()) {
+		setSourceSuppression(runtime, "cooldown_after_auto_answer")
+		return
+	}
+	clearSourceSuppression(runtime)
+
+	snapshot := ContextSnapshot{}
+	if hasContext {
+		snapshot = m.contexts.Snapshot(contextCfg, pipelineID, at)
+	}
+	input := engine.Input{
+		ImageJPEG: append([]byte(nil), image...), ContextText: snapshot.Text,
+		EntryNodeID: runtime.cfg.EntryNodeID, Intent: string(runtime.cfg.Intent),
+		SourceID: runtime.cfg.ID, EventID: fmt.Sprintf("%s-%d", runtime.cfg.ID, m.eventSeq.Add(1)),
+	}
+	m.enqueueBackgroundTurn(runtime, backgroundTurn{pipelineID: pipelineID, ctxCfg: contextCfg, generation: generation, input: input, at: at})
+}
+
+func sourceCooldownActive(runtime *sourceRuntime, now time.Time) bool {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return !runtime.cooldownUntil.IsZero() && now.Before(runtime.cooldownUntil)
+}
+
+func setSourceSuppression(runtime *sourceRuntime, reason string) {
+	runtime.mu.Lock()
+	runtime.status.LastSuppression = reason
+	runtime.mu.Unlock()
+}
+
+func clearSourceSuppression(runtime *sourceRuntime) {
+	runtime.mu.Lock()
+	runtime.status.LastSuppression = ""
+	runtime.mu.Unlock()
+}
+
 func (m *Manager) enqueueBackgroundTurn(r *sourceRuntime, turn backgroundTurn) {
 	if r == nil || !m.sourceCurrent(r.cfg.ID, r.epoch) {
 		return
@@ -1029,6 +1067,7 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 		if p.SessionBudget != nil && p.SessionBudget.CooldownMS > 0 {
 			r.mu.Lock()
 			r.cooldownUntil = time.Now().Add(time.Duration(p.SessionBudget.CooldownMS) * time.Millisecond)
+			r.status.LastSuppression = ""
 			r.mu.Unlock()
 		}
 		if turn.ctxCfg.ID != "" && turn.ctxCfg.IncludeAnswers {

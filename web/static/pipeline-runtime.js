@@ -167,6 +167,7 @@ function bindScreenSource(source,index,set){
 async function loadAudioDevices(select,a){if(!select)return;try{audioDeviceCache ||= await api('/api/audio/devices');const items=(audioDeviceCache||[]).filter(d=>d.mode===a.mode);select.innerHTML='<option value="">Следовать выбранному устройству по умолчанию</option>'+items.map(d=>`<option value="${esc(d.id)}" ${d.id===a.device_id?'selected':''}>${esc(d.name)}</option>`).join('');if(a.device_id&&!items.some(d=>d.id===a.device_id)){const op=document.createElement('option');op.value=a.device_id;op.selected=true;op.textContent='Сохранённое устройство сейчас недоступно';select.append(op);}}catch{select.innerHTML='<option value="">Список устройств доступен в Windows-приложении</option>';}}
 async function previewAudioSource(p,i){const s=p.sources[i];if(!s?.audio)return;const status=$('#audioPreviewState_'+i);if((state.session?.sources||[]).some(s=>s.running)&&!state.session?.paused){if(!confirm('На время локальной проверки приостановить фон? Он останется на паузе, пока вы явно не возобновите его.'))return;await api('/api/session/pause','POST',{paused:true});await refreshSessionStatus(true);}status.textContent='Запись 2 секунды…';const result=await api('/api/audio/preview','POST',{config:s.audio,duration_ms:2000});status.textContent=`Получено ${(result.duration_ms/1000).toFixed(1)} с · RMS ${Number(result.rms).toFixed(3)} · peak ${Number(result.peak).toFixed(3)}`;const root=$('#audioPreview_'+i);root.innerHTML=`<audio controls preload="metadata" src="data:audio/wav;base64,${result.wav_base64}"></audio>${state.session?.paused?'<p class="note">Фон остаётся на паузе, чтобы воспроизведение теста не попало обратно в system loopback.</p>':''}`;}
 function runtimeOutcomeLabel(outcome){return {no_action:'без ответа по решению модели',respond:'ответ опубликован',context_only:'обновлён только контекст',rate_limited:'лимит провайдера',timeout:'таймаут',any_error:'ошибка обработки'}[outcome]||outcome||'';}
+function runtimeSuppressionLabel(reason){return {cooldown_after_auto_answer:'AI на паузе после автоответа'}[reason]||reason||'';}
 const audioTransportLabels={starting:'transport запускается',alive:'transport жив',recovering:'transport переподключается',stopped:'transport остановлен',unavailable:'transport недоступен'};
 const audioSignalLabels={unknown:'сигнал ещё не определён',no_packets:'пакетов сейчас нет',silent:'WASAPI: тишина',data:'аудиоданные поступают'};
 function runtimeAudioStateParts(source){
@@ -178,6 +179,7 @@ function runtimeAudioStateParts(source){
 function runtimeSourceSummary(source){
  const parts=[`${source.name}: ${source.running?'слушает/наблюдает':'остановлен'}`,...runtimeAudioStateParts(source)];
  if(source.last_outcome)parts.push(runtimeOutcomeLabel(source.last_outcome));
+ if(source.last_suppression)parts.push(runtimeSuppressionLabel(source.last_suppression));
  if(source.transcript_lag_ms)parts.push(`lag ${(source.transcript_lag_ms/1000).toFixed(1)}с`);
  if(source.dropped)parts.push(`пропусков ${source.dropped}`);
  if(source.last_error)parts.push(source.last_error);
