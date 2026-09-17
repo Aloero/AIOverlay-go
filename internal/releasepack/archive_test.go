@@ -49,3 +49,9 @@ func TestRuntimeAndLocalBuildArtifactsExcluded(t *testing.T) {
 		t.Fatal("release input lost")
 	}
 }
+
+func TestOnlyKnownEmbeddedSDKLoaderIsAllowed(t *testing.T) {
+	if !embeddedLoader("third_party/go-webview2/webviewloader/sdk/x64/WebView2Loader.dll") || embeddedLoader("third_party/go-webview2/webviewloader/sdk/x64/other.dll") || embeddedLoader("build/WebView2Loader.dll") {
+		t.Fatal("incorrect embedded loader inventory")
+	}
+}

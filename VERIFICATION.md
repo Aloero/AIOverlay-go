@@ -4,7 +4,7 @@ Host: Linux amd64. Target: Windows 10/11 x64. Date: 2026-09-17. This document se
 
 ## Executed checks
 
-The repaired working tree passed `go test ./... -count=1`: **154 test/subtest pass events, 0 failures**. Two sing-box integration tests are skipped in this ordinary environment-only run because they require an explicit host binary. They were also executed separately using the verified Linux sing-box 1.14.1 test runtime, **five consecutive runs**, including generated config check, preserved DNS dependencies, IPv4 endpoint policy, authenticated local proxy readiness/reuse and shutdown. No external tunnel server or provider account was contacted.
+The repaired working tree passed `go test ./... -count=1`: **155 test/subtest pass events, 0 failures**. Two sing-box integration tests are skipped in this ordinary environment-only run because they require an explicit host binary. They were also executed separately using the verified Linux sing-box 1.14.1 test runtime, **five consecutive runs**, including generated config check, preserved DNS dependencies, IPv4 endpoint policy, authenticated local proxy readiness/reuse and shutdown. No external tunnel server or provider account was contacted.
 
 `go vet ./...`, Windows-target vet and Windows x64 CGO-disabled cross-build passed. Race detection across the Go packages passed with the available Zig C compiler. The release command repeats critical engine/providers/app/control/desktop/platform/tunnel/hotkey tests 20 times and records the result rather than assuming the previous run applies. Per-command logs are in `releases/verification/` after release generation.
 

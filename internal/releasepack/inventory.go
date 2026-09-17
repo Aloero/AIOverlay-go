@@ -93,7 +93,7 @@ func Source(root string, allowDirty bool) ([]File, string, error) {
 		if !SafeName(name) {
 			return nil, "", fmt.Errorf("non-portable source path")
 		}
-		if (strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".dll")) && !strings.HasPrefix(name, "runtime/") {
+		if (strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".dll")) && !strings.HasPrefix(name, "runtime/") && !embeddedLoader(name) {
 			return nil, "", fmt.Errorf("unexpected executable in source inventory: %s", name)
 		}
 		for _, ext := range []string{".ttf", ".otf", ".woff", ".woff2"} {
@@ -141,4 +141,17 @@ func Directory(root string) ([]File, error) {
 		return nil
 	})
 	return files, err
+}
+
+// These redistributable SDK inputs are embedded by the existing Go WebView2
+// loader. They are source build dependencies, not stray release executables.
+func embeddedLoader(name string) bool {
+	switch name {
+	case "third_party/go-webview2/webviewloader/sdk/x64/WebView2Loader.dll",
+		"third_party/go-webview2/webviewloader/sdk/x86/WebView2Loader.dll",
+		"third_party/go-webview2/webviewloader/sdk/arm64/WebView2Loader.dll":
+		return true
+	default:
+		return false
+	}
 }
