@@ -136,6 +136,12 @@ func (m *Manager) SetCapture(manual, background ScreenCapture) {
 	m.backgroundCapture = background
 	m.mu.Unlock()
 }
+
+func (m *Manager) backgroundScreenCapture() ScreenCapture {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.backgroundCapture
+}
 func (m *Manager) SetAudioCapture(fn paudio.CaptureFunc) {
 	m.mu.Lock()
 	if fn != nil {
@@ -698,11 +704,8 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 		case <-ctx.Done():
 			return ctx.Err()
 		case at := <-ticker.C:
+			capture := m.backgroundScreenCapture()
 			m.mu.RLock()
-			capture := m.backgroundCapture
-			if capture == nil {
-				capture = m.capture
-			}
 			cfg := m.cfg
 			m.mu.RUnlock()
 			if capture == nil {
@@ -846,13 +849,10 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 	}
 	m.mu.RLock()
 	exec := m.execute
-	capture := m.backgroundCapture
-	if capture == nil {
-		capture = m.capture
-	}
 	publisher := m.publish
 	cfg := m.cfg
 	m.mu.RUnlock()
+	capture := m.backgroundScreenCapture()
 	if exec == nil {
 		return
 	}

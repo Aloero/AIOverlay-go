@@ -610,3 +610,20 @@ func TestDeadAudioRuntimeDoesNotBlockLocalPreview(t *testing.T) {
 		t.Fatalf("preview=%+v samples=%d", preview, len(preview.PCM16))
 	}
 }
+
+func TestBackgroundCaptureNeverFallsBackToManualCapture(t *testing.T) {
+	manager := NewManager(nil)
+	var manualCalls atomic.Int32
+	manager.SetCapture(func(context.Context) ([]byte, error) {
+		manualCalls.Add(1)
+		return []byte("manual"), nil
+	}, nil)
+
+	if capture := manager.backgroundScreenCapture(); capture != nil {
+		_, _ = capture(context.Background())
+		t.Fatal("background capture silently reused manual Studio capture")
+	}
+	if manualCalls.Load() != 0 {
+		t.Fatal("manual capture was invoked by background capture lookup")
+	}
+}
