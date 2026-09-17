@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -47,6 +48,28 @@ func (r *Registry) Get(id string) (Provider, bool) {
 	return p, ok
 }
 func (r *Registry) Set(id string, p Provider) { r.mu.Lock(); defer r.mu.Unlock(); r.items[id] = p }
+
+func (r *Registry) Capabilities(cfg domain.Config) []AdapterCapabilities {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]AdapterCapabilities, 0, len(cfg.Providers))
+	for _, providerConfig := range cfg.Providers {
+		adapter := r.items[providerConfig.ID]
+		result = append(result, adapterCapabilities(providerConfig, adapter))
+	}
+	return result
+}
+
+func (r *Registry) OpenRealtime(ctx context.Context, request RealtimeOpenRequest) (RealtimeSession, error) {
+	r.mu.RLock()
+	adapter := r.items[request.ProviderID]
+	r.mu.RUnlock()
+	if adapter == nil {
+		return nil, fmt.Errorf("provider %s is not registered", request.ProviderID)
+	}
+	return openRealtime(ctx, adapter, request)
+}
+
 func (r *Registry) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

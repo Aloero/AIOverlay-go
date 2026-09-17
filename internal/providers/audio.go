@@ -11,7 +11,6 @@ type MediaCapabilities struct {
 	Audio             bool `json:"audio"`
 	Image             bool `json:"image"`
 	TranscriptionOnly bool `json:"transcription_only"`
-	Realtime          bool `json:"realtime"`
 }
 
 func Media(p domain.ProviderConfig) MediaCapabilities {

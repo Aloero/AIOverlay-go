@@ -142,6 +142,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/limits/preview", s.handleLimitsPreview)
 	mux.HandleFunc("/api/providers/config", s.handleProviderConfig)
 	mux.HandleFunc("/api/providers/catalog", s.handleProviderDirectory)
+	mux.HandleFunc("/api/providers/capabilities", s.handleProviderCapabilities)
 	mux.HandleFunc("/api/pool/plan", s.handlePoolPlan)
 	mux.HandleFunc("/api/pipelines/active", s.handleActivePipeline)
 	static, _ := fs.Sub(webassets.FS, "static")

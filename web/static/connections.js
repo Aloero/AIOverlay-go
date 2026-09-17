@@ -1,10 +1,14 @@
 'use strict';
 
 // Provider discovery and connection setup. Catalog identity is not a transport.
-let providerDirectoryCache;
+let providerDirectoryCache,providerCapabilitiesCache;
 async function providerDirectory() {
  if (!providerDirectoryCache) providerDirectoryCache = await api('/api/providers/catalog');
  return providerDirectoryCache;
+}
+async function providerCapabilities() {
+ if (!providerCapabilitiesCache) providerCapabilitiesCache = await api('/api/providers/capabilities');
+ return providerCapabilitiesCache;
 }
 function providerTemplate(id, label) {
  return {id,label,kind:'openai_compatible',audio_input:false,enabled:true,base_url:'',headers:{},credential_pool:{policy:'round_robin',keys:[],max_keys_per_request:3,rate_limit_cooldown_s:60},request_defaults:{connect_timeout_ms:3000,first_token_timeout_ms:12000,response_timeout_ms:20000,stream_idle_timeout_ms:5000,max_output_tokens:2048}};
@@ -25,12 +29,27 @@ function newOpenCodeConnection(meta) {
 function routeLabel(p) {return p?.kind==='embedded_opencode'?'Via OpenCode':'Direct';}
 function connectionSupportsAudio(p){return !!p&&(p.kind==='gemini'||p.kind==='audio_transcription'||(p.kind==='openai_compatible'&&p.audio_input===true));}
 
+const realtimeOperationNames={append_audio:'Добавлять audio без generation',update_image:'Обновлять image',request_response:'Запрашивать ответ',semantic_no_action:'Semantic no_action',text_output:'Получать text output',interrupt:'Прерывать ответ',clean_session:'Чистая session / isolation',reconnect:'Reconnect / resume',vpn_fail_closed:'AI VPN fail-closed'};
+function realtimeCapabilityRows(capabilities){
+ const operations=capabilities?.realtime?.operations||{};
+ return Object.entries(realtimeOperationNames).map(([operation,label])=>`<div class="capability-row"><span>${esc(label)}</span><b>${operations[operation]?'SUPPORTED':'UNSUPPORTED'}</b></div>`).join('');
+}
+async function renderProviderCapabilities(connection){
+ const root=$('#providerCapabilities');if(!root)return;
+ try{
+  const all=await providerCapabilities(),saved=all.find(item=>item.provider_id===connection.id);
+  if(!saved){root.innerHTML='<p class="note">Матрица transport появится после сохранения подключения.</p>';return;}
+  const media=[saved.media?.image?'IMAGE':'',saved.media?.audio?'AUDIO':'',saved.media?.transcription_only?'TRANSCRIPTION ONLY':''].filter(Boolean);
+  root.innerHTML=`<div class="tags">${media.map(value=>tag(value,'image')).join('')||tag('TEXT','text')}</div><p class="note">Persistent realtime: <b>${saved.realtime?.available?'AVAILABLE':'UNSUPPORTED'}</b>. HTTP audio и streaming ответа не считаются realtime session.</p>${realtimeCapabilityRows(saved)}${saved.realtime?.reason?`<p class="note">${esc(saved.realtime.reason)}</p>`:''}`;
+ }catch(error){root.innerHTML=`<p class="note">Матрица transport недоступна: ${esc(error.message||String(error))}</p>`;}
+}
+
 function providerDialog(connection, onDone) {
  const p=copy(connection);p.credential_pool.keys||=[];let committed=JSON.stringify(p);
  const via=p.kind==='embedded_opencode',cp=catalogProviderID(p);
  modal(p.label,`<div class="connection-identity">${tag(via?'Via OpenCode':'Direct')}<code>${esc(cp)}</code></div>
  <div class="connection-form"><section><h3>API-ключи</h3><div id="providerKeys"></div><div class="field"><label for="bulkKeys">Добавить ключи</label><textarea id="bulkKeys" class="secret-entry" rows="3" spellcheck="false" autocomplete="off" placeholder="Вставьте один или несколько ключей" data-help="Один ключ на строку; буквальная последовательность \\n тоже поддерживается. Повторы не добавляются. После добавления секрет скрыт."></textarea></div><button class="button" id="addKeys">Добавить</button><p class="secret-notice">Ключи хранятся в config.json в открытом виде.</p>${via&&cp==='opencode'?'<p class="note">Для доступных Free-моделей OpenCode ключ не нужен. Платным моделям нужен ключ OpenCode.</p>':''}</section>
- <section><h3>Использование</h3><label class="switch"><input type="checkbox" id="providerEnabled" ${p.enabled?'checked':''}>Подключение включено</label>${selectField('Выбор ключа','keyPolicy',keyPolicyNames,p.credential_pool.policy)}<div class="form-row">${field('Ключей на модель','keyMax',p.credential_pool.max_keys_per_request,'number')}${field('Пауза после 429, с','keyCooldown',p.credential_pool.rate_limit_cooldown_s,'number')}</div>${field('Макс. токенов ответа','providerTokens',p.request_defaults.max_output_tokens,'number')}</section></div>
+ <section><h3>Использование</h3><label class="switch"><input type="checkbox" id="providerEnabled" ${p.enabled?'checked':''}>Подключение включено</label>${selectField('Выбор ключа','keyPolicy',keyPolicyNames,p.credential_pool.policy)}<div class="form-row">${field('Ключей на модель','keyMax',p.credential_pool.max_keys_per_request,'number')}${field('Пауза после 429, с','keyCooldown',p.credential_pool.rate_limit_cooldown_s,'number')}</div>${field('Макс. токенов ответа','providerTokens',p.request_defaults.max_output_tokens,'number')}<h3>Transport capabilities</h3><div id="providerCapabilities"><p class="note">Проверяю локальный adapter contract…</p></div></section></div>
  <details class="advanced-connection"><summary>Параметры подключения</summary>${field('Название','providerLabel',p.label)}${via?`<div class="field"><label>Provider ID</label><code>${esc(cp)}</code></div>${field('Переменная ключа','credentialEnv',(p.credential_env||[]).join(', '),'text','Определяется по Models.dev. OpenCode также получает apiKey в изолированной конфигурации текущего провайдера.')}`:selectField('Протокол','providerKind',{openai_compatible:'OpenAI-compatible Chat API',audio_transcription:'Audio transcription API',gemini:'Gemini API'},p.kind)+`<label class="switch"><input type="checkbox" id="providerAudioInput" ${p.audio_input?'checked':''}>Этот OpenAI-compatible Chat endpoint принимает raw AUDIO</label><small>Включайте только если endpoint действительно поддерживает audio content. Отдельный transcription API выбирайте протоколом выше.</small>`}${field(via?'Base URL (необязательно)':'Base URL','providerURL',p.base_url||'','url')}${!via?field('Provider ID в Models.dev','catalogProviderID',p.catalog_provider_id||catalogProviderID(p)):''}</details>
  <div class="dialog-footer"><span class="dim">${via&&!(p.credential_env||[]).length&&cp!=='opencode'?'OAuth и облачная авторизация не заменяются обычным API-ключом.':'Авторизация проверяется при запросе.'}</span><button class="button primary" id="providerDone">Сохранить подключение</button></div>`,via?'OPENCODE / ПОДКЛЮЧЕНИЕ':'DIRECT / ПОДКЛЮЧЕНИЕ');
  function keys() {
@@ -45,6 +64,7 @@ function providerDialog(connection, onDone) {
  bind('keyPolicy',p.credential_pool,'policy');bind('keyMax',p.credential_pool,'max_keys_per_request',true);bind('keyCooldown',p.credential_pool,'rate_limit_cooldown_s',true);bind('providerTokens',p.request_defaults,'max_output_tokens',true);
  if($('#credentialEnv'))$('#credentialEnv').onchange=e=>{p.credential_env=e.target.value.split(',').map(v=>v.trim()).filter(Boolean);};
  $('#providerEnabled').onchange=e=>{p.enabled=e.target.checked;};
+ renderProviderCapabilities(p);
  function addKeys() {
   const existing=new Set(p.credential_pool.keys.map(k=>k.secret));let count=0;
   for(const key of $('#bulkKeys').value.replace(/\\n/g,'\n').split(/[\r\n]+/).map(v=>v.trim()).filter(Boolean)) {
@@ -67,6 +87,7 @@ function providerDialog(connection, onDone) {
    draft.saving=(async()=>{
     if(prior)await prior;
     await api('/api/providers/config','POST',snapshot);
+    providerCapabilitiesCache=null;
     const index=state.config.providers.findIndex(v=>v.id===snapshot.id);
     if(index<0)state.config.providers.push(snapshot);else state.config.providers[index]=snapshot;
     acknowledgeProviderSave(snapshot);

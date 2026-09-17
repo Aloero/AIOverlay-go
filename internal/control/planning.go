@@ -3,6 +3,7 @@ package control
 import (
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
+	"aioverlay/internal/providers"
 	"fmt"
 	"net/http"
 )
@@ -10,6 +11,10 @@ import (
 type planningBackend interface {
 	ProviderDirectory() []domain.ProviderMeta
 	PreviewPool(domain.Config, domain.ModelPoolConfig, bool) engine.PoolPlan
+}
+
+type capabilityBackend interface {
+	ProviderCapabilities() []providers.AdapterCapabilities
 }
 
 func (s *Server) handleProviderDirectory(w http.ResponseWriter, r *http.Request) {
@@ -23,6 +28,19 @@ func (s *Server) handleProviderDirectory(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, b.ProviderDirectory())
+}
+
+func (s *Server) handleProviderCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	b, ok := s.backend.(capabilityBackend)
+	if !ok {
+		http.Error(w, "provider capabilities unavailable", http.StatusNotImplemented)
+		return
+	}
+	writeJSON(w, b.ProviderCapabilities())
 }
 func (s *Server) handlePoolPlan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

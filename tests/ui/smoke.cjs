@@ -44,6 +44,9 @@ function ok(c,m){assert.ok(c,m);checks++}
   const edit=w.document.querySelector('[data-edit-connection]');
   assert.ok(edit,'provider edit button');edit.click();
   await wait(()=>$('#bulkKeys'),'credential dialog');
+  await wait(()=>$('#providerCapabilities')?.textContent.includes('Persistent realtime'),'provider capability matrix');
+  ok($('#providerCapabilities').textContent.includes('UNSUPPORTED'),'HTTP adapter must not appear realtime-ready');
+  ok(calls.some(c=>c.path==='/api/providers/capabilities'&&c.method==='GET'),'capability matrix comes from Go adapter contract');
   $('#bulkKeys').value='TEST-KEY-ONE\nTEST-KEY-TWO\\nTEST-KEY-ONE';click('#addKeys');
   ok($('#providerKeys').children.length===2,'batch key newline/dedup');ok($('#bulkKeys').value==='','key paste cleared');
   ok(!$('#providerKeys').textContent.includes('TEST-KEY-ONE'),'secret masked');

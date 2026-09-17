@@ -3,9 +3,17 @@ package app
 import (
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
+	"aioverlay/internal/providers"
 )
 
 func (a *App) ProviderDirectory() []domain.ProviderMeta { return a.catalog.Directory() }
+
+func (a *App) ProviderCapabilities() []providers.AdapterCapabilities {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.registry.Capabilities(a.cfg)
+}
+
 func (a *App) PreviewPool(cfg domain.Config, pool domain.ModelPoolConfig, image bool) engine.PoolPlan {
 	return engine.PlanPool(cfg, a.catalog, pool, image)
 }
