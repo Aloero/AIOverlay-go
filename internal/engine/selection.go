@@ -160,7 +160,7 @@ func PlanMediaPool(cfg domain.Config, cat *catalog.Service, pool domain.ModelPoo
 }
 
 func (r *runner) planPool(ctx context.Context, n domain.Node, pool domain.ModelPoolConfig, input nodeValue) []domain.ModelSlot {
-	plan := PlanMediaPool(r.engine.cfg, r.engine.catalog, pool, len(input.image) > 0 && !input.hasOutput, input.audio != nil)
+	plan := PlanMediaPool(r.engine.cfg, r.engine.catalog, pool, len(input.image) > 0 && !input.imageResolved, input.audio != nil)
 	r.emit(domain.TraceEvent{Kind: "pool_plan", NodeID: n.ID, PlanID: executionPlanID(ctx), CandidateCount: len(plan.Candidates), Message: fmt.Sprintf("source=%s; candidates=%d; order=%s; dispatch=%s; parallel<=%d; calls<=%d; hedge=%dms", plan.Mode, len(plan.Candidates), pool.EffectiveOrder(), pool.EffectiveDispatch(), min(max(1, pool.MaxParallel), cap(r.sem)), pool.MaxCalls, pool.HedgeDelayMS)})
 	reasons := make([]string, 0, len(plan.Skipped))
 	for reason := range plan.Skipped {

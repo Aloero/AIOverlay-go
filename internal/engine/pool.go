@@ -25,7 +25,7 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 		if err != nil {
 			return nodeValue{}, outcome, err
 		}
-		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true, audio: input.audio, transcript: input.transcript}
+		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true, imageResolved: true, audio: input.audio, transcript: input.transcript}
 	}
 	gate := &streamGate{runner: r, silent: ctx.Value(silentKey{}) == true}
 	ctx = context.WithValue(ctx, streamKey{}, gate)
@@ -54,6 +54,9 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 				modelInput.text = res
 				modelInput.hasOutput = true
 				modelInput.image = input.image
+				if len(input.image) > 0 {
+					modelInput.imageResolved = true
+				}
 				if modelInput.vision == "" && len(input.image) > 0 {
 					modelInput.vision = res
 				}
@@ -131,6 +134,9 @@ func (r *runner) racePool(ctx context.Context, n domain.Node, pool domain.ModelP
 				cancel(errRaceWon)
 				input.text = got.text
 				input.hasOutput = true
+				if len(input.image) > 0 {
+					input.imageResolved = true
+				}
 				if input.vision == "" && len(input.image) > 0 {
 					input.vision = got.text
 				}
@@ -205,7 +211,7 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 	if len(input.image) > 0 && r.engine.catalog != nil {
 		ref := catalog.ProviderID(pc) + "/" + strings.TrimPrefix(m.ModelID, catalog.ProviderID(pc)+"/")
 		if meta, known := r.engine.catalog.Find(ref); known && !meta.HasImageInput() {
-			if !input.hasOutput {
+			if !input.imageResolved {
 				return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "text-only model requires a vision preprocessor"}
 			}
 			input.image = nil

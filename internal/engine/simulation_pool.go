@@ -19,12 +19,12 @@ func (s *simulator) pool(n domain.Node, input nodeValue) (nodeValue, domain.Outc
 		if err != nil {
 			return nodeValue{}, o, err
 		}
-		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true}
+		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true, imageResolved: true}
 	}
 	oldPlan := s.planID
 	s.planID = fmt.Sprintf("sim-plan-%d", len(s.r.trace.Events))
 	defer func() { s.planID = oldPlan }()
-	plan := PlanPool(s.req.Config, s.r.engine.catalog, *p, len(modelInput.image) > 0 && !modelInput.hasOutput)
+	plan := PlanPool(s.req.Config, s.r.engine.catalog, *p, len(modelInput.image) > 0 && !modelInput.imageResolved)
 	models := s.r.engine.orderPoolModels(s.r.pipeline.ID+"/"+n.ID, *p, plan.Candidates)
 	s.emit(domain.TraceEvent{Kind: "pool_plan", NodeID: n.ID, CandidateCount: len(models), Message: fmt.Sprintf("source=%s; candidates=%d; order=%s; dispatch=%s", plan.Mode, len(models), p.EffectiveOrder(), p.EffectiveDispatch())})
 	reasons := make([]string, 0, len(plan.Skipped))
@@ -67,7 +67,7 @@ func (s *simulator) pool(n domain.Node, input nodeValue) (nodeValue, domain.Outc
 		}
 		if len(modelInput.image) > 0 && s.r.engine.catalog != nil {
 			ref := catalog.ProviderID(pc) + "/" + strings.TrimPrefix(m.ModelID, catalog.ProviderID(pc)+"/")
-			if meta, known := s.r.engine.catalog.Find(ref); known && !meta.HasImageInput() && !modelInput.hasOutput {
+			if meta, known := s.r.engine.catalog.Find(ref); known && !meta.HasImageInput() && !modelInput.imageResolved {
 				lastOutcome = domain.OutcomeUnsupportedModality
 				lastErr = fmt.Errorf("text-only model needs vision stage")
 				s.emit(domain.TraceEvent{Kind: "candidate_end", NodeID: n.ID, Outcome: lastOutcome, Message: lastErr.Error()})
@@ -156,6 +156,9 @@ func (s *simulator) pool(n domain.Node, input nodeValue) (nodeValue, domain.Outc
 				modelInput.text = c.text
 				modelInput.hasOutput = true
 				modelInput.image = input.image
+				if len(input.image) > 0 {
+					modelInput.imageResolved = true
+				}
 				if modelInput.vision == "" && len(input.image) > 0 {
 					modelInput.vision = c.text
 				}

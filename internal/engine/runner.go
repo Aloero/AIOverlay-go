@@ -28,12 +28,13 @@ func terminalPoolBudget(err error) bool {
 }
 
 type nodeValue struct {
-	audio      *domain.AudioClip
-	transcript string
-	image      []byte
-	text       string
-	vision     string
-	hasOutput  bool
+	audio         *domain.AudioClip
+	transcript    string
+	image         []byte
+	text          string
+	vision        string
+	hasOutput     bool
+	imageResolved bool
 }
 type runner struct {
 	waited, published bool
@@ -139,6 +140,7 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 		case domain.NodeCapture:
 			out = value
 			out.image, err = r.capture(ctx, n.ID)
+			out.imageResolved = false
 			if err != nil {
 				outcome = domain.OutcomeProviderUnavailable
 			}

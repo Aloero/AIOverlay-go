@@ -31,6 +31,7 @@ func (s *simulator) executeNode(node domain.Node, input nodeValue) (simulationSt
 		}
 	case domain.NodeCapture:
 		step.value.image = []byte{1}
+		step.value.imageResolved = false
 		s.emit(domain.TraceEvent{Kind: "capture_start", NodeID: node.ID, Message: "Synthetic screen action; no capture performed"})
 	case domain.NodeContext:
 		step.value.text = joinSimulationContext(s.req.ContextText, input.text)

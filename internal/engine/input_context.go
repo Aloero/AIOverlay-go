@@ -23,6 +23,7 @@ type PoolInput struct {
 type inputState struct {
 	id                            string
 	image, audio, text, hasOutput bool
+	imageResolved                 bool
 	source                        string
 }
 
@@ -80,7 +81,7 @@ func describePoolInput(pipeline domain.Pipeline, nodeID string, starts []inputSt
 			continue
 		}
 		if state.id == rootID {
-			image = image || (state.image && !state.hasOutput)
+			image = image || (state.image && !state.imageResolved)
 			audio = audio || state.audio
 			text = text || state.text || state.hasOutput
 			sources[state.source] = true
@@ -132,14 +133,21 @@ func applySuccessfulNodeInput(node domain.Node, state inputState) inputState {
 	switch node.Type {
 	case domain.NodeCapture:
 		success.image = true
+		success.imageResolved = false
 	case domain.NodeContext:
 		success.text = true
-	case domain.NodeModelPool, domain.NodeDecision:
+	case domain.NodeModelPool:
 		success.text = true
 		success.hasOutput = true
+		if success.image {
+			success.imageResolved = true
+		}
 		if node.ModelPool != nil && node.ModelPool.Task == "transcribe" {
 			success.audio = false
 		}
+	case domain.NodeDecision:
+		success.text = true
+		success.hasOutput = true
 	}
 	return success
 }
