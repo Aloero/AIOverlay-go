@@ -21,7 +21,7 @@ func enum[T ~string](v T, values ...T) bool {
 func within(v, min, max int) bool { return v >= min && v <= max }
 func score(v float64) bool        { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 100 }
 func validateProvider(p domain.ProviderConfig) error {
-	if !enum(p.Kind, domain.ProviderOpenAICompatible, domain.ProviderGemini, domain.ProviderEmbeddedOpenCode) {
+	if !enum(p.Kind, domain.ProviderOpenAICompatible, domain.ProviderGemini, domain.ProviderEmbeddedOpenCode, domain.ProviderTranscription) {
 		return fmt.Errorf("provider %s has unsupported protocol", p.ID)
 	}
 	if !enum(p.CredentialPool.Policy, domain.CredentialRoundRobin, domain.CredentialSequential, domain.CredentialSticky, domain.CredentialRandom) {
@@ -121,7 +121,7 @@ func validateBudget(b domain.ExecutionBudget) error {
 	return nil
 }
 func validateNode(n domain.Node) error {
-	if !enum(n.Type, domain.NodeScreen, domain.NodeModelPool, domain.NodeValidator, domain.NodeOutput) {
+	if !enum(n.Type, domain.NodeScreen, domain.NodeModelPool, domain.NodeValidator, domain.NodeOutput, domain.NodeAudio, domain.NodeContext, domain.NodeDecision, domain.NodeCapture) {
 		return fmt.Errorf("unknown node type")
 	}
 	if n.Validator != nil {
@@ -146,13 +146,20 @@ func validateEdge(e domain.Edge) error {
 		return fmt.Errorf("invalid transition limits or empty outcomes")
 	}
 	for _, o := range e.On {
-		if !enum(o, domain.OutcomeSuccess, domain.OutcomeAnyError, domain.OutcomeAuthFailed, domain.OutcomeRateLimited, domain.OutcomeQuotaExceeded, domain.OutcomeTimeout, domain.OutcomeFirstTokenTimeout, domain.OutcomeStreamIdleTimeout, domain.OutcomeNetworkError, domain.OutcomeModelUnavailable, domain.OutcomeRegionRestricted, domain.OutcomeUnsupportedModality, domain.OutcomeProviderUnavailable, domain.OutcomeInvalidResponse, domain.OutcomeValidationFailed, domain.OutcomeCancelled) {
+		if !enum(o, domain.OutcomeSuccess, domain.OutcomeAnyError, domain.OutcomeAuthFailed, domain.OutcomeRateLimited, domain.OutcomeQuotaExceeded, domain.OutcomeTimeout, domain.OutcomeFirstTokenTimeout, domain.OutcomeStreamIdleTimeout, domain.OutcomeNetworkError, domain.OutcomeModelUnavailable, domain.OutcomeRegionRestricted, domain.OutcomeUnsupportedModality, domain.OutcomeProviderUnavailable, domain.OutcomeInvalidResponse, domain.OutcomeValidationFailed, domain.OutcomeCancelled, domain.OutcomeWait, domain.OutcomeRespond, domain.OutcomeNeedScreen) {
 			return fmt.Errorf("unknown transition outcome")
 		}
 	}
 	return nil
 }
 func validatePoolLimits(p *domain.ModelPoolConfig) error {
+	if !enum(p.Task, "", "generate", "transcribe") {
+		return fmt.Errorf("unknown model task")
+	}
+	if !enum(p.ResultName, "", "audio.text", "vision.text") {
+		return fmt.Errorf("unknown output binding")
+	}
+
 	if p.Order != "" && !enum(p.Order, domain.PoolPriority, domain.PoolRoundRobin, domain.PoolWeighted, domain.PoolFastest) {
 		return fmt.Errorf("unknown model ordering")
 	}

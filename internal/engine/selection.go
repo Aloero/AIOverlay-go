@@ -7,6 +7,7 @@ import (
 
 	"aioverlay/internal/catalog"
 	"aioverlay/internal/domain"
+	"aioverlay/internal/providers"
 )
 
 // PoolPlan is also used by Studio. Planning never rotates cursors or sends requests.
@@ -18,6 +19,13 @@ type PoolPlan struct {
 }
 
 func PlanPool(cfg domain.Config, cat *catalog.Service, pool domain.ModelPoolConfig, imageInput bool) PoolPlan {
+	return PlanMediaPool(cfg, cat, pool, imageInput, pool.Task == "transcribe" || pool.Selection != nil && (pool.Selection.Modality == "audio" || pool.Selection.Modality == "audio_image"))
+}
+func PlanMediaPool(cfg domain.Config, cat *catalog.Service, pool domain.ModelPoolConfig, imageInput, audioInput bool) PoolPlan {
+	if pool.Task == "transcribe" {
+		imageInput = false
+		audioInput = true
+	}
 	plan := PoolPlan{Candidates: []domain.ModelSlot{}, Skipped: map[string]int{}, Mode: "manual"}
 	if pool.Selection != nil && pool.Selection.Mode != "" {
 		plan.Mode = pool.Selection.Mode
@@ -80,7 +88,17 @@ func PlanPool(cfg domain.Config, cat *catalog.Service, pool domain.ModelPoolConf
 				plan.Skipped["needs_vision"]++
 				continue
 			}
-			needsImage := imageInput || pool.Selection.Modality == "image"
+			pc, _ := findProvider(cfg, route.ConfigID)
+			caps := providers.Media(pc)
+			if caps.TranscriptionOnly && pool.Task != "transcribe" {
+				plan.Skipped["transcription_only"]++
+				continue
+			}
+			if audioInput && (!route.Model.HasAudioInput() || !caps.Audio) {
+				plan.Skipped["needs_audio"]++
+				continue
+			}
+			needsImage := imageInput || pool.Selection.Modality == "image" || pool.Selection.Modality == "audio_image"
 			if needsImage && !route.Model.HasImageInput() {
 				plan.Skipped["needs_vision"]++
 				continue
@@ -142,7 +160,7 @@ func PlanPool(cfg domain.Config, cat *catalog.Service, pool domain.ModelPoolConf
 }
 
 func (r *runner) planPool(ctx context.Context, n domain.Node, pool domain.ModelPoolConfig, input nodeValue) []domain.ModelSlot {
-	plan := PlanPool(r.engine.cfg, r.engine.catalog, pool, len(input.image) > 0 && !input.hasOutput)
+	plan := PlanMediaPool(r.engine.cfg, r.engine.catalog, pool, len(input.image) > 0 && !input.hasOutput, input.audio != nil)
 	r.emit(domain.TraceEvent{Kind: "pool_plan", NodeID: n.ID, PlanID: executionPlanID(ctx), CandidateCount: len(plan.Candidates), Message: fmt.Sprintf("source=%s; candidates=%d; order=%s; dispatch=%s; parallel<=%d; calls<=%d; hedge=%dms", plan.Mode, len(plan.Candidates), pool.EffectiveOrder(), pool.EffectiveDispatch(), min(max(1, pool.MaxParallel), cap(r.sem)), pool.MaxCalls, pool.HedgeDelayMS)})
 	reasons := make([]string, 0, len(plan.Skipped))
 	for reason := range plan.Skipped {

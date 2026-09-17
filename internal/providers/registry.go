@@ -26,6 +26,8 @@ func NewRegistry(cfg domain.Config, resolver ...ProxyResolver) (*Registry, error
 		switch p.Kind {
 		case domain.ProviderOpenAICompatible:
 			impl = NewOpenAI(p, proxy)
+		case domain.ProviderTranscription:
+			impl = NewTranscription(p, proxy)
 		case domain.ProviderGemini:
 			impl = NewGemini(p, proxy)
 		case domain.ProviderEmbeddedOpenCode:

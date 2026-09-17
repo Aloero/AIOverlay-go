@@ -207,6 +207,7 @@ type winOverlay struct {
 	registered                            map[string]string
 	suspended                             atomic.Bool
 	suspendUntil                          atomic.Int64
+	userHidden                            bool
 	configGhost                           bool
 	hotkeyError                           string
 	protection                            ProtectionStatus
@@ -328,7 +329,13 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 	case 0x8003:
 		o.checkStationary()
 		return 0
+	case 0x8007:
+		o.toggleVisibility()
+		return 0
 	case 0x8004:
+		if o.userHidden {
+			return 0
+		}
 		o.applyNative()
 		pShowWindow.Call(o.hwnd.Load(), swShowNoActivate)
 		return 0
@@ -382,6 +389,13 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 		case 4:
 			if o.cb.Control != nil {
 				go o.cb.Control()
+			}
+		case 5:
+			o.toggleVisibility()
+		case 6, 7, 8:
+			if o.cb.Command != nil {
+				name := map[int]string{6: "screen_context", 7: "screen_decide", 8: "session_pause"}[int(wparam)]
+				go o.cb.Command(name)
 			}
 		}
 		return 0
@@ -667,12 +681,7 @@ func (o *winOverlay) showTrayMenu() {
 			go o.cb.Control()
 		}
 	case trayToggleOverlay:
-		vis, _, _ := user32.NewProc("IsWindowVisible").Call(o.hwnd.Load())
-		if vis != 0 {
-			o.Hide()
-		} else {
-			o.Show()
-		}
+		o.toggleVisibility()
 	case trayQuit:
 		if o.cb.Quit != nil {
 			go o.cb.Quit()

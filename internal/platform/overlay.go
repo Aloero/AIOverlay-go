@@ -7,6 +7,7 @@ import (
 )
 
 type Callbacks struct {
+	Command  func(string)
 	Request  func() error
 	Geometry func(domain.OverlayConfig)
 	Capture  func() ([]byte, error)

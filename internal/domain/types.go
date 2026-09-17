@@ -5,13 +5,14 @@ import (
 	"time"
 )
 
-const ConfigVersion = 3
+const ConfigVersion = 4
 
 type ProviderKind string
 
 const (
 	ProviderOpenAICompatible ProviderKind = "openai_compatible"
 	ProviderGemini           ProviderKind = "gemini"
+	ProviderTranscription    ProviderKind = "audio_transcription"
 	ProviderEmbeddedOpenCode ProviderKind = "embedded_opencode"
 )
 
@@ -39,6 +40,10 @@ type NodeType string
 
 const (
 	NodeScreen    NodeType = "screen"
+	NodeAudio     NodeType = "audio"
+	NodeContext   NodeType = "context"
+	NodeDecision  NodeType = "decision"
+	NodeCapture   NodeType = "capture_screen"
 	NodeModelPool NodeType = "model_pool"
 	NodeValidator NodeType = "validator"
 	NodeOutput    NodeType = "output"
@@ -88,6 +93,7 @@ type AppConfig struct {
 }
 
 type ProviderConfig struct {
+	AudioInput         bool                       `json:"audio_input,omitempty"`
 	Extra              map[string]json.RawMessage `json:"-"`
 	CatalogProviderID  string                     `json:"catalog_provider_id,omitempty"`
 	ID                 string                     `json:"id"`
@@ -130,16 +136,19 @@ type Credential struct {
 }
 
 type Pipeline struct {
-	Extra        map[string]json.RawMessage `json:"-"`
-	ID           string                     `json:"id"`
-	Name         string                     `json:"name"`
-	Description  string                     `json:"description,omitempty"`
-	Enabled      bool                       `json:"enabled"`
-	EntryNodeID  string                     `json:"entry_node_id"`
-	OutputNodeID string                     `json:"output_node_id"`
-	Budget       ExecutionBudget            `json:"budget"`
-	Nodes        []Node                     `json:"nodes"`
-	Edges        []Edge                     `json:"edges"`
+	Sources       []EventSource              `json:"sources,omitempty"`
+	Context       *ConversationConfig        `json:"context,omitempty"`
+	SessionBudget *SessionBudget             `json:"session_budget,omitempty"`
+	Extra         map[string]json.RawMessage `json:"-"`
+	ID            string                     `json:"id"`
+	Name          string                     `json:"name"`
+	Description   string                     `json:"description,omitempty"`
+	Enabled       bool                       `json:"enabled"`
+	EntryNodeID   string                     `json:"entry_node_id"`
+	OutputNodeID  string                     `json:"output_node_id"`
+	Budget        ExecutionBudget            `json:"budget"`
+	Nodes         []Node                     `json:"nodes"`
+	Edges         []Edge                     `json:"edges"`
 }
 
 type ExecutionBudget struct {
@@ -182,6 +191,8 @@ type CatalogSelection struct {
 }
 
 type ModelPoolConfig struct {
+	Task               string                     `json:"task,omitempty"`
+	ResultName         string                     `json:"result_name,omitempty"`
 	Order              PoolPolicy                 `json:"order,omitempty"`
 	Dispatch           DispatchPolicy             `json:"dispatch,omitempty"`
 	Extra              map[string]json.RawMessage `json:"-"`
@@ -328,6 +339,9 @@ func (m ModelMeta) HasImageInput() bool {
 func (m ModelMeta) TextOnly() bool { return !m.HasImageInput() }
 
 type ExecutionTrace struct {
+	SourceID       string          `json:"source_id,omitempty"`
+	EventID        string          `json:"event_id,omitempty"`
+	Intent         string          `json:"intent,omitempty"`
 	Outcome        Outcome         `json:"outcome,omitempty"`
 	Error          string          `json:"error,omitempty"`
 	FailureNodeID  string          `json:"failure_node_id,omitempty"`

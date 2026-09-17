@@ -17,42 +17,47 @@ var ErrBudgetExhausted = errors.New("execution budget exhausted")
 type BudgetError struct{ Scope string }
 
 func (e *BudgetError) Error() string {
-	name := map[string]string{"model_calls": "max model calls", "pool_calls": "pool model calls", "keys": "provider key limit", "providers": "max providers"}[e.Scope]
+	name := map[string]string{"model_calls": "max model calls", "pool_calls": "pool model calls", "keys": "provider key limit", "providers": "max providers", "session_rate": "session calls per minute"}[e.Scope]
 	return "execution budget exhausted: " + name
 }
 func (e *BudgetError) Unwrap() error { return ErrBudgetExhausted }
 func terminalPoolBudget(err error) bool {
 	var b *BudgetError
-	return errors.As(err, &b) && (b.Scope == "model_calls" || b.Scope == "pool_calls")
+	return errors.As(err, &b) && (b.Scope == "model_calls" || b.Scope == "pool_calls" || b.Scope == "session_rate")
 }
 
 type nodeValue struct {
-	image     []byte
-	text      string
-	vision    string
-	hasOutput bool
+	audio      *domain.AudioClip
+	transcript string
+	image      []byte
+	text       string
+	vision     string
+	hasOutput  bool
 }
 type runner struct {
-	lastNode      string
-	lastOutcome   domain.Outcome
-	redact        redactor
-	traceMu       sync.Mutex
-	callbackMu    sync.Mutex
-	workers       sync.WaitGroup
-	successes     map[string]*domain.AttemptRef
-	nodeCalls     map[string]int
-	keysUsed      map[string]map[string]bool
-	engine        *Engine
-	pipeline      domain.Pipeline
-	input         Input
-	opt           RunOptions
-	trace         *domain.ExecutionTrace
-	started       time.Time
-	calls         atomic.Int32
-	providersMu   sync.Mutex
-	providersUsed map[string]struct{}
-	edgeVisits    map[string]int
-	sem           chan struct{}
+	waited, published bool
+	captures          int
+	observations      []Observation
+	lastNode          string
+	lastOutcome       domain.Outcome
+	redact            redactor
+	traceMu           sync.Mutex
+	callbackMu        sync.Mutex
+	workers           sync.WaitGroup
+	successes         map[string]*domain.AttemptRef
+	nodeCalls         map[string]int
+	keysUsed          map[string]map[string]bool
+	engine            *Engine
+	pipeline          domain.Pipeline
+	input             Input
+	opt               RunOptions
+	trace             *domain.ExecutionTrace
+	started           time.Time
+	calls             atomic.Int32
+	providersMu       sync.Mutex
+	providersUsed     map[string]struct{}
+	edgeVisits        map[string]int
+	sem               chan struct{}
 }
 
 func newRunner(e *Engine, p domain.Pipeline, input Input, opt RunOptions, trace *domain.ExecutionTrace) *runner {
@@ -96,6 +101,11 @@ func (r *runner) admit(n domain.Node, pool domain.ModelPoolConfig, m domain.Mode
 	if _, used := r.providersUsed[m.ProviderID]; !used && r.pipeline.Budget.MaxProviders > 0 && len(r.providersUsed) >= r.pipeline.Budget.MaxProviders {
 		return &BudgetError{Scope: "providers"}
 	}
+	if r.opt.BeforeCall != nil {
+		if err := r.opt.BeforeCall(); err != nil {
+			return err
+		}
+	}
 	r.providersUsed[m.ProviderID] = struct{}{}
 	keys[key.ID] = true
 	r.calls.Add(1)
@@ -124,12 +134,45 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 				outcome = domain.OutcomeInvalidResponse
 				err = fmt.Errorf("screen image is empty")
 			}
+		case domain.NodeAudio:
+			out = value
+			if out.audio == nil {
+				err = fmt.Errorf("audio input is empty")
+				outcome = domain.OutcomeUnsupportedModality
+			}
+		case domain.NodeCapture:
+			out = value
+			out.image, err = r.capture(ctx, n.ID)
+			if err != nil {
+				outcome = domain.OutcomeProviderUnavailable
+			}
+		case domain.NodeContext:
+			out = value
+			if r.input.ContextText != "" {
+				out.text = r.input.ContextText + "\n" + value.text
+			}
+			if r.input.Intent == "context" {
+				r.waited = true
+				return "", nil
+			}
+		case domain.NodeDecision:
+			out, outcome, err = r.decide(ctx, n, value)
+			if err == nil && outcome == domain.OutcomeWait {
+				r.waited = true
+				r.emit(domain.TraceEvent{Kind: "decision", NodeID: n.ID, Outcome: domain.OutcomeWait, Message: "Continue observing; no answer requested"})
+				return "", nil
+			}
 		case domain.NodeModelPool:
-			out, outcome, err = r.runPool(ctx, n, value)
+			out, outcome, err = r.modelStage(ctx, n, value)
 		case domain.NodeValidator:
 			out = value
 			outcome, err = runValidator(n.Validator, value.text)
 		case domain.NodeOutput:
+			if r.input.Intent == "context" {
+				r.waited = true
+				return "", nil
+			}
+			r.published = true
 			return value.text, nil
 		default:
 			outcome = domain.OutcomeInvalidResponse
@@ -173,7 +216,7 @@ func (r *runner) nextEdge(from string, outcome domain.Outcome) (domain.Edge, boo
 			continue
 		}
 		for _, o := range ed.On {
-			if o == outcome || o == domain.OutcomeAnyError && outcome != domain.OutcomeSuccess {
+			if o == outcome || o == domain.OutcomeAnyError && domain.IsErrorOutcome(outcome) {
 				list = append(list, ed)
 				break
 			}

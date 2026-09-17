@@ -36,5 +36,7 @@ func BoundPromptSnapshot(in PromptSnapshot) PromptSnapshot {
 	in.Values.InputText = clip(in.Values.InputText)
 	in.Values.PreviousOutput = clip(in.Values.PreviousOutput)
 	in.Values.VisionText = clip(in.Values.VisionText)
+	in.Values.AudioText = clip(in.Values.AudioText)
+	in.Values.ContextText = clip(in.Values.ContextText)
 	return in
 }

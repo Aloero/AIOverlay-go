@@ -1,0 +1,129 @@
+package engine
+
+import (
+	"aioverlay/internal/domain"
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+type Observation struct {
+	Kind string
+	Text string
+}
+type decision struct {
+	Action     string `json:"action"`
+	Text       string `json:"text,omitempty"`
+	Transcript string `json:"transcript,omitempty"`
+}
+
+func parseDecision(text string) (decision, error) {
+	var d decision
+	if len(text) > 64000 {
+		return d, fmt.Errorf("decision response exceeds limit")
+	}
+	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(text)))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&d) != nil || !json.Valid([]byte(text)) {
+		return d, fmt.Errorf("decision requires JSON with action, optional text and transcript")
+	}
+	switch d.Action {
+	case "wait", "respond", "need_screen":
+		return d, nil
+	}
+	return d, fmt.Errorf("decision action must be wait, respond or need_screen")
+}
+func (r *runner) observe(kind, text string) {
+	if text == "" {
+		return
+	}
+	text = r.redact.text(text)
+	if len(r.observations) < 100 {
+		r.observations = append(r.observations, Observation{kind, clipText(text, 32000)})
+	}
+}
+func clipText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && (s[n]&0xc0) == 0x80 {
+		n--
+	}
+	return s[:n]
+}
+func (r *runner) modelStage(ctx context.Context, n domain.Node, v nodeValue) (nodeValue, domain.Outcome, error) {
+	if n.ModelPool != nil && n.ModelPool.Task == "transcribe" {
+		ctx = context.WithValue(ctx, silentKey{}, true)
+	}
+	if r.input.Intent == "context" {
+		ctx = context.WithValue(ctx, silentKey{}, true)
+	}
+	out, o, err := r.runPool(ctx, n, v)
+	if err != nil {
+		return out, o, err
+	}
+	if n.ModelPool.Task == "transcribe" || n.ModelPool.ResultName == "audio.text" {
+		out.transcript = out.text
+		out.audio = nil
+		out.vision = v.vision
+		r.observe("audio.text", out.text)
+	}
+	if n.ModelPool.ResultName == "vision.text" {
+		out.vision = out.text
+		r.observe("vision.text", out.text)
+	}
+	return out, o, nil
+}
+func (r *runner) decide(ctx context.Context, n domain.Node, v nodeValue) (nodeValue, domain.Outcome, error) {
+	if r.input.Intent == "respond" {
+		r.emit(domain.TraceEvent{Kind: "decision", NodeID: n.ID, Outcome: domain.OutcomeRespond, Message: "Manual respond intent bypasses only the decision gate"})
+		return v, domain.OutcomeRespond, nil
+	}
+	if r.input.Intent == "context" {
+		return v, domain.OutcomeWait, nil
+	}
+	raw, _, err := r.runPool(context.WithValue(ctx, silentKey{}, true), n, v)
+	if err != nil {
+		return v, domain.OutcomeInvalidResponse, err
+	}
+	d, err := parseDecision(raw.text)
+	if err != nil {
+		return v, domain.OutcomeInvalidResponse, err
+	}
+	if d.Transcript != "" {
+		v.transcript = d.Transcript
+		r.observe("audio.text", d.Transcript)
+	}
+	o := domain.Outcome(d.Action)
+	if o == domain.OutcomeRespond && d.Text != "" {
+		v.text = d.Text
+		v.hasOutput = true
+	}
+	r.emit(domain.TraceEvent{Kind: "decision", NodeID: n.ID, Outcome: o, Message: "Structured model decision"})
+	return v, o, nil
+}
+func (r *runner) capture(ctx context.Context, node string) ([]byte, error) {
+	if r.opt.Capture == nil {
+		return nil, fmt.Errorf("screen action is not available in this execution")
+	}
+	if r.captures >= 3 {
+		return nil, fmt.Errorf("screen action limit reached (3 per turn)")
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	r.captures++
+	r.emit(domain.TraceEvent{Kind: "capture_start", NodeID: node, Message: "Pipeline requested a fresh screen; RAM only"})
+	image, err := r.opt.Capture(ctx)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err == nil && len(image) == 0 {
+		err = fmt.Errorf("screen action returned an empty image")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return image, nil
+}

@@ -147,6 +147,9 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 				continue
 			}
 			if job.Cleared {
+				if job.ID == lastID && lastText == "" && lastMeta == "" {
+					continue
+				}
 				ov.Clear()
 				ov.Hide()
 				lastID = job.ID

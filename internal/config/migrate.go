@@ -2,6 +2,7 @@ package config
 
 import (
 	"aioverlay/internal/domain"
+	"aioverlay/internal/hotkey"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -31,6 +32,26 @@ func Migrate(cfg *domain.Config) error {
 				}
 			}
 			cfg.Version = 3
+		case 3:
+			// Do not steal a user-assigned combination during upgrade.
+			if cfg.Overlay.Hotkeys == nil {
+				cfg.Overlay.Hotkeys = map[string]string{}
+			}
+			if _, exists := cfg.Overlay.Hotkeys["visibility"]; !exists {
+				candidate, _ := hotkey.Parse("Ctrl+Shift+H")
+				available := true
+				for _, text := range cfg.Overlay.Hotkeys {
+					b, e := hotkey.Parse(text)
+					if e == nil && b == candidate {
+						available = false
+					}
+				}
+				cfg.Overlay.Hotkeys["visibility"] = ""
+				if available {
+					cfg.Overlay.Hotkeys["visibility"] = "Ctrl+Shift+H"
+				}
+			}
+			cfg.Version = 4
 		default:
 			return fmt.Errorf("unsupported old config schema %d", cfg.Version)
 		}

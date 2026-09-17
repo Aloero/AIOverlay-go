@@ -25,7 +25,7 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 		if err != nil {
 			return nodeValue{}, outcome, err
 		}
-		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true}
+		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true, audio: input.audio, transcript: input.transcript}
 	}
 	gate := &streamGate{runner: r, silent: ctx.Value(silentKey{}) == true}
 	ctx = context.WithValue(ctx, streamKey{}, gate)
@@ -181,6 +181,26 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 	pc, ok := findProvider(r.engine.cfg, m.ProviderID)
 	if !ok {
 		return "", domain.OutcomeProviderUnavailable, fmt.Errorf("provider config missing")
+	}
+	if pool.Task == "transcribe" {
+		input.image = nil
+	}
+	caps := providers.Media(pc)
+	if caps.TranscriptionOnly && pool.Task != "transcribe" {
+		return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "Choose a transcription stage for this transport"}
+	}
+	if input.audio != nil {
+		if !caps.Audio {
+			return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "Audio is unsupported by this transport; add a transcription stage"}
+		}
+		if r.engine.catalog != nil {
+			ref := catalog.ProviderID(pc) + "/" + strings.TrimPrefix(m.ModelID, catalog.ProviderID(pc)+"/")
+			if meta, known := r.engine.catalog.Find(ref); known && !meta.HasAudioInput() {
+				return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "Model does not advertise audio input"}
+			}
+		}
+	} else if pool.Task == "transcribe" {
+		return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "No audio to transcribe"}
 	}
 	if len(input.image) > 0 && r.engine.catalog != nil {
 		ref := catalog.ProviderID(pc) + "/" + strings.TrimPrefix(m.ModelID, catalog.ProviderID(pc)+"/")

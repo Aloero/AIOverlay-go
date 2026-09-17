@@ -56,12 +56,12 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	respTimeout := durationMS(limits.ResponseMS)
 	actx, cancel := context.WithTimeout(ctx, respTimeout)
 	defer cancel()
-	values := PromptValues{InputText: r.input.Text, PreviousOutput: input.text, VisionText: input.vision}
+	values := PromptValues{InputText: r.input.Text, PreviousOutput: input.text, VisionText: input.vision, AudioText: input.transcript, ContextText: r.input.ContextText}
 	user := RenderPrompt(pool.Prompt.User, values)
 	system := RenderPrompt(pool.Prompt.System, values)
-	req := providers.Request{ProviderID: m.ProviderID, ModelID: m.ModelID, SystemPrompt: system, UserPrompt: user, ImageJPEG: input.image, TextInput: input.text, MaxOutputTokens: limits.MaxOutputTokens, ConnectTimeout: durationMS(limits.ConnectMS), FirstTokenTimeout: durationMS(limits.FirstTokenMS), ResponseTimeout: respTimeout, StreamIdleTimeout: durationMS(limits.IdleMS)}
+	req := providers.Request{Audio: input.audio, Task: pool.Task, ProviderID: m.ProviderID, ModelID: m.ModelID, SystemPrompt: system, UserPrompt: user, ImageJPEG: input.image, TextInput: input.text, MaxOutputTokens: limits.MaxOutputTokens, ConnectTimeout: durationMS(limits.ConnectMS), FirstTokenTimeout: durationMS(limits.FirstTokenMS), ResponseTimeout: respTimeout, StreamIdleTimeout: durationMS(limits.IdleMS)}
 	if r.opt.OnPrompt != nil {
-		snapshot := BoundPromptSnapshot(PromptSnapshot{NodeID: r.redact.text(n.ID), ProviderID: r.redact.text(m.ProviderID), ModelID: r.redact.text(m.ModelID), ImageAttached: len(req.ImageJPEG) > 0, Values: PromptValues{InputText: r.redact.text(values.InputText), PreviousOutput: r.redact.text(values.PreviousOutput), VisionText: r.redact.text(values.VisionText)}})
+		snapshot := BoundPromptSnapshot(PromptSnapshot{NodeID: r.redact.text(n.ID), ProviderID: r.redact.text(m.ProviderID), ModelID: r.redact.text(m.ModelID), ImageAttached: len(req.ImageJPEG) > 0, Values: PromptValues{InputText: r.redact.text(values.InputText), PreviousOutput: r.redact.text(values.PreviousOutput), VisionText: r.redact.text(values.VisionText), AudioText: r.redact.text(values.AudioText), ContextText: r.redact.text(values.ContextText)}})
 		r.callbackMu.Lock()
 		r.opt.OnPrompt(snapshot)
 		r.callbackMu.Unlock()
@@ -220,6 +220,13 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 		emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeInvalidResponse, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
 		r.engine.recordModel(m, domain.OutcomeInvalidResponse, 0, time.Since(started))
 		return "", domain.OutcomeInvalidResponse, err
+	}
+	if n.Type == domain.NodeDecision {
+		if _, err := parseDecision(text.String()); err != nil {
+			emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeInvalidResponse, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
+			r.engine.recordModel(m, domain.OutcomeInvalidResponse, 0, time.Since(started))
+			return "", domain.OutcomeInvalidResponse, err
+		}
 	}
 	dur := time.Since(started)
 	tps := 0.0

@@ -14,11 +14,18 @@ import (
 )
 
 type Input struct {
+	Audio                                  *domain.AudioClip
+	AudioText, ContextText, VisionText     string
+	EntryNodeID, Intent, SourceID, EventID string
+
 	ImageJPEG []byte
 	Text      string
 }
 
 type RunOptions struct {
+	Capture    func(context.Context) ([]byte, error)
+	BeforeCall func() error
+
 	OnPrompt func(PromptSnapshot)
 	OnStart  func(domain.ExecutionTrace)
 	Purpose  string
@@ -28,6 +35,9 @@ type RunOptions struct {
 }
 
 type Result struct {
+	Observations []Observation
+	Published    bool
+
 	Text  string
 	Trace domain.ExecutionTrace
 }
@@ -80,7 +90,14 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 		opt.OnStart(domain.CloneTrace(t))
 	}
 	r := newRunner(e, p, input, opt, &t)
-	text, err := r.run(ctx, p.EntryNodeID, nodeValue{image: input.ImageJPEG, text: input.Text})
+	entry := p.EntryNodeID
+	if input.EntryNodeID != "" {
+		entry = input.EntryNodeID
+	}
+	t.SourceID = input.SourceID
+	t.EventID = input.EventID
+	t.Intent = input.Intent
+	text, err := r.run(ctx, entry, nodeValue{image: input.ImageJPEG, audio: input.Audio, transcript: input.AudioText, vision: input.VisionText, text: input.Text})
 	terminalCause := context.Cause(ctx)
 	cancel()
 	r.workers.Wait()
@@ -88,11 +105,15 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 		r.emit(event)
 	}
 	finishTrace(&t, err, terminalCause, r.lastNode, r.lastOutcome, r.redact)
+	if err == nil && r.waited {
+		t.Outcome = domain.OutcomeWait
+		t.Winner = nil
+	}
 	t.FinishedAt = time.Now()
 	if t.Winner != nil {
 		t.Winner = r.redact.event(domain.TraceEvent{Attempt: t.Winner}).Attempt
 	}
 	t.PipelineID = r.redact.text(t.PipelineID)
 	e.traces.Add(t)
-	return Result{Text: text, Trace: domain.CloneTrace(t)}, e.safeError(err)
+	return Result{Text: text, Trace: domain.CloneTrace(t), Published: r.published, Observations: r.observations}, e.safeError(err)
 }

@@ -18,7 +18,7 @@ func TestSchemaTwoSplitsAllLegacySchedules(t *testing.T) {
 		if err := Migrate(&c); err != nil {
 			t.Fatal(err)
 		}
-		if p.Order != order || p.Dispatch != dispatch || p.VisionPreprocessor.Order != order || c.Version != 3 {
+		if p.Order != order || p.Dispatch != dispatch || p.VisionPreprocessor.Order != order || c.Version != domain.ConfigVersion {
 			t.Fatalf("migration changed %s", policy)
 		}
 	}

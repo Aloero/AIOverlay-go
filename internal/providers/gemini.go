@@ -41,7 +41,14 @@ func (p *Gemini) Stream(ctx context.Context, r Request, key string) (<-chan Even
 	return e, er
 }
 func (p *Gemini) stream(ctx context.Context, r Request, key string, events chan<- Event) error {
+	if err := validateAudioRequest(p.cfg, r); err != nil {
+		return err
+	}
 	parts := []any{map[string]any{"text": r.UserPrompt}}
+	if r.Audio != nil {
+		parts = append(parts, map[string]any{"inline_data": map[string]any{"mime_type": "audio/wav", "data": base64.StdEncoding.EncodeToString(r.Audio.WAV)}})
+	}
+
 	if len(r.ImageJPEG) > 0 {
 		parts = append(parts, map[string]any{"inline_data": map[string]any{"mime_type": "image/jpeg", "data": base64.StdEncoding.EncodeToString(r.ImageJPEG)}})
 	}

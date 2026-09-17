@@ -10,6 +10,8 @@ import (
 )
 
 type Request struct {
+	Audio             *domain.AudioClip
+	Task              string
 	ProviderID        string
 	ModelID           string
 	SystemPrompt      string

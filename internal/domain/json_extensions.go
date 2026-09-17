@@ -419,3 +419,67 @@ func (v *ModelStatistics) UnmarshalJSON(raw []byte) error {
 	v.Extra = extra
 	return nil
 }
+
+func (v EventSource) MarshalJSON() ([]byte, error) {
+	type plain EventSource
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *EventSource) UnmarshalJSON(raw []byte) error {
+	type plain EventSource
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = EventSource(p)
+	v.Extra = extra
+	return nil
+}
+
+func (v AudioSourceConfig) MarshalJSON() ([]byte, error) {
+	type plain AudioSourceConfig
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *AudioSourceConfig) UnmarshalJSON(raw []byte) error {
+	type plain AudioSourceConfig
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = AudioSourceConfig(p)
+	v.Extra = extra
+	return nil
+}
+
+func (v ConversationConfig) MarshalJSON() ([]byte, error) {
+	type plain ConversationConfig
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *ConversationConfig) UnmarshalJSON(raw []byte) error {
+	type plain ConversationConfig
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = ConversationConfig(p)
+	v.Extra = extra
+	return nil
+}
+
+func (v SessionBudget) MarshalJSON() ([]byte, error) {
+	type plain SessionBudget
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *SessionBudget) UnmarshalJSON(raw []byte) error {
+	type plain SessionBudget
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = SessionBudget(p)
+	v.Extra = extra
+	return nil
+}

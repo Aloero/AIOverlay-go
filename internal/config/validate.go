@@ -120,7 +120,7 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 			return fmt.Errorf("pipeline %s node %s: %w", p.ID, n.ID, err)
 		}
 		nodes[n.ID] = n
-		if n.Type == domain.NodeModelPool {
+		if n.Type == domain.NodeModelPool || n.Type == domain.NodeDecision {
 			if n.ModelPool == nil {
 				return fmt.Errorf("pipeline %s model pool node %s has no config", p.ID, n.ID)
 			}
@@ -160,6 +160,9 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 	if nodes[p.OutputNodeID].Type != domain.NodeOutput {
 		return fmt.Errorf("pipeline output node must have output type")
 	}
+	if err := validateSources(p, nodes); err != nil {
+		return err
+	}
 	if !reachable(p) {
 		return fmt.Errorf("pipeline %s output is unreachable", p.ID)
 	}
@@ -181,7 +184,7 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 		if s.Mode != "manual" && s.Mode != "catalog" && s.Mode != "manual_then_catalog" {
 			return fmt.Errorf("pool %s has invalid model source", nodeID)
 		}
-		if s.Modality != "auto" && s.Modality != "image" && s.Modality != "text" {
+		if s.Modality != "auto" && s.Modality != "image" && s.Modality != "text" && s.Modality != "audio" && s.Modality != "audio_image" {
 			return fmt.Errorf("pool %s has invalid catalog modality", nodeID)
 		}
 		if s.DefaultQualityScore < 0 || s.DefaultQualityScore > 100 {

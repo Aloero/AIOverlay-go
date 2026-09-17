@@ -44,12 +44,22 @@ func (p *OpenAICompatible) Stream(ctx context.Context, r Request, credential str
 }
 
 func (p *OpenAICompatible) stream(ctx context.Context, r Request, credential string, events chan<- Event) error {
+	if err := validateAudioRequest(p.cfg, r); err != nil {
+		return err
+	}
 	content := any(r.UserPrompt)
 	if len(r.ImageJPEG) > 0 {
 		content = []any{
 			map[string]any{"type": "text", "text": r.UserPrompt},
 			map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(r.ImageJPEG)}},
 		}
+	}
+	if r.Audio != nil {
+		parts, ok := content.([]any)
+		if !ok {
+			parts = []any{map[string]any{"type": "text", "text": r.UserPrompt}}
+		}
+		content = append(parts, map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": base64.StdEncoding.EncodeToString(r.Audio.WAV), "format": "wav"}})
 	}
 	messages := []any{}
 	if strings.TrimSpace(r.SystemPrompt) != "" {
