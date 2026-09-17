@@ -38,7 +38,8 @@ func release(p unsafe.Pointer) {
 }
 func result(name string, hr uintptr) error {
 	if int32(hr) < 0 {
-		return fmt.Errorf("WASAPI %s: HRESULT 0x%08x", name, uint32(hr))
+		code := uint32(hr)
+		return &CaptureError{Operation: name, HRESULT: code, Kind: classifyWASAPIHRESULT(code)}
 	}
 	return nil
 }

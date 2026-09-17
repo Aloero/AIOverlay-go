@@ -235,10 +235,11 @@ func TestAudioCaptureFailureFlushesTailAndRecordsGap(t *testing.T) {
 		t.Fatal("interrupted audio tail was not offered to the configured route")
 	}
 
-	snapshot := m.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
-	if len(snapshot.Entries) < 2 {
-		t.Fatalf("expected transcript and gap, got %+v", snapshot.Entries)
-	}
+	var snapshot ContextSnapshot
+	waitUntil(t, func() bool {
+		snapshot = m.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+		return len(snapshot.Entries) >= 2
+	}, "expected transcript and gap after capture failure")
 	transcript := snapshot.Entries[0]
 	gap := snapshot.Entries[len(snapshot.Entries)-1]
 	if transcript.Text != "truncated phrase" || !transcript.Final || !gap.Gap {
@@ -669,5 +670,237 @@ func TestPartialTranscriptDoesNotFinishPendingUntilFinalRevision(t *testing.T) {
 	final := manager.contexts.Snapshot(contextCfg, "p", time.Now().Add(time.Second))
 	if len(final.Entries) != 1 || !final.Entries[0].Final || final.Entries[0].Revision != 2 || final.Entries[0].Text != "hello" {
 		t.Fatalf("final transcript state=%+v", final.Entries)
+	}
+}
+
+func TestDefaultAudioRestartPolicyRecoversLifecycleErrorsOnlyForDefaultEndpoint(t *testing.T) {
+	defaultRuntime := &sourceRuntime{cfg: domain.EventSource{
+		Kind:  domain.SourceAudio,
+		Audio: &domain.AudioSourceConfig{Mode: "system"},
+	}}
+	fixedRuntime := &sourceRuntime{cfg: domain.EventSource{
+		Kind:  domain.SourceAudio,
+		Audio: &domain.AudioSourceConfig{Mode: "system", DeviceID: "fixed-endpoint"},
+	}}
+
+	for _, kind := range []paudio.CaptureErrorKind{
+		paudio.CaptureErrorDeviceInvalidated,
+		paudio.CaptureErrorResourcesInvalidated,
+		paudio.CaptureErrorServiceNotRunning,
+	} {
+		err := &paudio.CaptureError{Operation: "capture", Kind: kind}
+		if !shouldRestartDefaultAudio(defaultRuntime, err, nil) {
+			t.Fatalf("%s did not enable default-endpoint recovery", kind)
+		}
+		if shouldRestartDefaultAudio(fixedRuntime, err, nil) {
+			t.Fatalf("fixed endpoint would silently change selection after %s", kind)
+		}
+	}
+	if shouldRestartDefaultAudio(defaultRuntime, &paudio.CaptureError{Kind: paudio.CaptureErrorWASAPI}, nil) {
+		t.Fatal("generic WASAPI failure enabled automatic restart")
+	}
+	if shouldRestartDefaultAudio(defaultRuntime, &paudio.CaptureError{Kind: paudio.CaptureErrorDeviceInvalidated}, context.Canceled) {
+		t.Fatal("cancelled source scheduled an automatic restart")
+	}
+}
+
+func TestDefaultAudioEndpointRestartsWithNewEpochAfterInvalidation(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].Audio.DeviceID = ""
+	manager := NewManager(nil)
+	manager.audioRestartBaseDelay = 0
+	manager.audioRestartMaxDelay = 0
+
+	var attempts atomic.Int32
+	restarted := make(chan struct{})
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		attempt := attempts.Add(1)
+		if attempt == 1 {
+			return &paudio.CaptureError{
+				Operation: "get buffer",
+				HRESULT:   0x88890004,
+				Kind:      paudio.CaptureErrorDeviceInvalidated,
+			}
+		}
+		if attempt == 2 {
+			close(restarted)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("default endpoint did not restart after invalidation")
+	}
+	waitUntil(t, func() bool {
+		runtime := manager.source("a")
+		return runtime != nil && runtime.epoch >= 2
+	}, "restarted source did not receive a new epoch")
+	if attempts.Load() != 2 {
+		t.Fatalf("capture attempts=%d", attempts.Load())
+	}
+
+	runtime := manager.source("a")
+	runtime.mu.RLock()
+	status := runtime.status
+	runtime.mu.RUnlock()
+	if runtime.epoch < 2 || !status.Running {
+		t.Fatalf("restarted runtime epoch=%d status=%+v", runtime.epoch, status)
+	}
+
+	snapshot := manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+	if len(snapshot.Entries) != 1 || !snapshot.Entries[0].Gap {
+		t.Fatalf("device invalidation did not leave a visible context gap: %+v", snapshot.Entries)
+	}
+}
+
+func TestAudioRestartBackoffIsBoundedAndResetsAfterData(t *testing.T) {
+	manager := NewManager(nil)
+	manager.audioRestartBaseDelay = 250 * time.Millisecond
+	manager.audioRestartMaxDelay = 5 * time.Second
+
+	want := []time.Duration{
+		250 * time.Millisecond,
+		500 * time.Millisecond,
+		time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
+	}
+	for i, expected := range want {
+		if got := manager.nextAudioRestartDelay("a"); got != expected {
+			t.Fatalf("failure %d delay=%v want=%v", i+1, got, expected)
+		}
+	}
+	manager.resetAudioRestartFailures("a")
+	if got := manager.nextAudioRestartDelay("a"); got != 250*time.Millisecond {
+		t.Fatalf("restart backoff did not reset after healthy data: %v", got)
+	}
+}
+
+func TestAudioRestartBackoffZeroBaseStaysImmediateForTests(t *testing.T) {
+	for failures := 1; failures <= 10; failures++ {
+		if got := restartBackoff(0, 0, failures); got != 0 {
+			t.Fatalf("failures=%d delay=%v", failures, got)
+		}
+	}
+}
+
+func TestRepeatedDefaultEndpointInvalidationAdvancesEpochAndPreservesGaps(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].Audio.DeviceID = ""
+	manager := NewManager(nil)
+	manager.audioRestartBaseDelay = 0
+	manager.audioRestartMaxDelay = 0
+
+	var attempts atomic.Int32
+	stable := make(chan struct{})
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		attempt := attempts.Add(1)
+		if attempt <= 3 {
+			return &paudio.CaptureError{
+				Operation: "get buffer",
+				HRESULT:   0x88890004,
+				Kind:      paudio.CaptureErrorDeviceInvalidated,
+			}
+		}
+		if attempt == 4 {
+			close(stable)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+
+	select {
+	case <-stable:
+	case <-time.After(time.Second):
+		t.Fatal("default endpoint did not recover after repeated invalidation")
+	}
+	waitUntil(t, func() bool {
+		runtime := manager.source("a")
+		return runtime != nil && runtime.epoch == 4 && !sourceFinished(runtime)
+	}, "stable runtime did not reach epoch 4")
+	if attempts.Load() != 4 {
+		t.Fatalf("capture attempts=%d", attempts.Load())
+	}
+
+	snapshot := manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+	gaps := 0
+	for _, entry := range snapshot.Entries {
+		if entry.Gap {
+			gaps++
+		}
+	}
+	if gaps != 3 {
+		t.Fatalf("invalidation gaps=%d entries=%+v", gaps, snapshot.Entries)
+	}
+}
+
+func TestHealthyAudioBlockResetsRestartBackoff(t *testing.T) {
+	manager := NewManager(nil)
+	manager.audioRestartBaseDelay = 250 * time.Millisecond
+	manager.audioRestartMaxDelay = 5 * time.Second
+	_ = manager.nextAudioRestartDelay("a")
+	_ = manager.nextAudioRestartDelay("a")
+
+	runtime := &sourceRuntime{cfg: domain.EventSource{
+		ID: "a", Kind: domain.SourceAudio,
+		Audio: &domain.AudioSourceConfig{Mode: "system", SegmentMS: 1000, SilenceMS: 200, MinimumMS: 80, Threshold: .01},
+	}}
+	queue := newAudioSegmentQueue(1, maxQueuedAudioPCMBytes)
+	capture := func(_ context.Context, _ domain.AudioSourceConfig, emit func(paudio.Block)) error {
+		emit(paudio.Block{Rate: 16000, At: time.Now()})
+		return fmt.Errorf("synthetic stop after healthy open")
+	}
+	_ = manager.produceAudioSegments(context.Background(), "", runtime, capture, queue)
+
+	if got := manager.nextAudioRestartDelay("a"); got != 250*time.Millisecond {
+		t.Fatalf("healthy stream did not reset backoff: %v", got)
+	}
+}
+
+func TestFixedAudioEndpointDoesNotAutoRestartAfterInvalidation(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].Audio.DeviceID = "fixed-endpoint"
+	manager := NewManager(nil)
+	manager.audioRestartBaseDelay = 0
+	manager.audioRestartMaxDelay = 0
+
+	var attempts atomic.Int32
+	manager.SetAudioCapture(func(context.Context, domain.AudioSourceConfig, func(paudio.Block)) error {
+		attempts.Add(1)
+		return &paudio.CaptureError{
+			Operation: "get buffer",
+			HRESULT:   0x88890004,
+			Kind:      paudio.CaptureErrorDeviceInvalidated,
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+	waitUntil(t, func() bool {
+		runtime := manager.source("a")
+		return runtime != nil && sourceFinished(runtime)
+	}, "fixed endpoint runtime did not finish")
+
+	select {
+	case <-time.After(40 * time.Millisecond):
+		if attempts.Load() != 1 {
+			t.Fatalf("fixed endpoint silently retried or switched: attempts=%d", attempts.Load())
+		}
+	case <-ctx.Done():
+		t.Fatal("test context ended unexpectedly")
 	}
 }

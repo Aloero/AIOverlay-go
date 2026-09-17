@@ -85,46 +85,53 @@ type sourceRuntime struct {
 }
 
 type Manager struct {
-	mu                sync.RWMutex
-	reconcileMu       sync.Mutex
-	turnGate          sync.RWMutex
-	cfg               domain.Config
-	execute           Executor
-	capture           ScreenCapture
-	backgroundCapture ScreenCapture
-	audioCapture      paudio.CaptureFunc
-	contexts          *ContextStore
-	governor          *Governor
-	root              context.Context
-	cancel            context.CancelFunc
-	started           bool
-	paused            bool
-	sources           map[string]*sourceRuntime
-	sourceOverrides   map[string]bool
-	turnSem           chan struct{}
-	publish           func(Publication)
-	seq               atomic.Uint64
-	eventSeq          atomic.Uint64
-	sourceSeq         atomic.Uint64
-	pendingMu         sync.Mutex
-	pending           map[string]pendingSegment
-	pendingChanged    chan struct{}
-	activeTurnMu      sync.Mutex
-	activeTurns       map[string]activeBackgroundTurn
+	mu                    sync.RWMutex
+	reconcileMu           sync.Mutex
+	turnGate              sync.RWMutex
+	cfg                   domain.Config
+	execute               Executor
+	capture               ScreenCapture
+	backgroundCapture     ScreenCapture
+	audioCapture          paudio.CaptureFunc
+	contexts              *ContextStore
+	governor              *Governor
+	root                  context.Context
+	cancel                context.CancelFunc
+	started               bool
+	paused                bool
+	sources               map[string]*sourceRuntime
+	sourceOverrides       map[string]bool
+	turnSem               chan struct{}
+	publish               func(Publication)
+	seq                   atomic.Uint64
+	eventSeq              atomic.Uint64
+	sourceSeq             atomic.Uint64
+	audioRestartBaseDelay time.Duration
+	audioRestartMaxDelay  time.Duration
+	audioRestartMu        sync.Mutex
+	audioRestartFailures  map[string]int
+	pendingMu             sync.Mutex
+	pending               map[string]pendingSegment
+	pendingChanged        chan struct{}
+	activeTurnMu          sync.Mutex
+	activeTurns           map[string]activeBackgroundTurn
 }
 
 func NewManager(execute Executor) *Manager {
 	return &Manager{
-		execute:         execute,
-		audioCapture:    paudio.Capture,
-		contexts:        NewContextStore(),
-		governor:        NewGovernor(),
-		sources:         map[string]*sourceRuntime{},
-		sourceOverrides: map[string]bool{},
-		turnSem:         make(chan struct{}, 3),
-		pending:         map[string]pendingSegment{},
-		pendingChanged:  make(chan struct{}),
-		activeTurns:     map[string]activeBackgroundTurn{},
+		execute:               execute,
+		audioCapture:          paudio.Capture,
+		contexts:              NewContextStore(),
+		governor:              NewGovernor(),
+		sources:               map[string]*sourceRuntime{},
+		sourceOverrides:       map[string]bool{},
+		turnSem:               make(chan struct{}, 3),
+		pending:               map[string]pendingSegment{},
+		pendingChanged:        make(chan struct{}),
+		activeTurns:           map[string]activeBackgroundTurn{},
+		audioRestartBaseDelay: defaultAudioRestartDelay,
+		audioRestartMaxDelay:  maxAudioRestartDelay,
+		audioRestartFailures:  map[string]int{},
 	}
 }
 func (m *Manager) Contexts() *ContextStore { return m.contexts }
@@ -289,6 +296,7 @@ func (m *Manager) SetSourceRunning(id string, running bool) error {
 	}
 	m.sourceOverrides[id] = running
 	m.mu.Unlock()
+	m.resetAudioRestartFailures(id)
 	m.reconcile()
 	return nil
 }
@@ -316,16 +324,24 @@ func (m *Manager) reconcile() {
 		}
 	}
 	var stopped []*sourceRuntime
+	var resetRetry []string
 	for id, runtime := range m.sources {
 		next, wantedNow := wanted[id]
-		if wantedNow && sameSource(runtime.cfg, next) && !sourceFinished(runtime) {
+		sameConfig := wantedNow && sameSource(runtime.cfg, next)
+		if sameConfig && !sourceFinished(runtime) {
 			continue
+		}
+		if !sameConfig {
+			resetRetry = append(resetRetry, id)
 		}
 		runtime.cancel()
 		delete(m.sources, id)
 		stopped = append(stopped, runtime)
 	}
 	m.mu.Unlock()
+	for _, id := range resetRetry {
+		m.resetAudioRestartFailures(id)
+	}
 	for _, runtime := range stopped {
 		waitForSourceStop(runtime, 2*time.Second)
 	}
@@ -426,7 +442,100 @@ func (m *Manager) runSource(ctx context.Context, pipelineID string, runtime *sou
 	default:
 		err = fmt.Errorf("unsupported source kind %s", runtime.cfg.Kind)
 	}
-	finishSourceStatus(runtime, err, ctx.Err())
+	contextErr := ctx.Err()
+	finishSourceStatus(runtime, err, contextErr)
+	if shouldRestartDefaultAudio(runtime, err, contextErr) {
+		delay := m.nextAudioRestartDelay(runtime.cfg.ID)
+		setAudioRecovering(runtime)
+		go m.restartDefaultAudioSource(runtime, delay)
+		return
+	}
+	if contextErr == nil {
+		m.resetAudioRestartFailures(runtime.cfg.ID)
+	}
+}
+
+const (
+	defaultAudioRestartDelay = 250 * time.Millisecond
+	maxAudioRestartDelay     = 5 * time.Second
+)
+
+func shouldRestartDefaultAudio(runtime *sourceRuntime, runErr, contextErr error) bool {
+	return contextErr == nil && runtime.cfg.Kind == domain.SourceAudio && runtime.cfg.Audio != nil &&
+		runtime.cfg.Audio.DeviceID == "" && paudio.RecoverableDefaultEndpoint(runErr)
+}
+
+func (m *Manager) nextAudioRestartDelay(sourceID string) time.Duration {
+	m.audioRestartMu.Lock()
+	defer m.audioRestartMu.Unlock()
+	failures := m.audioRestartFailures[sourceID] + 1
+	m.audioRestartFailures[sourceID] = failures
+	return restartBackoff(m.audioRestartBaseDelay, m.audioRestartMaxDelay, failures)
+}
+
+func (m *Manager) resetAudioRestartFailures(sourceID string) {
+	m.audioRestartMu.Lock()
+	delete(m.audioRestartFailures, sourceID)
+	m.audioRestartMu.Unlock()
+}
+
+func restartBackoff(base, maximum time.Duration, failures int) time.Duration {
+	if base < 0 {
+		base = 0
+	}
+	if maximum < base {
+		maximum = base
+	}
+	if failures <= 1 || base == 0 {
+		return base
+	}
+	delay := base
+	for i := 1; i < failures && delay < maximum; i++ {
+		if delay > maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
+}
+
+func (m *Manager) restartDefaultAudioSource(runtime *sourceRuntime, delay time.Duration) {
+	waitForSourceStop(runtime, 2*time.Second)
+	m.mu.RLock()
+	root := m.root
+	m.mu.RUnlock()
+	if root == nil {
+		return
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-root.Done():
+		return
+	case <-timer.C:
+	}
+
+	m.mu.Lock()
+	current := m.sources[runtime.cfg.ID]
+	if current != runtime || !m.started || m.paused {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.sources, runtime.cfg.ID)
+	m.mu.Unlock()
+	m.reconcile()
+}
+
+func setAudioRecovering(runtime *sourceRuntime) {
+	runtime.mu.Lock()
+	runtime.status.TransportState = "recovering"
+	runtime.mu.Unlock()
 }
 
 func initialTransportState(kind domain.SourceKind) string {
@@ -466,9 +575,10 @@ func finishSourceStatus(runtime *sourceRuntime, runErr, contextErr error) {
 	}
 }
 
-func updateAudioStatus(runtime *sourceRuntime, block paudio.Block, level float64) {
+func updateAudioStatus(runtime *sourceRuntime, block paudio.Block, level float64) bool {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
+	becameAlive := runtime.status.TransportState != "alive"
 	runtime.status.TransportState = "alive"
 	runtime.status.Level = level
 	switch {
@@ -479,6 +589,7 @@ func updateAudioStatus(runtime *sourceRuntime, block paudio.Block, level float64
 	default:
 		runtime.status.SignalState = "data"
 	}
+	return becameAlive
 }
 
 func (m *Manager) recordAudioGap(pipelineID string, r *sourceRuntime, at time.Time, reason string) {
@@ -570,7 +681,9 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 		for _, segment := range segmenter.Push(block) {
 			m.enqueueAudioSegment(pipelineID, runtime, queue, segment)
 		}
-		updateAudioStatus(runtime, block, segmenter.Level)
+		if updateAudioStatus(runtime, block, segmenter.Level) {
+			m.resetAudioRestartFailures(runtime.cfg.ID)
+		}
 	})
 	if ctx.Err() != nil {
 		return ctx.Err()
