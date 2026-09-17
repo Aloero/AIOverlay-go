@@ -57,3 +57,20 @@ func TestRespondEntryRejectsDisconnectedNormalBranch(t *testing.T) {
 		t.Fatal("unfinished respond branch accepted")
 	}
 }
+
+func TestCommandAndSourceCannotShareTriggerID(t *testing.T) {
+	cfg := Default()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Contexts = append(pipeline.Contexts, domain.ContextConfig{
+		ID: "ctx", Name: "Context", Enabled: true,
+		MaxAgeS: 60, MaxEntries: 10, MaxChars: 1000, ScreenMaxAgeS: 60,
+	})
+	pipeline.Sources = append(pipeline.Sources, domain.EventSource{
+		ID: pipeline.Commands[0].ID, Name: "Ambiguous source", Kind: domain.SourceScreenTimer,
+		Enabled: true, EntryNodeID: pipeline.EntryNodeID, Intent: domain.IntentContext,
+		ContextID: "ctx", IntervalMS: 1000,
+	})
+	if err := Validate(cfg); err == nil {
+		t.Fatal("command/source trigger ID collision was accepted")
+	}
+}

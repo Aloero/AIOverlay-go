@@ -71,8 +71,8 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 
 	sourceIDs := map[string]bool{}
 	for _, s := range p.Sources {
-		if s.ID == "" || len(s.ID) > 120 || sourceIDs[s.ID] || strings.ContainsAny(s.ID, "\x00\r\n") {
-			return fmt.Errorf("invalid or duplicate source ID")
+		if s.ID == "" || len(s.ID) > 120 || sourceIDs[s.ID] || ids[s.ID] || strings.ContainsAny(s.ID, "\x00\r\n") {
+			return fmt.Errorf("invalid, duplicate or ambiguous source ID")
 		}
 		sourceIDs[s.ID] = true
 		if !enum(s.Kind, domain.SourceAudio, domain.SourceScreenTimer) {
