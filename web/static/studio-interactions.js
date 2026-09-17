@@ -6,10 +6,12 @@ async function activatePipeline(id) {
  if(!p?.enabled)throw new Error('Этот пайплайн отключён.');
  state.selectingPipeline=true;
  try {
+  if(state.job?.running)throw new Error('Сначала завершите запрос. Его пайплайн не меняется во время выполнения.');
   if(state.dirty)await saveConfig();
+  if(state.dirty)throw new Error('Остались новые изменения. Сохраните их перед переключением пайплайна.');
   if(state.config.active_pipeline_id!==id){
    await api('/api/pipelines/active','POST',{id});
-   state.config.active_pipeline_id=id;
+   state.config.active_pipeline_id=id;acknowledgeActivation(id);
   }
   state.pipeline=id;state.node=null;state.edge=null;state.page='pipelines';renderPage();
  }finally{state.selectingPipeline=false;}
@@ -27,6 +29,7 @@ function applyViewport() {
  const canvas=$('#canvas');canvas.style.backgroundPosition=`${state.pan.x}px ${state.pan.y}px`;canvas.style.backgroundSize=`${20*state.zoom}px ${20*state.zoom}px`;
 }
 function rememberViewport(markDirty=true) {
+ if(!markDirty)return; // Initial fit is visual, not an unsaved config change.
  state.config.control_center.layout||={};
  state.config.control_center.layout[pipe().id]={pan_x:state.pan.x,pan_y:state.pan.y,zoom:state.zoom};
  if(markDirty)dirty();
@@ -146,6 +149,7 @@ function installContextHelp() {
 function renderAttemptState() {
  const root=$('#attemptState');if(!root)return;
  const job=state.job,events=job?.trace?.events||[];
+ if(!job?.id||job.cleared||job.purpose==='connection_test'){root.innerHTML='';return;}
  const attempts=new Map();
  for(const e of events) {
   if(!e.attempt||!['attempt_start','first_token','attempt_end'].includes(e.kind))continue;
@@ -153,7 +157,7 @@ function renderAttemptState() {
   const old=attempts.get(key)||{};attempts.set(key,{...old,...e,start:old.start??e.at_ms});
  }
  const active=[...attempts.values()].filter(e=>e.kind!=='attempt_end');
- const cfg=state.config.pipelines.find(p=>p.id===job?.pipeline_id)||pipe();
- root.innerHTML=`<button class="run-summary" id="openRunTrace" data-help="Фактические запросы: каждое событие attempt_start учитывает один модельный вызов. Откройте полный журнал, чтобы увидеть ключи, ошибки и отмены."><span>${job?.running?'Выполняются: '+active.length:'Последний запуск'}</span><span>Вызовы ${attempts.size} / ${cfg?.budget.max_model_calls??'—'}</span><span>Журнал →</span></button>${job?.running?active.map(e=>`<div class="live-attempt"><span class="live-dot"></span><span>${esc(shortModel(e.attempt.model_id))}<small>${esc(e.attempt.transport||'')} · ${esc(provider(e.attempt.provider_id)?.label||e.attempt.provider_id)} · ${esc(e.attempt.credential_alias||e.attempt.credential_id||'без ключа')}</small></span><time>+${(e.start/1000).toFixed(2)} с</time><b>${e.kind==='first_token'?'Текст':'Ожидание'}</b></div>`).join(''):''}`;
+ const cfg=state.config.pipelines.find(p=>p.id===job?.trace?.pipeline_id)||pipe(),budget=job?.trace?.budget||cfg?.budget;
+ root.innerHTML=`<button class="run-summary-button" id="openRunTrace" data-help="Фактические запросы: каждое событие attempt_start учитывает один модельный вызов. Откройте полный журнал, чтобы увидеть ключи, ошибки и отмены."><span>${job?.running?'Выполняются: '+active.length:'Последний запуск'}</span><span>Вызовы ${attempts.size} / ${budget?.max_model_calls??'—'}</span><span>Журнал →</span></button>${job?.running?active.map(e=>`<div class="live-attempt"><span class="live-dot"></span><span>${esc(shortModel(e.attempt.model_id))}<small>${esc(e.attempt.transport||'')} · ${esc(provider(e.attempt.provider_id)?.label||e.attempt.provider_id)} · ${esc(e.attempt.credential_alias||e.attempt.credential_id||'без ключа')}</small></span><time>+${(e.start/1000).toFixed(2)} с</time><b>${e.kind==='first_token'?'Текст':'Ожидание'}</b></div>`).join(''):''}`;
  $('#openRunTrace').onclick=()=>{state.page='runs';renderPage();};
 }

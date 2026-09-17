@@ -18,6 +18,8 @@ type Input struct {
 }
 
 type RunOptions struct {
+	OnStart func(domain.ExecutionTrace)
+	Purpose string
 	OnDelta func(string)
 	OnReset func()
 	OnTrace func(domain.TraceEvent)
@@ -29,16 +31,18 @@ type Result struct {
 }
 
 type Engine struct {
-	cfg      domain.Config
-	registry *providers.Registry
-	catalog  *catalog.Service
-	traces   *tracestore.Store
-	configMu sync.RWMutex
-	mu       sync.Mutex
-	rr       map[string]int
-	lastGood map[string]string
-	cooldown map[string]time.Time
-	stats    map[string]modelStat
+	cfg               domain.Config
+	registry          *providers.Registry
+	catalog           *catalog.Service
+	traces            *tracestore.Store
+	configMu          sync.RWMutex
+	mu                sync.Mutex
+	rr                map[string]int
+	lastGood          map[string]string
+	cooldown          map[string]time.Time
+	stats             map[string]modelStat
+	credentialResults map[string]CredentialState
+	revision          uint64
 }
 
 func New(cfg domain.Config, registry *providers.Registry, cat *catalog.Service, traces *tracestore.Store) *Engine {
@@ -48,7 +52,7 @@ func New(cfg domain.Config, registry *providers.Registry, cat *catalog.Service, 
 	return &Engine{
 		cfg: cfg, registry: registry, catalog: cat, traces: traces,
 		rr: map[string]int{}, lastGood: map[string]string{},
-		cooldown: map[string]time.Time{}, stats: map[string]modelStat{},
+		cooldown: map[string]time.Time{}, stats: map[string]modelStat{}, credentialResults: map[string]CredentialState{}, revision: 1,
 	}
 }
 
@@ -63,7 +67,15 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(p.Budget.MaxWallTimeMS)*time.Millisecond)
 	defer cancel()
-	t := domain.ExecutionTrace{ID: newID("trace"), PipelineID: p.ID, StartedAt: time.Now()}
+	t := domain.ExecutionTrace{ID: newID("trace"), PipelineID: p.ID, PipelineName: p.Name, ConfigRevision: e.revision, Budget: p.Budget, Purpose: "pipeline", StartedAt: time.Now()}
+	if opt.Purpose != "" {
+		t.Purpose = opt.Purpose
+	}
+	t.Budget.Extra = nil
+	t.PipelineName = (redactor{e.secrets()}).text(t.PipelineName)
+	if opt.OnStart != nil {
+		opt.OnStart(domain.CloneTrace(t))
+	}
 	r := newRunner(e, p, input, opt, &t)
 	text, err := r.run(ctx, p.EntryNodeID, nodeValue{image: input.ImageJPEG, text: input.Text})
 	cancel()

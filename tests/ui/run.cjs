@@ -19,7 +19,7 @@ async function waitReady(base){for(let i=0;i<100;i++){try{if((await fetch(base+'
   server=spawn(binary,['--headless','--headless-token',token,'--config',cfg],{cwd:root,stdio:['ignore','pipe','pipe']});
   let logs='';server.stdout.on('data',v=>logs+=v);server.stderr.on('data',v=>logs+=v);
   const base='http://'+fixture.control_center.listen_address;await waitReady(base);
-  for(const suite of process.argv.includes('--dom-only')?['smoke.cjs','audit-regressions.cjs']:['smoke.cjs','audit-regressions.cjs','studio-features.cjs']) {
+  for(const suite of process.argv.includes('--dom-only')?['smoke.cjs','audit-regressions.cjs']:['smoke.cjs','audit-regressions.cjs','studio-features.cjs','studio-ux.cjs']) {
    const clean=structuredClone(fixture);
    const reset=await fetch(base+'/api/config',{method:'PUT',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(clean)});
    if(!reset.ok)throw Error('Could not reset isolated UI fixture: '+await reset.text());

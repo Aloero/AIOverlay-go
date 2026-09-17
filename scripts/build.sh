@@ -22,7 +22,7 @@ mkdir -p dist/runtime/{opencode,catalog,sing-box}
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "$GO" build -buildvcs=false -trimpath -ldflags '-s -w -H=windowsgui' -o "dist/$EXE" ./cmd/aioverlay
 cp "$CONFIG" dist/config.json
 cp README.md ARCHITECTURE.md VERIFICATION.md THIRD_PARTY_NOTICES.txt dist/
-for doc in AUDIT_FIXES.md SECURITY.md; do [[ ! -f "$doc" ]] || cp "$doc" dist/; done
+for doc in AUDIT_FIXES.md SECURITY.md STUDIO_UX.md; do [[ ! -f "$doc" ]] || cp "$doc" dist/; done
 cp runtime/manifest.json dist/runtime/
 cp scripts/Install-WebView2.ps1 dist/Install-WebView2.ps1
 cp runtime/opencode/opencode.exe runtime/opencode/LICENSE dist/runtime/opencode/

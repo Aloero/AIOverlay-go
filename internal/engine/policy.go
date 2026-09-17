@@ -119,6 +119,10 @@ func (e *Engine) orderCredentials(providerID string, pool domain.CredentialPool)
 func (e *Engine) markCredential(providerID string, key domain.Credential, outcome domain.Outcome, cooldownSeconds int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.credentialResults == nil {
+		e.credentialResults = map[string]CredentialState{}
+	}
+	e.credentialResults[providerID+"/"+key.ID] = CredentialState{ProviderID: providerID, CredentialID: key.ID, Outcome: outcome, CheckedAt: time.Now()}
 	switch outcome {
 	case domain.OutcomeSuccess:
 		e.lastGood[providerID] = key.ID

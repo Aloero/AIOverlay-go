@@ -20,15 +20,17 @@ import (
 )
 
 type CatalogQuery struct {
-	ProviderID string
-	Search     string
-	Provider   string
-	Vision     bool
-	Free       bool
-	Reasoning  bool
-	Ready      bool
-	Limit      int
-	Offset     int
+	ProviderID     string   `json:"provider_id"`
+	Search         string   `json:"search"`
+	Provider       string   `json:"provider"`
+	Vision         bool     `json:"vision"`
+	Free           bool     `json:"free"`
+	Reasoning      bool     `json:"reasoning"`
+	Ready          bool     `json:"ready"`
+	Limit          int      `json:"limit"`
+	Offset         int      `json:"offset"`
+	References     []string `json:"references,omitempty"`
+	ReferencesOnly bool     `json:"references_only,omitempty"`
 }
 
 type CatalogPage struct {
@@ -122,6 +124,10 @@ func (s *Server) ListenAndServe() error {
 func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ctx) }
 
 func (s *Server) routes(mux *http.ServeMux) {
+	mux.HandleFunc("/api/studio/state", s.handleStudioState)
+	mux.HandleFunc("/api/simulation", s.handleSimulation)
+	mux.HandleFunc("/api/providers/test", s.handleConnectionProbe)
+	mux.HandleFunc("/api/limits/preview", s.handleLimitsPreview)
 	mux.HandleFunc("/api/providers/config", s.handleProviderConfig)
 	mux.HandleFunc("/api/providers/catalog", s.handleProviderDirectory)
 	mux.HandleFunc("/api/pool/plan", s.handlePoolPlan)
@@ -160,11 +166,14 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config/export", s.handleExport)
 	mux.HandleFunc("/api/config/import", s.handleImport)
 	mux.HandleFunc("/api/catalog", s.handleCatalog)
+	mux.HandleFunc("/api/catalog/selection", s.handleCatalogSelection)
 	mux.HandleFunc("/api/catalog/refresh", s.handleCatalogRefresh)
 	mux.HandleFunc("/api/run", s.handleRun)
 	mux.HandleFunc("/api/benchmark", s.handleBenchmark)
 	mux.HandleFunc("/api/traces", s.handleTraces)
 	mux.HandleFunc("/api/vpn/check", s.handleVPNCheck)
+	mux.HandleFunc("/api/vpn/import", s.handleVPNImport)
+	mux.HandleFunc("/api/vpn/probe", s.handleVPNProbe)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]any{"ok": true}) })
 }
 

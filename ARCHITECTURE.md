@@ -1,4 +1,4 @@
-# Architecture · 0.2.6
+# Architecture · 0.2.7
 
 Production: native Win32 overlay + embedded WebView2 Studio + Go execution engine.
 Studio HTML/CSS/JS is compiled into the executable; its JSON requests call the existing handlers in-process via `internal/desktop/bridge.go`. A development HTTP listener is used only with `--headless`.
@@ -81,3 +81,16 @@ Schema remains version 1, with optional additive fields. Strict unknown-field re
 - `releaseguard` / `releasepack` / `cmd/release`: no runtime config in Git, no credentials or LFS pointers in packaged inputs, explicit inventory, deterministic ZIP timestamps, full manifest coverage/CRC/clean extraction and reproducible Windows EXE from extracted source. No CDN, private configuration upload, runtime Python or test-browser payload is added.
 
 The original layer boundaries remain: adapters execute one request, the engine chooses fallback, app/control own operations and platform/desktop own Windows. Details and evidence boundaries for every audit issue are in AUDIT_FIXES.md and VERIFICATION.md.
+
+
+## Studio UX and independent scheduling · 0.2.7
+
+Schema 3 adds ModelPoolConfig.Order and Dispatch, independently validated and resolved by domain helpers. The engine dispatch switch and the policy order selector consume these separately; the old Policy field remains a compatibility input when explicit fields are absent. Migration materializes old behavior recursively, including vision preprocessors. No provider adapter chooses fallback.
+
+Pure preview ordering works on a copied statistics state. `engine/simulation.go` runs a bounded virtual clock over the shared candidate planner, order/limits/admission and graph-edge rules, with explicit hypothetical outcomes and no provider registry or external effects. App handlers inject snapshots of current stats/credential cooldowns, not mutable references. Simulation is deliberately not a prediction of network/SDK retries, billing or provider quality.
+
+Connection probes are confirmed single-model/key jobs with their own trace purpose and 32-token request ceiling. They use saved transports without replacing the active pipeline, and the native overlay ignores that job purpose. VPN URI parsing rejects unknown/incompatible settings; explicit HTTPS HEAD probes require a separate confirmation and never silently fall back to direct transport. Profile names do not participate in runtime identity comparisons.
+
+ExecutionTrace now snapshots pipeline name, configuration revision, purpose and effective global budget; live JobManager receives that snapshot before events. Public snapshots are deep-copied and unrelated unknown budget fields are not included in execution traces. Credential status exposes IDs/outcomes/times only, not secrets.
+
+Frontend responsibilities are split: studio-workspace owns applied/draft state, bounded in-memory undo and panel/search controls; schedule-view, pool-plan and simulation-view own dispatch editing/planning/rehearsal; connection-hub and catalog-view own discovery/routes/shortcuts/consented probes; model-settings handles inherited limits; vpn-view handles compact profile editing/import/verification; run-insights presents summaries and timing without replacing the raw trace. Original capture, native lifecycle, authorization and draft-close safeguards remain in their existing layers.

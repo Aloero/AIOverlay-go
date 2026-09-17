@@ -15,7 +15,7 @@ async function readConfig(){const r=await fetch(base+'/api/config',{headers:{Aut
   // execution or capture is permitted; native Windows itself is not exercised.
   await page.exposeFunction('__testDispatch',async r=>{
    calls.push({path:r.path,method:r.method});
-   if((r.path==='/api/job'&&r.method==='POST')||r.path.includes('/benchmark')||r.path.includes('/test/run'))throw Error('TEST FORBIDS MODEL REQUESTS');
+   if((r.path==='/api/job'&&r.method==='POST')||r.path.includes('/benchmark')||r.path.includes('/test/run')||r.path==='/api/providers/test'||r.path==='/api/vpn/probe')throw Error('TEST FORBIDS MODEL REQUESTS');
    if(r.path==='/desktop/close')return {};
    if(r.path==='/api/capture')return {image_base64:'dGVzdA==',bytes:4,duration_ms:1,method:'Synthetic fixture'};
    if(!r.path.startsWith('/api/'))throw Error('Unexpected test route');

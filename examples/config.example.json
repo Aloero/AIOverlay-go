@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "app": {
     "name": "AIOverlay",
     "secret_storage": "portable_json",
@@ -199,7 +199,9 @@
             "max_parallel": 3,
             "max_calls": 3,
             "hedge_delay_ms": 2000,
-            "round_robin_cursor": 0
+            "round_robin_cursor": 0,
+            "order": "round_robin",
+            "dispatch": "sequential"
           }
         },
         {
@@ -319,7 +321,9 @@
             "max_parallel": 3,
             "max_calls": 3,
             "hedge_delay_ms": 2000,
-            "round_robin_cursor": 0
+            "round_robin_cursor": 0,
+            "order": "priority",
+            "dispatch": "staggered_race"
           }
         },
         {
@@ -455,7 +459,9 @@
               "max_parallel": 3,
               "max_calls": 3,
               "hedge_delay_ms": 2000,
-              "round_robin_cursor": 0
+              "round_robin_cursor": 0,
+              "order": "priority",
+              "dispatch": "staggered_race"
             },
             "prompt": {
               "system": "You are a precise screen-task assistant. Answer the actual task visible in the supplied context. Prioritize correctness. Keep the answer concise unless the task requires explanation. Never invent unreadable details.",
@@ -465,7 +471,9 @@
             "max_parallel": 2,
             "max_calls": 3,
             "hedge_delay_ms": 1500,
-            "round_robin_cursor": 0
+            "round_robin_cursor": 0,
+            "order": "round_robin",
+            "dispatch": "sequential"
           }
         },
         {
@@ -532,7 +540,7 @@
     "product_name": "AIOverlay",
     "file_description": "AI Overlay Assistant",
     "company": "Local",
-    "version": "0.2.6",
+    "version": "0.2.7",
     "icon_path": "assets/app.ico"
   }
 }

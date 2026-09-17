@@ -141,7 +141,7 @@ func PlanPool(cfg domain.Config, cat *catalog.Service, pool domain.ModelPoolConf
 
 func (r *runner) planPool(n domain.Node, pool domain.ModelPoolConfig, input nodeValue) []domain.ModelSlot {
 	plan := PlanPool(r.engine.cfg, r.engine.catalog, pool, len(input.image) > 0 && !input.hasOutput)
-	r.emit(domain.TraceEvent{Kind: "pool_plan", NodeID: n.ID, Message: fmt.Sprintf("source=%s; candidates=%d; policy=%s; parallel<=%d; calls<=%d; hedge=%dms", plan.Mode, len(plan.Candidates), pool.Policy, min(max(1, pool.MaxParallel), cap(r.sem)), pool.MaxCalls, pool.HedgeDelayMS)})
+	r.emit(domain.TraceEvent{Kind: "pool_plan", NodeID: n.ID, Message: fmt.Sprintf("source=%s; candidates=%d; order=%s; dispatch=%s; parallel<=%d; calls<=%d; hedge=%dms", plan.Mode, len(plan.Candidates), pool.EffectiveOrder(), pool.EffectiveDispatch(), min(max(1, pool.MaxParallel), cap(r.sem)), pool.MaxCalls, pool.HedgeDelayMS)})
 	reasons := make([]string, 0, len(plan.Skipped))
 	for reason := range plan.Skipped {
 		reasons = append(reasons, reason)
@@ -155,7 +155,7 @@ func (r *runner) planPool(n domain.Node, pool domain.ModelPoolConfig, input node
 
 func (e *Engine) orderPoolModels(key string, pool domain.ModelPoolConfig, models []domain.ModelSlot) []domain.ModelSlot {
 	if pool.Selection == nil || pool.Selection.Mode != "manual_then_catalog" {
-		return e.orderModelsForPolicy(key, pool.Policy, models)
+		return e.orderModelsForPolicy(key, pool.EffectiveOrder(), models)
 	}
 	pins := map[string]bool{}
 	for _, m := range pool.Models {
@@ -169,6 +169,6 @@ func (e *Engine) orderPoolModels(key string, pool domain.ModelPoolConfig, models
 			rest = append(rest, m)
 		}
 	}
-	first = e.orderModelsForPolicy(key, pool.Policy, first)
+	first = e.orderModelsForPolicy(key, pool.EffectiveOrder(), first)
 	return append(first, rest...)
 }

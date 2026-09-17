@@ -61,3 +61,18 @@ func TestProviderLabelOnlyKeepsConnections(t *testing.T) {
 		t.Fatal("label invalidated runtime")
 	}
 }
+
+func TestStudioWorkspaceAndVPNLabelKeepWarmTransports(t *testing.T) {
+	a := studioTestApp(t)
+	reg, tun := a.registry, a.tunnel
+	cfg := a.GetConfig()
+	cfg.VPN.Name = "Office profile"
+	cfg.ControlCenter.Workspace = domain.WorkspaceConfig{InspectorWidth: 340, SidebarCollapsed: true}
+	cfg.ControlCenter.FavoriteModels = []string{"opencode/test"}
+	if err := a.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if a.registry != reg || a.tunnel != tun {
+		t.Fatal("view state or profile label restarted runtimes")
+	}
+}

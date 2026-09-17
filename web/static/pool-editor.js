@@ -1,27 +1,26 @@
 'use strict';
 
-const sourceNames={manual:'Мой список',catalog:'Все доступные модели',manual_then_catalog:'Мой список → весь каталог'};
+const sourceNames={manual:'Мой список',catalog:'Каталог подключений',manual_then_catalog:'Сначала список, затем каталог'};
 const skipNames={not_configured:'нет подключения / ключа',not_free:'не FREE',needs_vision:'не принимает изображение',text_only_filter:'не TEXT ONLY',quality_floor:'ниже порога качества',disabled:'отключены',non_text_output:'нет текстового ответа'};
 
 function renderPoolInspector(n) {
  const pool=n.model_pool;
  $('#inspectorBody').innerHTML=`${field('Название этапа','nodeName',n.name)}
  <label class="switch stage-switch"><input type="checkbox" id="enableVision" ${pool.vision_preprocessor?'checked':''}>Зрение → текстовая модель</label><div id="visionPool"></div><div id="solverSource"></div><div class="section-line"><h4>ПОРЯДОК ЗАПУСКА</h4></div>
- ${selectField('Режим','poolPolicy',policyNames,pool.policy)}<div id="dispatchControls"></div><div id="poolPlan" class="pool-plan"></div>
- <div class="section-line"><h4>${pool.selection?.mode==='catalog'?'ПРИОРИТЕТНЫЕ МОДЕЛИ':'МОЙ СПИСОК'}</h4></div><div id="solverModels"></div><button class="add-model" id="addSolverModel">+ Выбрать модель</button>
+ <div id="dispatchControls"></div><div id="poolPlan" class="pool-plan"></div>
+ <div class="section-line"><h4>${pool.selection?.mode&&pool.selection.mode!=='manual'?'СНАЧАЛА ПРОБОВАТЬ':'МОЙ СПИСОК'}</h4></div><div id="solverModels"></div><button class="add-model" id="addSolverModel">+ Выбрать модель</button>
  ${outgoing(n.id)}`;
  bindValue('nodeName',n,'name',false,renderGraph);
  renderSourceControls($('#solverSource'),pool,'source',false);
  renderSlots($('#solverModels'),pool,false);
  $('#addSolverModel').onclick=()=>openCatalog(pool,false);
- $('#poolPolicy').onchange=e=>{pool.policy=e.target.value;dirty();renderGraph();renderDispatchControls(pool);refreshPoolPlan(pool);};
  $('#enableVision').onchange=e=>{if(e.target.checked)pool.vision_preprocessor=defaultVisionPool();else delete pool.vision_preprocessor;dirty();renderGraph();renderInspector();};
  if(pool.vision_preprocessor) {
   const vision=pool.vision_preprocessor;
-  $('#visionPool').innerHTML=`<div class="vision-section"><p class="eyebrow">01 / ЗРЕНИЕ</p><div id="visionSource"></div><div id="visionModels"></div><button class="add-model" id="addVisionModel">+ Модель со зрением</button>${selectField('Запуск VLM','visionPolicy',policyNames,vision.policy)}<div class="form-row">${field('Одновременно','visionParallel',vision.max_parallel,'number')}${field('Вызовов','visionCalls',vision.max_calls,'number')}</div>${field('Задержка резерва, мс','visionHedge',vision.hedge_delay_ms,'number')}<button class="button small" id="visionPlan">Очередь VLM</button><div class="stage-output">↓ {{vision.text}}</div><p class="eyebrow">02 / РЕШЕНИЕ</p></div>`;
+  $('#visionPool').innerHTML=`<div class="vision-section"><p class="eyebrow">01 / ЗРЕНИЕ</p><div id="visionSource"></div><div id="visionModels"></div><button class="add-model" id="addVisionModel">+ Модель со зрением</button>${scheduleFields(vision,'vision')}<button class="button small" id="visionPlan">Очередь VLM</button><div class="stage-output">↓ {{vision.text}}</div><p class="eyebrow">02 / РЕШЕНИЕ</p></div>`;
   renderSourceControls($('#visionSource'),vision,'visionSource',true);renderSlots($('#visionModels'),vision,true);
   $('#addVisionModel').onclick=()=>openCatalog(vision,true);
-  for(const [id,key,numeric]of [['visionPolicy','policy',false],['visionParallel','max_parallel',true],['visionCalls','max_calls',true],['visionHedge','hedge_delay_ms',true]])bindValue(id,vision,key,numeric,renderGraph);
+  bindSchedule(vision,'vision',()=>{renderGraph();renderInspector();});
   $('#visionPlan').onclick=guarded(()=>showPoolPlan(vision,true));
  }
  renderDispatchControls(pool);refreshPoolPlan(pool);bindOutgoing();
@@ -55,39 +54,6 @@ function renderSourceControls(root,pool,prefix,isVision) {
 }
 
 function renderDispatchControls(pool) {
- const racing=['parallel_race','staggered_race'].includes(pool.policy);
- $('#dispatchControls').innerHTML=`<div class="form-row">${field('Вызовов на этап','dispatchCalls',pool.max_calls,'number')}${racing?field('Одновременно','dispatchParallel',pool.max_parallel,'number'):''}</div>${pool.policy==='staggered_race'?field('Запуск резерва через, мс','dispatchHedge',pool.hedge_delay_ms,'number'):''}<div class="dispatch-effective" data-help="Действует меньшее из ограничений этапа и всего пайплайна. Новый ключ и повтор на том же ключе расходуют отдельный вызов. Первый завершённый непустой ответ побеждает; другие попытки отменяются.">Фактически: до ${racing?Math.min(pool.max_parallel,pipe().budget.max_parallel_calls):1} одновременно · до ${Math.min(pool.max_calls,pipe().budget.max_model_calls)} вызовов</div>`;
- for(const [id,key]of [['dispatchCalls','max_calls'],['dispatchParallel','max_parallel'],['dispatchHedge','hedge_delay_ms']])bindValue(id,pool,key,true,()=>{renderGraph();renderDispatchControls(pool);refreshPoolPlan(pool);});
-}
-
-let planSerial=0;
-async function requestPoolPlan(pool,image) {return api('/api/pool/plan','POST',{config:state.config,pool,image});}
-async function refreshPoolPlan(pool) {
- const root=$('#poolPlan');if(!root)return;
- const serial=++planSerial;root.textContent='Составление очереди…';
- try {
-  const plan=await requestPoolPlan(pool,!pool.vision_preprocessor);
-  if(serial!==planSerial||!root.isConnected)return;
-  const candidates=plan.candidates||[],limit=Math.min(pool.max_calls,pipe().budget.max_model_calls);
-  root.innerHTML=`<div class="plan-heading"><strong>${candidates.length} моделей</strong><span>≤ ${limit} вызовов</span></div><div class="schedule-preview">${candidates.slice(0,4).map((m,i)=>`<div><time>${esc(dispatchWhen(pool,i))}</time><span>${esc(shortModel(m.model_id))}</span></div>`).join('')||'<p class="note">Подходящих моделей нет.</p>'}</div><button class="button small" id="showPoolPlan">Вся очередь / пропуски</button>${plan.skipped?.quality_floor>0&&pool.selection?.mode!=='manual'&&pool.selection?`<button class="text-button allow-unscored" id="allowUnscored">Разрешить модели без оценки (${plan.skipped.quality_floor})</button>`:''}`;
-  $('#showPoolPlan').onclick=()=>showPoolPlan(pool,!pool.vision_preprocessor,plan);
-  if($('#allowUnscored'))$('#allowUnscored').onclick=()=>{pool.quality_floor=0;dirty();renderGraph();renderInspector();};
- }catch(e){if(root.isConnected)root.textContent='Очередь недоступна: '+e.message;}
-}
-function dispatchWhen(pool,i) {
- if(i===0)return 'Старт';
- if(pool.policy==='parallel_race')return i<Math.min(pool.max_parallel,pipe().budget.max_parallel_calls)?'Старт':'Свободный слот';
- if(pool.policy==='staggered_race')return i<Math.min(pool.max_parallel,pipe().budget.max_parallel_calls)?'+'+(i*pool.hedge_delay_ms/1000)+' с':'Свободный слот';
- return 'После ошибки';
-}
-async function showPoolPlan(pool,image,existing) {
- const plan=existing||await requestPoolPlan(pool,image),candidates=plan.candidates||[];
- let offset=0;
- modal('Очередь попыток',`<div class="plan-totals"><span>${candidates.length} моделей</span><span>До ${Math.min(pool.max_calls,pipe().budget.max_model_calls)} вызовов</span><span>${esc(policyNames[pool.policy])}</span></div><div class="note plan-explanation">${pool.policy==='staggered_race'?'Первый запрос стартует сразу. Пока ответа нет, резерв запускается с указанным интервалом; после ошибки свободное место занимается раньше.':pool.policy==='parallel_race'?'Заполняются свободные места в пределах параллельного лимита. Первый успешный ответ завершает этап.':'После ошибки выбирается следующая модель. При успехе перебор останавливается.'} Повторные ключи тоже расходуют вызовы. Показан приоритетный список; чередование, веса и статистика могут изменить стартовую модель.</div><div class="table-wrap"><table class="queue-table"><thead><tr><th>№</th><th>Модель</th><th>Подключение</th><th>Приоритет</th><th>Качество</th></tr></thead><tbody id="queueRows"></tbody></table></div><div class="catalog-paging"><span id="queueCount"></span><div><button class="button small" id="queuePrev">←</button><button class="button small" id="queueNext">→</button></div></div><details class="plan-skips"><summary>Отбор моделей</summary>${Object.entries(plan.skipped||{}).map(([reason,count])=>`<div>${esc(skipNames[reason]||reason)} <b>${count}</b></div>`).join('')||'<p>Ничего не пропущено.</p>'}</details>`,'ПЛАН · БЕЗ ЗАПРОСОВ К МОДЕЛЯМ');
- function page() {
-  $('#queueRows').innerHTML=candidates.slice(offset,offset+60).map((m,i)=>`<tr><td>${offset+i+1}</td><td class="mono">${esc(m.model_id)}</td><td>${esc(provider(m.provider_id)?.label||m.provider_id)}<small>${esc(routeLabel(provider(m.provider_id)))}</small></td><td>${m.priority}</td><td>${m.quality_score||'Не задано'}</td></tr>`).join('');
-  $('#queueCount').textContent=`${Math.min(offset+1,candidates.length)}–${Math.min(offset+60,candidates.length)} / ${candidates.length}`;
-  $('#queuePrev').disabled=offset===0;$('#queueNext').disabled=offset+60>=candidates.length;
- }
- $('#queuePrev').onclick=()=>{offset=Math.max(0,offset-60);page();};$('#queueNext').onclick=()=>{offset+=60;page();};page();
+ $('#dispatchControls').innerHTML=scheduleFields(pool,'pool');
+ bindSchedule(pool,'pool',()=>{renderGraph();renderDispatchControls(pool);refreshPoolPlan(pool);});
 }

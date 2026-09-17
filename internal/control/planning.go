@@ -34,9 +34,11 @@ func (s *Server) handlePoolPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Config domain.Config          `json:"config"`
-		Pool   domain.ModelPoolConfig `json:"pool"`
-		Image  bool                   `json:"image"`
+		Config     domain.Config          `json:"config"`
+		Pool       domain.ModelPoolConfig `json:"pool"`
+		Image      bool                   `json:"image"`
+		PipelineID string                 `json:"pipeline_id"`
+		NodeID     string                 `json:"node_id"`
 	}
 	if err := decodeJSON(r, &req, 8<<20); err != nil {
 		http.Error(w, "invalid pool plan request", 400)
@@ -44,6 +46,12 @@ func (s *Server) handlePoolPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Config.Version == 0 {
 		req.Config = s.backend.GetConfig()
+	}
+	if advanced, ok := s.backend.(interface {
+		PreviewOrderedPool(domain.Config, domain.ModelPoolConfig, bool, string, string) engine.PoolPlan
+	}); ok {
+		writeJSON(w, advanced.PreviewOrderedPool(req.Config, req.Pool, req.Image, req.PipelineID, req.NodeID))
+		return
 	}
 	writeJSON(w, b.PreviewPool(req.Config, req.Pool, req.Image))
 }

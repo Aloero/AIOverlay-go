@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = 2
+const ConfigVersion = 3
 
 type ProviderKind string
 
@@ -182,6 +182,8 @@ type CatalogSelection struct {
 }
 
 type ModelPoolConfig struct {
+	Order              PoolPolicy                 `json:"order,omitempty"`
+	Dispatch           DispatchPolicy             `json:"dispatch,omitempty"`
 	Extra              map[string]json.RawMessage `json:"-"`
 	Selection          *CatalogSelection          `json:"selection,omitempty"`
 	Policy             PoolPolicy                 `json:"policy"`
@@ -258,14 +260,18 @@ type CanvasLayout struct {
 }
 
 type ControlConfig struct {
-	Extra         map[string]json.RawMessage `json:"-"`
-	Layout        map[string]CanvasLayout    `json:"layout,omitempty"`
-	ListenAddress string                     `json:"listen_address"`
-	AutoOpen      bool                       `json:"auto_open"`
-	Theme         string                     `json:"theme"`
+	Workspace      WorkspaceConfig            `json:"workspace,omitempty"`
+	FavoriteModels []string                   `json:"favorite_models,omitempty"`
+	RecentModels   []string                   `json:"recent_models,omitempty"`
+	Extra          map[string]json.RawMessage `json:"-"`
+	Layout         map[string]CanvasLayout    `json:"layout,omitempty"`
+	ListenAddress  string                     `json:"listen_address"`
+	AutoOpen       bool                       `json:"auto_open"`
+	Theme          string                     `json:"theme"`
 }
 
 type VPNConfig struct {
+	Name    string                     `json:"name,omitempty"`
 	Extra   map[string]json.RawMessage `json:"-"`
 	Enabled bool                       `json:"enabled"`
 	Engine  string                     `json:"engine,omitempty"`
@@ -322,12 +328,16 @@ func (m ModelMeta) HasImageInput() bool {
 func (m ModelMeta) TextOnly() bool { return !m.HasImageInput() }
 
 type ExecutionTrace struct {
-	ID         string       `json:"id"`
-	PipelineID string       `json:"pipeline_id"`
-	StartedAt  time.Time    `json:"started_at"`
-	FinishedAt time.Time    `json:"finished_at,omitempty"`
-	Winner     *AttemptRef  `json:"winner,omitempty"`
-	Events     []TraceEvent `json:"events"`
+	PipelineName   string          `json:"pipeline_name,omitempty"`
+	ConfigRevision uint64          `json:"config_revision,omitempty"`
+	Budget         ExecutionBudget `json:"budget"`
+	Purpose        string          `json:"purpose,omitempty"`
+	ID             string          `json:"id"`
+	PipelineID     string          `json:"pipeline_id"`
+	StartedAt      time.Time       `json:"started_at"`
+	FinishedAt     time.Time       `json:"finished_at,omitempty"`
+	Winner         *AttemptRef     `json:"winner,omitempty"`
+	Events         []TraceEvent    `json:"events"`
 }
 
 type AttemptRef struct {

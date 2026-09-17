@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -121,7 +120,7 @@ func (a *App) saveConfigLocked(cfg domain.Config) error {
 	reg, tun, eng := a.registry, a.tunnel, a.engine
 	prepare, callback := a.beforeConfigSave, a.onConfigChanged
 	a.mu.RUnlock()
-	networkChanged := !sameConnections(previous.Providers, cfg.Providers) || !reflect.DeepEqual(previous.VPN, cfg.VPN)
+	networkChanged := !sameConnections(previous.Providers, cfg.Providers) || !sameTunnel(previous.VPN, cfg.VPN)
 	var err error
 	if networkChanged {
 		if err = tunnel.Validate(context.Background(), cfg.VPN); err != nil {
@@ -185,7 +184,16 @@ func (a *App) Catalog(q control.CatalogQuery) (control.CatalogPage, error) {
 	search := strings.ToLower(strings.TrimSpace(q.Search))
 	providerFilter := strings.ToLower(strings.TrimSpace(q.Provider))
 	out := make([]domain.ModelMeta, 0, 128)
+	refs := map[string]int{}
+	for i, ref := range q.References {
+		refs[ref] = i
+	}
 	for _, m := range items {
+		if q.ReferencesOnly {
+			if _, ok := refs[m.ProviderID+"/"+m.ModelID]; !ok {
+				continue
+			}
+		}
 		if q.ProviderID != "" && m.ProviderID != q.ProviderID {
 			continue
 		}
@@ -210,6 +218,9 @@ func (a *App) Catalog(q control.CatalogQuery) (control.CatalogPage, error) {
 		out = append(out, m)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if q.ReferencesOnly {
+			return refs[out[i].ProviderID+"/"+out[i].ModelID] < refs[out[j].ProviderID+"/"+out[j].ModelID]
+		}
 		if out[i].Ready != out[j].Ready {
 			return out[i].Ready
 		}

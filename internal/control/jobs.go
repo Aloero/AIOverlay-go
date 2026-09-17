@@ -19,16 +19,18 @@ type liveBackend interface {
 }
 
 type Job struct {
-	Cleared    bool                  `json:"cleared"`
-	Phase      string                `json:"phase"`
-	Benchmark  *BenchmarkReport      `json:"benchmark,omitempty"`
-	ID         string                `json:"id"`
-	Running    bool                  `json:"running"`
-	Text       string                `json:"text"`
-	Error      string                `json:"error,omitempty"`
-	Trace      domain.ExecutionTrace `json:"trace"`
-	Started    time.Time             `json:"started"`
-	DurationMS int64                 `json:"duration_ms"`
+	CancelRequested bool                  `json:"cancel_requested"`
+	Purpose         string                `json:"purpose"`
+	Cleared         bool                  `json:"cleared"`
+	Phase           string                `json:"phase"`
+	Benchmark       *BenchmarkReport      `json:"benchmark,omitempty"`
+	ID              string                `json:"id"`
+	Running         bool                  `json:"running"`
+	Text            string                `json:"text"`
+	Error           string                `json:"error,omitempty"`
+	Trace           domain.ExecutionTrace `json:"trace"`
+	Started         time.Time             `json:"started"`
+	DurationMS      int64                 `json:"duration_ms"`
 }
 
 type JobManager struct {
@@ -56,6 +58,7 @@ func (j *JobManager) Cancel() {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.cancel != nil {
+		j.job.CancelRequested = true
 		j.cancel()
 	}
 }
@@ -85,6 +88,9 @@ func (j *JobManager) StartPrepared(parent context.Context, b liveBackend, pipeli
 	})
 }
 func (j *JobManager) startTask(parent context.Context, pipeline string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
+	return j.startTaskPurpose(parent, pipeline, "pipeline", run)
+}
+func (j *JobManager) startTaskPurpose(parent context.Context, pipeline, purpose string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
 	j.mu.Lock()
 	if j.job.Running {
 		j.mu.Unlock()
@@ -93,7 +99,7 @@ func (j *JobManager) startTask(parent context.Context, pipeline string, run func
 	ctx, cancel := context.WithCancel(parent)
 	id := fmt.Sprintf("run-%d", time.Now().UnixNano())
 	done := make(chan struct{})
-	j.job = Job{ID: id, Running: true, Phase: "preparing", Started: time.Now(), Trace: domain.ExecutionTrace{PipelineID: pipeline, Events: []domain.TraceEvent{}}}
+	j.job = Job{Purpose: purpose, ID: id, Running: true, Phase: "preparing", Started: time.Now(), Trace: domain.ExecutionTrace{PipelineID: pipeline, Events: []domain.TraceEvent{}}}
 	j.cancel = cancel
 	j.done = done
 	j.mu.Unlock()
@@ -101,6 +107,14 @@ func (j *JobManager) startTask(parent context.Context, pipeline string, run func
 		defer cancel()
 		defer close(done)
 		opt := engine.RunOptions{
+			Purpose: purpose,
+			OnStart: func(tr domain.ExecutionTrace) {
+				j.mu.Lock()
+				defer j.mu.Unlock()
+				if j.job.ID == id {
+					j.job.Trace = domain.CloneTrace(tr)
+				}
+			},
 			OnDelta: func(delta string) {
 				j.mu.Lock()
 				defer j.mu.Unlock()
@@ -148,6 +162,7 @@ func (j *JobManager) Clear() {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.cancel != nil {
+		j.job.CancelRequested = true
 		j.cancel()
 	}
 	j.job.Cleared = true

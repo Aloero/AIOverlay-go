@@ -27,6 +27,7 @@ func (e *Engine) Reconfigure(cfg domain.Config, registry *providers.Registry) {
 			old, ok := before[id]
 			if !ok || old.Secret != k.Secret || old.Enabled != k.Enabled {
 				delete(e.cooldown, id)
+				delete(e.credentialResults, id)
 				if e.lastGood[p.ID] == k.ID {
 					delete(e.lastGood, p.ID)
 				}
@@ -36,8 +37,10 @@ func (e *Engine) Reconfigure(cfg domain.Config, registry *providers.Registry) {
 	for id := range e.cooldown {
 		if !present[id] {
 			delete(e.cooldown, id)
+			delete(e.credentialResults, id)
 		}
 	}
+	e.revision++
 	e.cfg = cfg
 	e.registry = registry
 }

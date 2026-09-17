@@ -34,12 +34,12 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 		return nodeValue{}, domain.OutcomeModelUnavailable, fmt.Errorf("pool %s has no enabled quality-approved models", n.ID)
 	}
 	ordered := r.engine.orderPoolModels(r.pipeline.ID+"/"+n.ID, *pool, models)
-	switch pool.Policy {
-	case domain.PoolParallel:
+	switch pool.EffectiveDispatch() {
+	case domain.DispatchParallel:
 		out, outcome, err := r.racePool(ctx, n, *pool, modelInput, ordered, 0)
 		out.image = input.image
 		return out, outcome, err
-	case domain.PoolStaggered:
+	case domain.DispatchStaggered:
 		out, outcome, err := r.racePool(ctx, n, *pool, modelInput, ordered, time.Duration(max(0, pool.HedgeDelayMS))*time.Millisecond)
 		out.image = input.image
 		return out, outcome, err

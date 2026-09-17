@@ -52,6 +52,6 @@ Copy-Item "runtime/catalog/opencode-enabled.json" "dist/runtime/catalog/opencode
 Write-Host "Built dist/$ExeName"
 
 Copy-Item "runtime/manifest.json" "dist/runtime/manifest.json" -Force
-foreach ($Doc in @("ARCHITECTURE.md", "AUDIT_FIXES.md", "SECURITY.md")) { if (Test-Path $Doc) { Copy-Item $Doc "dist/" -Force } }
+foreach ($Doc in @("ARCHITECTURE.md", "AUDIT_FIXES.md", "SECURITY.md", "STUDIO_UX.md")) { if (Test-Path $Doc) { Copy-Item $Doc "dist/" -Force } }
 
 if (Test-Path "runtime/sing-box/GPL-3.0.txt") { Copy-Item "runtime/sing-box/GPL-3.0.txt" "dist/runtime/sing-box/" -Force }

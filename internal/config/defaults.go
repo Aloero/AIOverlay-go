@@ -92,7 +92,7 @@ func Default() domain.Config {
 			ProductName:     "AIOverlay",
 			FileDescription: "AI Overlay Assistant",
 			Company:         "Local",
-			Version:         "0.2.6",
+			Version:         "0.2.7",
 			IconPath:        "assets/app.ico",
 		},
 	}

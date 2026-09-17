@@ -33,3 +33,12 @@ Child process Job Objects control process lifetime, not network permissions. Pro
 ## Reporting
 
 Describe the application version, outcome and redacted trace. Never attach live config.json, API keys, VPN secrets, screenshots or a crash dump containing private data unless deliberately reviewed and sanitized. There is no remote issue tracker configured in this local repository.
+
+
+## Explicit Studio tests and share links (0.2.7)
+
+Saving a provider or importing a VPN share link does not send a model request or connect to its VPN server. The separate provider test requires confirmation, names a saved enabled key/model, requests no image and has one adapter-call admission. The VPN network test requires confirmation and uses HTTPS HEAD with no model credentials, no redirects and no direct fallback. Test automation stubs those two UI commands and separately uses mock Go providers; it does not exercise real accounts.
+
+The virtual simulator never obtains a Provider registry and cannot invoke a transport. Its graph/config validation, virtual wall budget, 256-call/10000-step cap and request context limit apply independently of normal execution. A simulation result is not added to production run history or key/model health.
+
+URI import supports an explicit subset only. Unknown security/transport parameters are rejected rather than discarded. Insecure TLS flags produce a visible warning, not an unannounced change. URI text is not included in error messages. VPN secrets remain in the user's portable JSON and are hidden in the collapsed editor; none are part of the public example or release profile.

@@ -60,6 +60,25 @@ func validateProvider(p domain.ProviderConfig) error {
 	return nil
 }
 func validateApplication(c domain.Config) error {
+	w := c.ControlCenter.Workspace
+	if w.InspectorWidth != 0 && !within(w.InspectorWidth, 260, 600) {
+		return fmt.Errorf("inspector width out of range")
+	}
+	if len(c.ControlCenter.FavoriteModels) > 500 || len(c.ControlCenter.RecentModels) > 50 {
+		return fmt.Errorf("model shortcuts exceed limit")
+	}
+	for _, refs := range [][]string{c.ControlCenter.FavoriteModels, c.ControlCenter.RecentModels} {
+		seen := map[string]bool{}
+		for _, ref := range refs {
+			if len(ref) == 0 || len(ref) > 4096 || strings.ContainsRune(ref, 0) || seen[ref] {
+				return fmt.Errorf("invalid or duplicate model shortcut")
+			}
+			seen[ref] = true
+		}
+	}
+	if len(c.VPN.Name) > 120 || strings.ContainsRune(c.VPN.Name, 0) {
+		return fmt.Errorf("invalid VPN profile name")
+	}
 	for _, name := range []string{c.App.Name, c.Build.ProductName, c.Build.Company, c.Build.FileDescription} {
 		if len(name) > 1024 || strings.ContainsRune(name, 0) {
 			return fmt.Errorf("invalid application identity text")
@@ -134,6 +153,12 @@ func validateEdge(e domain.Edge) error {
 	return nil
 }
 func validatePoolLimits(p *domain.ModelPoolConfig) error {
+	if p.Order != "" && !enum(p.Order, domain.PoolPriority, domain.PoolRoundRobin, domain.PoolWeighted, domain.PoolFastest) {
+		return fmt.Errorf("unknown model ordering")
+	}
+	if p.Dispatch != "" && !enum(p.Dispatch, domain.DispatchSequential, domain.DispatchParallel, domain.DispatchStaggered) {
+		return fmt.Errorf("unknown dispatch mode")
+	}
 	if !enum(p.Policy, domain.PoolRoundRobin, domain.PoolPriority, domain.PoolParallel, domain.PoolStaggered, domain.PoolFastest, domain.PoolWeighted) {
 		return fmt.Errorf("unknown dispatch policy")
 	}

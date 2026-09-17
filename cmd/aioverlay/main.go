@@ -143,6 +143,9 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 			return
 		case <-ticker.C:
 			job := s.CurrentJob()
+			if job.Purpose == "connection_test" {
+				continue
+			}
 			if job.Cleared {
 				ov.Clear()
 				ov.Hide()

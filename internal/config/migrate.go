@@ -15,6 +15,22 @@ func Migrate(cfg *domain.Config) error {
 		switch cfg.Version {
 		case 1:
 			cfg.Version = 2
+		case 2:
+			// Split old policies without changing request order or concurrency.
+			var migratePool func(*domain.ModelPoolConfig)
+			migratePool = func(p *domain.ModelPoolConfig) {
+				if p == nil {
+					return
+				}
+				p.Order, p.Dispatch = p.EffectiveOrder(), p.EffectiveDispatch()
+				migratePool(p.VisionPreprocessor)
+			}
+			for i := range cfg.Pipelines {
+				for j := range cfg.Pipelines[i].Nodes {
+					migratePool(cfg.Pipelines[i].Nodes[j].ModelPool)
+				}
+			}
+			cfg.Version = 3
 		default:
 			return fmt.Errorf("unsupported old config schema %d", cfg.Version)
 		}

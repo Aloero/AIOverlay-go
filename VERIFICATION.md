@@ -1,10 +1,10 @@
-# Verification · AIOverlay-go 0.2.6
+# Verification · AIOverlay-go 0.2.7
 
 Host: Linux amd64. Target: Windows 10/11 x64. Date: 2026-09-17. This document separates executed automation from Windows desktop acceptance. The underlying 0.2.5 project and Git history have been preserved; changes address the audit baseline `261f569`.
 
 ## Executed checks
 
-The repaired working tree passed `go test ./... -count=1`: **155 test/subtest pass events, 0 failures**. Two sing-box integration tests are skipped in this ordinary environment-only run because they require an explicit host binary. They were also executed separately using the verified Linux sing-box 1.14.1 test runtime, **five consecutive runs**, including generated config check, preserved DNS dependencies, IPv4 endpoint policy, authenticated local proxy readiness/reuse and shutdown. No external tunnel server or provider account was contacted.
+The repaired working tree passed `go test ./... -count=1`: **172 test/subtest pass events, 0 failures**. Two sing-box integration tests are skipped in this ordinary environment-only run because they require an explicit host binary. They were also executed separately using the verified Linux sing-box 1.14.1 test runtime, **five consecutive runs**, including generated config check, preserved DNS dependencies, IPv4 endpoint policy, authenticated local proxy readiness/reuse and shutdown. No external tunnel server or provider account was contacted.
 
 `go vet ./...`, Windows-target vet and Windows x64 CGO-disabled cross-build passed. Race detection across the Go packages passed with the available Zig C compiler. The release command repeats critical engine/providers/app/control/desktop/platform/tunnel/hotkey tests 20 times and records the result rather than assuming the previous run applies. Per-command logs are in `releases/verification/` after release generation.
 
@@ -13,6 +13,8 @@ All shipped JavaScript and UI test scripts passed Node syntax checks. The browse
 - DOM/native-binding simulation: **23 assertions passed**.
 - Additional lifecycle audit regressions: **6 scenarios passed**, covering edits during Save+Close, pending provider draft protection, Save/Discard/Cancel choices, and catalog pools with null models.
 - Chromium rendering/interaction: **45 assertions passed**, including prior graph/provider/Alt/layout flows plus benchmark report rendering and hotkey-editor core commands.
+
+The added Studio UX suite passed **56 assertions** against Chromium and real Go handlers: applied/draft separation, independent order/dispatch, bounded draft undo/redo and restore, favorites, virtual simulation with no inference, explicit probe consent, URI import, compact VPN editing, inheritance, graph fallback visibility, resize/panel state, run summaries, journal preservation and 1024/820 viewport bounds. AI-provider and VPN network probe buttons are stubbed in this browser suite; confirmation wiring is tested, not real external connectivity.
 
 Browser viewports include 820×614, 1024×768 and 1320×880. These are Linux Chromium rendering checks with a simulated native binding, not real WebView2/Windows focus tests. Browser tests forbid inference. Mock providers and local HTTP fixtures are explicitly test-only.
 
@@ -47,3 +49,14 @@ Final per-archive SHA-256 values, checks run or explicitly skipped, source commi
 OpenCode's bridge is buffered; measured incremental TTFT/TPS remain unavailable. Its internal requests and retry policies are not a packet-level audit of our adapter admissions. Output token ceiling is forwarded to a supported runtime setting but was not measured against live cloud inference. OpenCode may write session data; cancellation/deletion is best effort with errors logged.
 
 VPN integration is an authenticated application-local userspace proxy with IPv4 endpoint resolution, no TUN or global proxy/route changes. It does not claim a Windows OS-enforced egress sandbox for arbitrary SDK behavior. A real Windows packet trace is still required for that acceptance question.
+
+
+## Studio UX 0.2.7 regressions
+
+Schema 2→3 recursively maps every legacy policy to independent order/dispatch fields. Tests cover combinations, explicit overrides and invalid enums. Read-only queue preview does not advance a live round-robin cursor. Virtual scheduling tests cover sequential fallback, staggered reserve/loser cancellation, real admission-budget accounting, key rotation, private copied cursor state and the exact 256-call safety bound. The simulator owns no provider registry and adds nothing to real run history.
+
+Confirmed connection tests are exercised with mock Go providers: exactly one adapter attempt, the selected saved synthetic credential, no image, a 32-token request cap, no active-pipeline replacement, and safe credential status after completion. Unconfirmed tests are rejected before job creation. Catalog shortcuts and limit-source responses are checked through real control handlers. UI/profile-label saves preserve warm engine/transports.
+
+VLESS, Hysteria2/hy2 and Trojan import fixtures are checked with the real Linux sing-box binary when explicitly enabled, including WebSocket and gRPC profiles. Unsupported/duplicate/conflicting link parameters are rejected without returning URI secrets. The separate HTTPS connection-test button is consent-tested with a browser fixture; no live VPN server, external HTTPS probe or cloud model request was sent during this verification.
+
+The source tree keeps the local user config excluded. Release version/build identity comes from the public schema-3 example; the private user's prior schema-2 config is not overwritten by this development operation. See STUDIO_UX.md for user-visible semantics and limitations.

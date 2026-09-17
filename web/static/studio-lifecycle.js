@@ -5,6 +5,7 @@ let dialogDraft = null, closePromise = null, choicePromise = null;
 function normalizeConfig(config) {
  const c=ensureRuntimeDefaults(config);
  c.providers||=[];c.pipelines||=[];c.control_center.layout||={};
+ c.control_center.workspace||={sidebar_collapsed:false,result_collapsed:false,inspector_width:300,show_fallbacks:false};c.control_center.favorite_models||=[];c.control_center.recent_models||=[];
  for(const p of c.providers){p.credential_pool||={};p.credential_pool.keys||=[];p.request_defaults||={};p.headers||={};p.credential_env||=[];}
  function pool(p){if(!p)return;p.models||=[];if(p.selection)p.selection.provider_ids||=[];pool(p.vision_preprocessor);}
  for(const p of c.pipelines){p.nodes||=[];p.edges||=[];for(const n of p.nodes)pool(n.model_pool);for(const e of p.edges)e.on||=[];}

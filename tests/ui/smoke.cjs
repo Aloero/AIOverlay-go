@@ -18,6 +18,7 @@ const dom=new JSDOM(html,{url:'https://desktop.invalid/',runScripts:'dangerously
   (async()=>{
    try{
     let data;
+    if(r.method==='POST'&&['/api/job','/api/benchmark','/api/providers/test','/api/vpn/probe'].includes(r.path))throw Error('TEST FORBIDS EXTERNAL REQUESTS');
     if(r.path==='/desktop/close')data={};
     else if(r.path==='/api/capture')data={image_base64:'dGVzdA==',bytes:4,duration_ms:12,method:'Fixture capture (not Windows)'};
     else {const res=await fetch(base+r.path,{method:r.method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.TEST_TOKEN},body:r.body===null||r.body===undefined?undefined:JSON.stringify(r.body)});if(!res.ok)throw Error(await res.text());data=await res.json()}
@@ -35,12 +36,12 @@ function ok(c,m){assert.ok(c,m);checks++}
 (async()=>{
  try{
   await wait(()=>$('#solverModels'),'pipeline did not load');
-  ok($('#hostMode').textContent==='Встроенное окно','embedded mode');
+  ok($('#appliedSummary').textContent.includes('Следующий снимок:'),'applied pipeline state is visible');
   ok(!errors.length,'boot has JS errors: '+errors.join(';'));
   const count=$('#solverModels').children.length;
   click('#solverModels [data-move="0,1"]');ok($('#solverModels').children.length===count,'reorder keeps models');
-  click('[data-page="providers"]');await wait(()=>$('#providerDirectory [data-provider]'),'provider directory');
-  const edit=w.document.querySelector('[data-edit-provider]')||w.document.querySelector('[data-provider]');
+  click('[data-page="providers"]');await wait(()=>$('#savedConnections [data-edit-connection]'),'saved provider directory');
+  const edit=w.document.querySelector('[data-edit-connection]');
   assert.ok(edit,'provider edit button');edit.click();
   await wait(()=>$('#bulkKeys'),'credential dialog');
   $('#bulkKeys').value='TEST-KEY-ONE\nTEST-KEY-TWO\\nTEST-KEY-ONE';click('#addKeys');

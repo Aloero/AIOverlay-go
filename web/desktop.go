@@ -15,14 +15,14 @@ func DesktopHTML() (string, error) {
 		return "", err
 	}
 	text := strings.Replace(string(html), `<link rel="stylesheet" href="/assets/style.css">`, "<style>"+string(css)+"</style>", 1)
-	for _, name := range []string{"studio.css"} {
+	for _, name := range []string{"studio.css", "workspace.css"} {
 		data, err := FS.ReadFile("static/" + name)
 		if err != nil {
 			return "", err
 		}
 		text = strings.Replace(text, `<link rel="stylesheet" href="/assets/`+name+`">`, "<style>"+string(data)+"</style>", 1)
 	}
-	for _, name := range []string{"app.js", "studio-lifecycle.js", "application-settings.js", "benchmark-view.js", "connections.js", "pool-editor.js", "studio-interactions.js", "pipeline-view.js"} {
+	for _, name := range []string{"app.js", "studio-lifecycle.js", "studio-workspace.js", "application-settings.js", "vpn-view.js", "benchmark-view.js", "run-insights.js", "simulation-view.js", "connections.js", "connection-hub.js", "catalog-view.js", "schedule-view.js", "pool-plan.js", "pool-editor.js", "model-settings.js", "studio-interactions.js", "pipeline-view.js"} {
 		data, err := FS.ReadFile("static/" + name)
 		if err != nil {
 			return "", err

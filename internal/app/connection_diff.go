@@ -32,3 +32,12 @@ func sameConnections(a, b []domain.ProviderConfig) bool {
 	}
 	return reflect.DeepEqual(normalize(a), normalize(b))
 }
+
+func sameTunnel(a, b domain.VPNConfig) bool {
+	// A profile label belongs to Studio, not to the networking process identity.
+	a.Name = ""
+	b.Name = ""
+	a.Extra = nil
+	b.Extra = nil
+	return reflect.DeepEqual(a, b)
+}
