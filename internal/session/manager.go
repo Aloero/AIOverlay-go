@@ -287,13 +287,14 @@ func (m *Manager) reconcile() {
 		}
 	}
 	var stopped []*sourceRuntime
-	for id, r := range m.sources {
-		next, ok := wanted[id]
-		if !ok || !sameSource(r.cfg, next) {
-			r.cancel()
-			delete(m.sources, id)
-			stopped = append(stopped, r)
+	for id, runtime := range m.sources {
+		next, wantedNow := wanted[id]
+		if wantedNow && sameSource(runtime.cfg, next) && !sourceFinished(runtime) {
+			continue
 		}
+		runtime.cancel()
+		delete(m.sources, id)
+		stopped = append(stopped, runtime)
 	}
 	m.mu.Unlock()
 	for _, r := range stopped {
@@ -329,6 +330,15 @@ func (m *Manager) reconcile() {
 	m.mu.Unlock()
 }
 func sameSource(a, b domain.EventSource) bool { return reflect.DeepEqual(a, b) }
+
+func sourceFinished(runtime *sourceRuntime) bool {
+	select {
+	case <-runtime.done:
+		return true
+	default:
+		return false
+	}
+}
 func (m *Manager) stopAll() {
 	m.mu.Lock()
 	list := make([]*sourceRuntime, 0, len(m.sources))

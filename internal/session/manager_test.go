@@ -245,3 +245,43 @@ func TestAudioCaptureFailureFlushesTailAndRecordsGap(t *testing.T) {
 		t.Fatalf("expected incomplete transcript followed by gap, got %+v", snapshot.Entries)
 	}
 }
+
+func TestStoppedAudioSourceCanBeStartedAgain(t *testing.T) {
+	cfg := managerConfig()
+	var attempts atomic.Int32
+	m := NewManager(nil)
+	m.SetAudioCapture(func(context.Context, domain.AudioSourceConfig, func(paudio.Block)) error {
+		attempts.Add(1)
+		return fmt.Errorf("device invalidated")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.Start(ctx, cfg)
+	defer func() {
+		cancel()
+		m.Close()
+	}()
+
+	waitUntil(t, func() bool { return attempts.Load() == 1 }, "initial capture did not start")
+	waitUntil(t, func() bool {
+		runtime := m.source("a")
+		return runtime != nil && sourceFinished(runtime)
+	}, "failed source runtime did not finish")
+
+	if err := m.SetSourceRunning("a", true); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return attempts.Load() == 2 }, "explicit restart did not create a new capture runtime")
+}
+
+func waitUntil(t *testing.T, condition func() bool, failure string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal(failure)
+}
