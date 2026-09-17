@@ -319,3 +319,54 @@ func TestSourceOutcomeKeepsSemanticSilenceSeparateFromError(t *testing.T) {
 		t.Fatalf("error status=%+v", runtime.status)
 	}
 }
+
+func TestCoalescedAudioTurnRecordsContextGap(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	contextCfg := cfg.Pipelines[0].Contexts[0]
+	generation := manager.contexts.Generation("p", contextCfg.ID)
+	runtime := &sourceRuntime{cfg: cfg.Pipelines[0].Sources[0]}
+	turn := backgroundTurn{
+		pipelineID: "p",
+		ctxCfg:     contextCfg,
+		generation: generation,
+		input:      engine.Input{EventID: "audio-event", Audio: &domain.AudioClip{PCM16: []int16{1}, SampleRate: 16000, Channels: 1}},
+		at:         time.Now(),
+	}
+
+	manager.addPending(pendingSegment{pipelineID: "p", contextID: contextCfg.ID, eventID: "audio-event", generation: generation})
+	manager.recordCoalescedTurn(runtime, turn)
+
+	snapshot := manager.contexts.Snapshot(contextCfg, "p", time.Now().Add(time.Second))
+	if len(snapshot.Entries) != 1 || !snapshot.Entries[0].Gap {
+		t.Fatalf("audio loss must be visible as a context gap: %+v", snapshot.Entries)
+	}
+	if _, exists := manager.pending["audio-event"]; exists {
+		t.Fatal("coalesced audio event remained pending")
+	}
+}
+
+func TestCoalescedScreenTurnDoesNotInventTranscriptGap(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	contextCfg := cfg.Pipelines[0].Contexts[0]
+	generation := manager.contexts.Generation("p", contextCfg.ID)
+	runtime := &sourceRuntime{cfg: domain.EventSource{ID: "screen", Kind: domain.SourceScreenTimer}}
+	turn := backgroundTurn{
+		pipelineID: "p",
+		ctxCfg:     contextCfg,
+		generation: generation,
+		input:      engine.Input{EventID: "screen-event", ImageJPEG: []byte("frame")},
+		at:         time.Now(),
+	}
+
+	manager.recordCoalescedTurn(runtime, turn)
+
+	snapshot := manager.contexts.Snapshot(contextCfg, "p", time.Now().Add(time.Second))
+	if len(snapshot.Entries) != 0 || snapshot.Text != "" {
+		t.Fatalf("screen coalescing invented conversation loss: %+v", snapshot.Entries)
+	}
+	if runtime.status.Dropped != 1 {
+		t.Fatalf("screen coalescing was not counted: %+v", runtime.status)
+	}
+}

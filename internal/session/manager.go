@@ -688,21 +688,25 @@ func (m *Manager) enqueueBackgroundTurn(r *sourceRuntime, turn backgroundTurn) {
 		case old = <-r.turns:
 		default:
 		}
-		if old.input.EventID != "" {
-			if old.ctxCfg.ID != "" {
-				m.contexts.Append(old.ctxCfg, old.pipelineID, old.generation, ContextEntry{Kind: "gap", Gap: true, At: old.at, SourceID: r.cfg.ID})
-			}
-			m.finishPending(old.input.EventID)
-		}
-		r.mu.Lock()
-		r.status.Dropped++
-		r.status.LastError = "automatic event coalesced to the newest context"
-		r.mu.Unlock()
+		m.recordCoalescedTurn(r, old)
 		select {
 		case r.turns <- turn:
 		default:
 		}
 	}
+}
+
+func (m *Manager) recordCoalescedTurn(runtime *sourceRuntime, turn backgroundTurn) {
+	if turn.input.EventID != "" {
+		if turn.input.Audio != nil && turn.ctxCfg.ID != "" {
+			m.contexts.Append(turn.ctxCfg, turn.pipelineID, turn.generation, ContextEntry{Kind: "gap", Gap: true, At: turn.at, SourceID: runtime.cfg.ID})
+		}
+		m.finishPending(turn.input.EventID)
+	}
+	runtime.mu.Lock()
+	runtime.status.Dropped++
+	runtime.status.LastError = "automatic event coalesced to the newest context"
+	runtime.mu.Unlock()
 }
 
 func (m *Manager) runTurnQueue(ctx context.Context, pipelineID string, r *sourceRuntime) {
