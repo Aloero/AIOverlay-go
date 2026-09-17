@@ -64,10 +64,14 @@ func (s *Server) StartCommand(action string) (string, error) {
 	})
 }
 func commandPurpose(action string) string {
-	if action == "screen_context" {
+	switch action {
+	case "screen_context":
 		return "context_command"
+	case "screen_decide":
+		return "decision_command"
+	default:
+		return "command"
 	}
-	return "command"
 }
 
 func emptyCommandTrace(pipeline, source, purpose string) (tr domain.ExecutionTrace) {

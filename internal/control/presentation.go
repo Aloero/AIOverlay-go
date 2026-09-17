@@ -1,6 +1,7 @@
 package control
 
 import (
+	"aioverlay/internal/domain"
 	"aioverlay/internal/session"
 	"time"
 )
@@ -41,9 +42,17 @@ func isManualPresentationJob(job Job) bool {
 	if job.ID == "" {
 		return false
 	}
-	return job.Purpose == "pipeline" || job.Purpose == "command"
+	return job.Purpose == "pipeline" || job.Purpose == "command" || job.Purpose == "decision_command"
 }
 
 func PresentsInOverlay(job Job) bool {
 	return isManualPresentationJob(job)
+}
+
+func IsDecisionPresentationJob(job Job) bool {
+	return job.ID != "" && job.Purpose == "decision_command"
+}
+
+func RestoresPreviousPresentation(job Job) bool {
+	return IsDecisionPresentationJob(job) && !job.Running && job.Error == "" && job.Trace.Outcome == domain.OutcomeNoAction
 }

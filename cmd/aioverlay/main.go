@@ -157,6 +157,7 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	var lastID, lastText, lastMeta string
+	var decisionJobID, decisionPriorText, decisionPriorMeta string
 	var presentation control.PresentationArbiter
 	for {
 		select {
@@ -176,6 +177,13 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 				}
 			} else if manual {
 				if job.ID != lastID {
+					if control.IsDecisionPresentationJob(job) {
+						decisionJobID = job.ID
+						decisionPriorText = lastText
+						decisionPriorMeta = lastMeta
+					} else {
+						decisionJobID = ""
+					}
 					lastID = job.ID
 					lastText = "Анализирую экран…"
 					lastMeta = "TRYING"
@@ -203,6 +211,12 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 				if !job.Running && job.Trace.Winner != nil {
 					meta = job.Trace.Winner.ProviderID + " · " + job.Trace.Winner.ModelID
 				}
+				restorePrevious := decisionJobID == job.ID && control.RestoresPreviousPresentation(job)
+				if restorePrevious {
+					text = decisionPriorText
+					meta = decisionPriorMeta
+				}
+				hadTemporaryPresentation := lastText != "" || lastMeta != ""
 				if text != lastText {
 					ov.SetText(text)
 					lastText = text
@@ -210,6 +224,9 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 				if meta != lastMeta {
 					ov.SetMeta(meta)
 					lastMeta = meta
+				}
+				if restorePrevious && decisionPriorText == "" && decisionPriorMeta == "" && hadTemporaryPresentation {
+					ov.Hide()
 				}
 			}
 

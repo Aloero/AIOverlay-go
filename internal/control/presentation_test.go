@@ -1,6 +1,7 @@
 package control
 
 import (
+	"aioverlay/internal/domain"
 	"aioverlay/internal/session"
 	"testing"
 	"time"
@@ -77,5 +78,37 @@ func TestOverlayPresentationPurposesAreExplicit(t *testing.T) {
 		if PresentsInOverlay(Job{ID: "job", Purpose: purpose}) {
 			t.Fatalf("%s unexpectedly owns overlay presentation", purpose)
 		}
+	}
+}
+
+func TestDecisionCommandNoActionRestoresPreviousPresentation(t *testing.T) {
+	job := Job{
+		ID: "decide", Purpose: "decision_command", Running: false,
+		Trace: domain.ExecutionTrace{Outcome: domain.OutcomeNoAction},
+	}
+	if !PresentsInOverlay(job) || !IsDecisionPresentationJob(job) || !RestoresPreviousPresentation(job) {
+		t.Fatalf("decision no_action presentation contract not recognized: %+v", job)
+	}
+
+	job.Trace.Outcome = domain.OutcomeRespond
+	if RestoresPreviousPresentation(job) {
+		t.Fatal("responding decision command restored stale presentation")
+	}
+	job.Trace.Outcome = domain.OutcomeNoAction
+	job.Error = "provider failure"
+	if RestoresPreviousPresentation(job) {
+		t.Fatal("failed decision command hid its error as no_action")
+	}
+}
+
+func TestScreenDecisionUsesDecisionPresentationPurpose(t *testing.T) {
+	if got := commandPurpose("screen_decide"); got != "decision_command" {
+		t.Fatalf("screen_decide purpose=%q", got)
+	}
+	if got := commandPurpose("screen_context"); got != "context_command" {
+		t.Fatalf("screen_context purpose=%q", got)
+	}
+	if got := commandPurpose("analyze"); got != "command" {
+		t.Fatalf("analyze purpose=%q", got)
 	}
 }
