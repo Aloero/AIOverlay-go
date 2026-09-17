@@ -165,3 +165,72 @@ func (helper *syntheticHelper) writeResponse(response localSTTWireResponse) {
 	_, _ = helper.writer.Write(raw)
 	helper.writeMu.Unlock()
 }
+
+func TestLocalSTTExperimentConcurrentSoakLeavesNoPendingRequests(t *testing.T) {
+	runtime := startSyntheticLocalSTT(t)
+
+	const workers = 8
+	const requestsPerWorker = 25
+	var group sync.WaitGroup
+	errCh := make(chan error, workers)
+
+	for worker := 0; worker < workers; worker++ {
+		group.Add(1)
+		go func(worker int) {
+			defer group.Done()
+			for request := 0; request < requestsPerWorker; request++ {
+				clip := domain.AudioClip{PCM16: make([]int16, 160), SampleRate: 16000, Channels: 1}
+				if (worker+request)%7 == 0 {
+					clip.PCM16[0] = 9999
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+					_, err := runtime.Transcribe(ctx, clip)
+					cancel()
+					if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+						errCh <- fmt.Errorf("worker %d request %d cancel: %w", worker, request, err)
+						return
+					}
+					continue
+				}
+
+				text, err := runtime.Transcribe(context.Background(), clip)
+				if err != nil || text != "samples=160" {
+					errCh <- fmt.Errorf("worker %d request %d: text=%q err=%v", worker, request, text, err)
+					return
+				}
+			}
+		}(worker)
+	}
+
+	group.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			runtime.Close()
+			t.Fatal(err)
+		}
+	}
+
+	runtime.mu.Lock()
+	pending := len(runtime.pending)
+	runtime.mu.Unlock()
+	if pending != 0 {
+		runtime.Close()
+		t.Fatalf("pending request leak after soak: %d", pending)
+	}
+	if !runtime.Alive() {
+		runtime.Close()
+		t.Fatal("shared local STT helper died during soak")
+	}
+
+	clip := domain.AudioClip{PCM16: make([]int16, 160), SampleRate: 16000, Channels: 1}
+	text, err := runtime.Transcribe(context.Background(), clip)
+	if err != nil || text != "samples=160" {
+		runtime.Close()
+		t.Fatalf("helper was not reusable after soak: text=%q err=%v", text, err)
+	}
+
+	runtime.Close()
+	if runtime.Alive() {
+		t.Fatal("local STT helper remained alive after Close")
+	}
+}
