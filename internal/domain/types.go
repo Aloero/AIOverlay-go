@@ -1,0 +1,330 @@
+package domain
+
+import (
+	"encoding/json"
+	"time"
+)
+
+const ConfigVersion = 1
+
+type ProviderKind string
+
+const (
+	ProviderOpenAICompatible ProviderKind = "openai_compatible"
+	ProviderGemini           ProviderKind = "gemini"
+	ProviderEmbeddedOpenCode ProviderKind = "embedded_opencode"
+)
+
+type CredentialPolicy string
+
+const (
+	CredentialRoundRobin CredentialPolicy = "round_robin"
+	CredentialSticky     CredentialPolicy = "sticky_last_good"
+	CredentialSequential CredentialPolicy = "sequential"
+	CredentialRandom     CredentialPolicy = "random_healthy"
+)
+
+type PoolPolicy string
+
+const (
+	PoolRoundRobin PoolPolicy = "round_robin"
+	PoolPriority   PoolPolicy = "priority"
+	PoolStaggered  PoolPolicy = "staggered_race"
+	PoolParallel   PoolPolicy = "parallel_race"
+	PoolFastest    PoolPolicy = "fastest_healthy"
+	PoolWeighted   PoolPolicy = "weighted"
+)
+
+type NodeType string
+
+const (
+	NodeScreen    NodeType = "screen"
+	NodeModelPool NodeType = "model_pool"
+	NodeValidator NodeType = "validator"
+	NodeOutput    NodeType = "output"
+)
+
+type Outcome string
+
+const (
+	OutcomeSuccess             Outcome = "success"
+	OutcomeAnyError            Outcome = "any_error"
+	OutcomeAuthFailed          Outcome = "auth_failed"
+	OutcomeRateLimited         Outcome = "rate_limited"
+	OutcomeQuotaExceeded       Outcome = "quota_exceeded"
+	OutcomeTimeout             Outcome = "timeout"
+	OutcomeStreamIdleTimeout   Outcome = "stream_idle_timeout"
+	OutcomeFirstTokenTimeout   Outcome = "first_token_timeout"
+	OutcomeNetworkError        Outcome = "network_error"
+	OutcomeModelUnavailable    Outcome = "model_unavailable"
+	OutcomeRegionRestricted    Outcome = "region_restricted"
+	OutcomeUnsupportedModality Outcome = "unsupported_modality"
+	OutcomeProviderUnavailable Outcome = "provider_unavailable"
+	OutcomeInvalidResponse     Outcome = "invalid_response"
+	OutcomeValidationFailed    Outcome = "validation_failed"
+	OutcomeCancelled           Outcome = "cancelled"
+)
+
+type Config struct {
+	Version          int              `json:"version"`
+	App              AppConfig        `json:"app"`
+	Providers        []ProviderConfig `json:"providers"`
+	Pipelines        []Pipeline       `json:"pipelines"`
+	ActivePipelineID string           `json:"active_pipeline_id"`
+	Overlay          OverlayConfig    `json:"overlay"`
+	ControlCenter    ControlConfig    `json:"control_center"`
+	VPN              VPNConfig        `json:"vpn,omitempty"`
+	Build            BuildProfile     `json:"build"`
+}
+
+type AppConfig struct {
+	Name                string `json:"name"`
+	SecretStorage       string `json:"secret_storage"`
+	PersistRuntimeStats bool   `json:"persist_runtime_stats"`
+	CatalogRefreshHours int    `json:"catalog_refresh_hours"`
+}
+
+type ProviderConfig struct {
+	CatalogProviderID  string            `json:"catalog_provider_id,omitempty"`
+	ID                 string            `json:"id"`
+	Label              string            `json:"label"`
+	Kind               ProviderKind      `json:"kind"`
+	Enabled            bool              `json:"enabled"`
+	BaseURL            string            `json:"base_url,omitempty"`
+	ModelsURL          string            `json:"models_url,omitempty"`
+	OpenCodeProviderID string            `json:"opencode_provider_id,omitempty"`
+	CredentialEnv      []string          `json:"credential_env,omitempty"`
+	Headers            map[string]string `json:"headers,omitempty"`
+	CredentialPool     CredentialPool    `json:"credential_pool"`
+	RequestDefaults    RequestDefaults   `json:"request_defaults"`
+}
+
+type RequestDefaults struct {
+	ConnectTimeoutMS    int `json:"connect_timeout_ms"`
+	FirstTokenTimeoutMS int `json:"first_token_timeout_ms"`
+	ResponseTimeoutMS   int `json:"response_timeout_ms"`
+	StreamIdleTimeoutMS int `json:"stream_idle_timeout_ms"`
+	MaxOutputTokens     int `json:"max_output_tokens"`
+}
+
+type CredentialPool struct {
+	Policy             CredentialPolicy `json:"policy"`
+	Keys               []Credential     `json:"keys"`
+	MaxKeysPerRequest  int              `json:"max_keys_per_request"`
+	RateLimitCooldownS int              `json:"rate_limit_cooldown_s"`
+}
+
+type Credential struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Secret   string `json:"secret"`
+	Enabled  bool   `json:"enabled"`
+	Priority int    `json:"priority"`
+}
+
+type Pipeline struct {
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	Enabled      bool            `json:"enabled"`
+	EntryNodeID  string          `json:"entry_node_id"`
+	OutputNodeID string          `json:"output_node_id"`
+	Budget       ExecutionBudget `json:"budget"`
+	Nodes        []Node          `json:"nodes"`
+	Edges        []Edge          `json:"edges"`
+}
+
+type ExecutionBudget struct {
+	MaxWallTimeMS       int `json:"max_wall_time_ms"`
+	MaxModelCalls       int `json:"max_model_calls"`
+	MaxParallelCalls    int `json:"max_parallel_calls"`
+	MaxProviders        int `json:"max_providers"`
+	MaxKeysPerProvider  int `json:"max_keys_per_provider"`
+	ConnectTimeoutMS    int `json:"connect_timeout_ms"`
+	FirstTokenTimeoutMS int `json:"first_token_timeout_ms"`
+	ResponseTimeoutMS   int `json:"response_timeout_ms"`
+	StreamIdleTimeoutMS int `json:"stream_idle_timeout_ms"`
+}
+
+type Position struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type Node struct {
+	ID        string           `json:"id"`
+	Type      NodeType         `json:"type"`
+	Name      string           `json:"name"`
+	Position  Position         `json:"position"`
+	ModelPool *ModelPoolConfig `json:"model_pool,omitempty"`
+	Validator *ValidatorConfig `json:"validator,omitempty"`
+}
+
+// CatalogSelection is an explicit model source, independent of dispatch policy.
+type CatalogSelection struct {
+	Mode                string   `json:"mode"`
+	ProviderIDs         []string `json:"provider_ids,omitempty"`
+	FreeOnly            bool     `json:"free_only"`
+	Modality            string   `json:"modality"`
+	DefaultQualityScore float64  `json:"default_quality_score"`
+}
+
+type ModelPoolConfig struct {
+	Selection          *CatalogSelection `json:"selection,omitempty"`
+	Policy             PoolPolicy        `json:"policy"`
+	Models             []ModelSlot       `json:"models"`
+	VisionPreprocessor *ModelPoolConfig  `json:"vision_preprocessor,omitempty"`
+	Prompt             PromptConfig      `json:"prompt"`
+	QualityFloor       float64           `json:"quality_floor"`
+	MaxParallel        int               `json:"max_parallel"`
+	MaxCalls           int               `json:"max_calls"`
+	HedgeDelayMS       int               `json:"hedge_delay_ms"`
+	RoundRobinCursor   int               `json:"round_robin_cursor"`
+}
+
+type ModelSlot struct {
+	ID                  string  `json:"id"`
+	ProviderID          string  `json:"provider_id"`
+	ModelID             string  `json:"model_id"`
+	Enabled             bool    `json:"enabled"`
+	Priority            int     `json:"priority"`
+	Weight              float64 `json:"weight"`
+	QualityScore        float64 `json:"quality_score"`
+	TimeoutMS           int     `json:"timeout_ms"`
+	FirstTokenTimeoutMS int     `json:"first_token_timeout_ms"`
+	MaxAttempts         int     `json:"max_attempts"`
+}
+
+type PromptConfig struct {
+	System   string `json:"system"`
+	User     string `json:"user"`
+	Template string `json:"template,omitempty"`
+}
+
+type ValidatorConfig struct {
+	Kind      string `json:"kind"`
+	Pattern   string `json:"pattern,omitempty"`
+	MinLength int    `json:"min_length,omitempty"`
+	MaxLength int    `json:"max_length,omitempty"`
+}
+
+type Edge struct {
+	ID        string    `json:"id"`
+	From      string    `json:"from"`
+	To        string    `json:"to"`
+	On        []Outcome `json:"on"`
+	Priority  int       `json:"priority"`
+	DelayMS   int       `json:"delay_ms,omitempty"`
+	MaxVisits int       `json:"max_visits"`
+}
+
+type OverlayConfig struct {
+	Opacity      float64           `json:"opacity"`
+	Width        int               `json:"width"`
+	Height       int               `json:"height"`
+	FontSize     int               `json:"font_size"`
+	Stealth      bool              `json:"stealth"`
+	ClickThrough bool              `json:"click_through"`
+	StationaryMS int               `json:"stationary_cursor_ms"`
+	Hotkeys      map[string]string `json:"hotkeys"`
+}
+
+type CanvasLayout struct {
+	PanX float64 `json:"pan_x"`
+	PanY float64 `json:"pan_y"`
+	Zoom float64 `json:"zoom"`
+}
+
+type ControlConfig struct {
+	Layout        map[string]CanvasLayout `json:"layout,omitempty"`
+	ListenAddress string                  `json:"listen_address"`
+	AutoOpen      bool                    `json:"auto_open"`
+	Theme         string                  `json:"theme"`
+}
+
+type VPNConfig struct {
+	Enabled bool            `json:"enabled"`
+	Engine  string          `json:"engine,omitempty"`
+	Config  json.RawMessage `json:"config,omitempty"`
+}
+
+type BuildProfile struct {
+	ExecutableName  string `json:"executable_name"`
+	ProductName     string `json:"product_name"`
+	FileDescription string `json:"file_description"`
+	Company         string `json:"company"`
+	Version         string `json:"version"`
+	IconPath        string `json:"icon_path"`
+}
+
+type ProviderMeta struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	CredentialEnv []string `json:"credential_env"`
+	Models        int      `json:"models"`
+}
+
+type ModelMeta struct {
+	Family           string   `json:"family,omitempty"`
+	ProviderID       string   `json:"provider_id"`
+	ProviderName     string   `json:"provider_name"`
+	CredentialEnv    []string `json:"credential_env,omitempty"`
+	ModelID          string   `json:"model_id"`
+	ModelName        string   `json:"model_name"`
+	Description      string   `json:"description,omitempty"`
+	InputModalities  []string `json:"input_modalities"`
+	OutputModalities []string `json:"output_modalities"`
+	Reasoning        bool     `json:"reasoning"`
+	Streaming        bool     `json:"streaming"`
+	Free             bool     `json:"free"`
+	Context          int      `json:"context"`
+	OutputLimit      int      `json:"output_limit"`
+	InputCost        float64  `json:"input_cost"`
+	OutputCost       float64  `json:"output_cost"`
+	Ready            bool     `json:"ready"`
+	Status           string   `json:"status"`
+}
+
+func (m ModelMeta) HasImageInput() bool {
+	for _, v := range m.InputModalities {
+		if v == "image" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m ModelMeta) TextOnly() bool { return !m.HasImageInput() }
+
+type ExecutionTrace struct {
+	ID         string       `json:"id"`
+	PipelineID string       `json:"pipeline_id"`
+	StartedAt  time.Time    `json:"started_at"`
+	FinishedAt time.Time    `json:"finished_at,omitempty"`
+	Winner     *AttemptRef  `json:"winner,omitempty"`
+	Events     []TraceEvent `json:"events"`
+}
+
+type AttemptRef struct {
+	ID              string `json:"id,omitempty"`
+	ProviderID      string `json:"provider_id"`
+	ModelID         string `json:"model_id"`
+	CredentialID    string `json:"credential_id,omitempty"`
+	CredentialAlias string `json:"credential_alias,omitempty"`
+	Transport       string `json:"transport,omitempty"`
+}
+
+type TraceEvent struct {
+	AtMS         int64       `json:"at_ms"`
+	Kind         string      `json:"kind"`
+	NodeID       string      `json:"node_id,omitempty"`
+	Attempt      *AttemptRef `json:"attempt,omitempty"`
+	Outcome      Outcome     `json:"outcome,omitempty"`
+	Message      string      `json:"message,omitempty"`
+	TTFTMS       int64       `json:"ttft_ms,omitempty"`
+	DurationMS   int64       `json:"duration_ms,omitempty"`
+	InputTokens  int         `json:"input_tokens,omitempty"`
+	OutputTokens int         `json:"output_tokens,omitempty"`
+	TPS          float64     `json:"tps,omitempty"`
+	HTTPStatus   int         `json:"http_status,omitempty"`
+}

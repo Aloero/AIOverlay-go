@@ -1,0 +1,13 @@
+{
+  "name": "aioverlay-studio-tests",
+  "private": true,
+  "scripts": {
+    "test": "node smoke.cjs",
+    "test:all": "node run.cjs",
+    "test:dom": "node run.cjs --dom-only"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0",
+    "playwright": "1.63.0"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "version": "0.2.5",
+  "file_version": "0.2.5.0",
+  "target": "windows/amd64",
+  "go": "1.27.1",
+  "studio": "lazy embedded Win32/WebView2; unloaded when closed; no external browser",
+  "capture": "CreateDIBSection + BitBlt + GdiFlush; RAM JPEG",
+  "ai_vpn": {
+    "enabled_by_default": false,
+    "engine": "sing-box",
+    "engine_version": "1.14.1",
+    "scope": "AI provider requests only; authenticated 127.0.0.1 mixed proxy; no TUN/system proxy",
+    "windows_release_archive_sha256": "5197f16d492d93202dc623622149a6ed040f8eca263128f91d603f2b901baa89",
+    "sing_box_exe_sha256": "b838de45bd0b2e6ddbed1977e4745622f7dffab3b293807ff4c6b1b640fed909",
+    "libcronet_sha256": "3217c6260fbca5f16072e0b79735742f40109a63bb0ff88fd6b96dd6b54a2928"
+  },
+  "build_profile": "config.json build section -> generated PE resources + compiled internal/buildinfo before build",
+  "windows_exe_sha256": "663ebe9994bd8755dceb1b035cab40ac87c2f444732729f937bd8c61773393a4",
+  "pe_resources": {
+    "ProductName": "AIOverlay",
+    "FileDescription": "AI Overlay Assistant",
+    "CompanyName": "Local",
+    "OriginalFilename": "AIOverlay.exe",
+    "FileVersion": "0.2.5.0"
+  },
+  "pe_icon_present": true,
+  "physical_windows_tested": false,
+  "live_model_requests_in_verification": 0
+}

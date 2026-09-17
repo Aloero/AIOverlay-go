@@ -1,0 +1,5 @@
+sing-box 1.14.1
+Official release: https://github.com/SagerNet/sing-box/releases/tag/v1.14.1
+Windows amd64 archive: sing-box-1.14.1-windows-amd64.zip
+Archive SHA-256: 5197f16d492d93202dc623622149a6ed040f8eca263128f91d603f2b901baa89
+Bundled files are unmodified from the official release archive.

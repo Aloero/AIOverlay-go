@@ -1,0 +1,31 @@
+# Build outputs and generated resources
+/.build-tools/
+/build/
+/dist/
+/releases/
+/cmd/aioverlay/rsrc_windows_*.syso
+
+# Frontend test dependencies
+/tests/ui/node_modules/
+
+# Crash dumps / temporary files
+/core
+/core.*
+*.tmp
+*.temp
+*.log
+*.test
+
+# Editor / OS noise
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local override files
+*.local.json
+*.local.yaml
+*.local.yml
+.env
+.env.*

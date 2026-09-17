@@ -1,0 +1,103 @@
+{
+  "version": "1.18.31",
+  "models": [
+    {
+      "ref": "opencode/big-pickle",
+      "name": "Big Pickle",
+      "vision": false,
+      "reasoning": true,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "ref": "opencode/ling-3.0-flash-fin-free",
+      "name": "Ling 3.0 Flash Fin Free",
+      "vision": false,
+      "reasoning": true,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "ref": "opencode/mimo-v2.5-free",
+      "name": "MiMo V2.5 Free",
+      "vision": true,
+      "reasoning": true,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "ref": "opencode/muse-spark-1.2-contributor-free",
+      "name": "Muse Spark 1.2 Free",
+      "vision": true,
+      "reasoning": true,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "ref": "opencode/muse-spark-1.3-contributor-free",
+      "name": "Muse Spark 1.3 Free",
+      "vision": true,
+      "reasoning": true,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "ref": "opencode/nemotron-3-ultra-free",
+      "name": "Nemotron 3 Ultra Free",
+      "vision": false,
+      "reasoning": true,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "ref": "opencode/nemotron-3.5-lightning-free",
+      "name": "Nemotron 3.5 Lightning Free",
+      "vision": false,
+      "reasoning": true,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    }
+  ]
+}
