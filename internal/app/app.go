@@ -305,7 +305,9 @@ func (a *App) Run(ctx context.Context, pipelineID string, input engine.Input, op
 	a.mu.RUnlock()
 	if opt.BeforeCall == nil && a.sessions != nil {
 		high := opt.Purpose != "background"
-		opt.BeforeCall = func(callCtx context.Context) (func(), error) { return a.sessions.Governor().Acquire(callCtx, high) }
+		opt.BeforeCall = func(callCtx context.Context) (engine.CallLease, error) {
+			return a.sessions.Governor().Acquire(callCtx, high)
+		}
 	}
 	result, err := eng.Execute(ctx, pipelineID, input, opt)
 	a.recordRecentUsage(result.Trace)

@@ -15,8 +15,16 @@ type Governor struct {
 	maxParallel int
 	callsPerMin int
 	calls       []time.Time
+	reserved    int
 	waitingHigh int
 	changed     chan struct{}
+}
+
+type GovernorLease struct {
+	governor  *Governor
+	mu        sync.Mutex
+	committed bool
+	released  bool
 }
 
 func NewGovernor() *Governor {
@@ -53,7 +61,7 @@ func (g *Governor) pruneLocked(now time.Time) {
 		g.calls = append([]time.Time(nil), g.calls[i:]...)
 	}
 }
-func (g *Governor) Acquire(ctx context.Context, high bool) (func(), error) {
+func (g *Governor) Acquire(ctx context.Context, high bool) (*GovernorLease, error) {
 	registered := false
 	defer func() {
 		if registered {
@@ -74,27 +82,17 @@ func (g *Governor) Acquire(ctx context.Context, high bool) (func(), error) {
 		}
 		canParallel := g.active < g.maxParallel
 		canPriority := high || g.waitingHigh == 0
-		canRate := len(g.calls) < g.callsPerMin
+		canRate := len(g.calls)+g.reserved < g.callsPerMin
 		if canParallel && canPriority && canRate {
 			g.active++
-			g.calls = append(g.calls, now)
+			g.reserved++
 			if registered {
 				g.waitingHigh--
 				registered = false
 			}
 			g.notifyLocked()
 			g.mu.Unlock()
-			var once sync.Once
-			return func() {
-				once.Do(func() {
-					g.mu.Lock()
-					if g.active > 0 {
-						g.active--
-					}
-					g.notifyLocked()
-					g.mu.Unlock()
-				})
-			}, nil
+			return &GovernorLease{governor: g}, nil
 		}
 		changed := g.changed
 		var wait time.Duration
@@ -124,9 +122,46 @@ func (g *Governor) Acquire(ctx context.Context, high bool) (func(), error) {
 		}
 	}
 }
+
+func (l *GovernorLease) Commit() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released || l.committed || l.governor == nil {
+		return
+	}
+	l.committed = true
+	g := l.governor
+	g.mu.Lock()
+	if g.reserved > 0 {
+		g.reserved--
+	}
+	g.calls = append(g.calls, time.Now())
+	g.notifyLocked()
+	g.mu.Unlock()
+}
+
+func (l *GovernorLease) Release() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released || l.governor == nil {
+		return
+	}
+	l.released = true
+	g := l.governor
+	g.mu.Lock()
+	if g.active > 0 {
+		g.active--
+	}
+	if !l.committed && g.reserved > 0 {
+		g.reserved--
+	}
+	g.notifyLocked()
+	g.mu.Unlock()
+}
+
 func (g *Governor) Snapshot() map[string]int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.pruneLocked(time.Now())
-	return map[string]int{"active": g.active, "max_parallel": g.maxParallel, "calls_last_minute": len(g.calls), "calls_per_minute": g.callsPerMin, "manual_waiters": g.waitingHigh}
+	return map[string]int{"active": g.active, "max_parallel": g.maxParallel, "calls_last_minute": len(g.calls), "calls_reserved": g.reserved, "calls_per_minute": g.callsPerMin, "manual_waiters": g.waitingHigh}
 }

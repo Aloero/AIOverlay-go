@@ -23,9 +23,14 @@ type Input struct {
 	Text      string
 }
 
+type CallLease interface {
+	Commit()
+	Release()
+}
+
 type RunOptions struct {
 	Capture    func(context.Context) ([]byte, error)
-	BeforeCall func(context.Context) (func(), error)
+	BeforeCall func(context.Context) (CallLease, error)
 
 	OnPrompt      func(PromptSnapshot)
 	OnObservation func(Observation)

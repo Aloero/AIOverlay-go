@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,14 @@ type fakeProvider struct {
 	answer string
 	err    error
 }
+
+type countingCallLease struct {
+	commits  *atomic.Int32
+	releases *atomic.Int32
+}
+
+func (l *countingCallLease) Commit()  { l.commits.Add(1) }
+func (l *countingCallLease) Release() { l.releases.Add(1) }
 
 func (f *fakeProvider) ID() string { return f.id }
 func (f *fakeProvider) Stream(ctx context.Context, r providers.Request, key string) (<-chan providers.Event, <-chan error) {
@@ -61,6 +70,40 @@ func TestPriorityPoolFallsBack(t *testing.T) {
 	}
 	if res.Text != "ok" {
 		t.Fatalf("got %q", res.Text)
+	}
+}
+
+func TestCallLeaseCommitsOnlyAfterLocalBudgetAdmission(t *testing.T) {
+	cfg := config.Default()
+	pipeline := &cfg.Pipelines[0]
+	pool := pipeline.Nodes[1].ModelPool
+	pool.Policy = domain.PoolPriority
+	pool.MaxCalls = 1
+	pool.Models = []domain.ModelSlot{{
+		ID: "retry", ProviderID: "opencode", ModelID: "retry", Enabled: true,
+		Priority: 100, QualityScore: 90, TimeoutMS: 1000, FirstTokenTimeoutMS: 500, MaxAttempts: 2,
+	}}
+
+	registry, err := providers.NewRegistry(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(registry.Close)
+	registry.Set("opencode", &fakeProvider{id: "opencode", err: &providers.RequestError{Outcome: domain.OutcomeNetworkError, Message: "network"}})
+	engine := New(cfg, registry, nil, nil)
+
+	var acquired, committed, released atomic.Int32
+	_, err = engine.Execute(context.Background(), pipeline.ID, Input{ImageJPEG: []byte("frame")}, RunOptions{
+		BeforeCall: func(context.Context) (CallLease, error) {
+			acquired.Add(1)
+			return &countingCallLease{commits: &committed, releases: &released}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("expected pool call budget to stop retry")
+	}
+	if acquired.Load() != 2 || committed.Load() != 1 || released.Load() != 2 {
+		t.Fatalf("leases acquired=%d committed=%d released=%d", acquired.Load(), committed.Load(), released.Load())
 	}
 }
 

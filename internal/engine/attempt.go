@@ -29,20 +29,26 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	if ctx.Err() != nil {
 		return "", domain.OutcomeCancelled, ctx.Err()
 	}
-	var release func()
+	var lease CallLease
 	if r.opt.BeforeCall != nil {
 		var gateErr error
-		release, gateErr = r.opt.BeforeCall(ctx)
+		lease, gateErr = r.opt.BeforeCall(ctx)
 		if gateErr != nil {
 			return "", providers.OutcomeOf(gateErr), gateErr
 		}
-		if release != nil {
-			defer release()
+		if lease != nil {
+			defer lease.Release()
 		}
+	}
+	if ctx.Err() != nil {
+		return "", domain.OutcomeCancelled, ctx.Err()
 	}
 	if err := r.admit(n, pool, m, key); err != nil {
 		emit(domain.TraceEvent{Kind: "budget_exhausted", NodeID: n.ID, BudgetScope: budgetScope(err), Message: err.Error()})
 		return "", domain.OutcomeCancelled, err
+	}
+	if lease != nil {
+		lease.Commit()
 	}
 	started := time.Now()
 	attemptID := newID("attempt")
