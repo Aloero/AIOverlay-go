@@ -67,6 +67,7 @@ type sourceRuntime struct {
 	cfg           domain.EventSource
 	cancel        context.CancelFunc
 	done          chan struct{}
+	turnDone      chan struct{}
 	mu            sync.RWMutex
 	status        SourceStatus
 	epoch         uint64
@@ -297,11 +298,8 @@ func (m *Manager) reconcile() {
 		stopped = append(stopped, runtime)
 	}
 	m.mu.Unlock()
-	for _, r := range stopped {
-		select {
-		case <-r.done:
-		case <-time.After(2 * time.Second):
-		}
+	for _, runtime := range stopped {
+		waitForSourceStop(runtime, 2*time.Second)
 	}
 
 	// Config may have changed while native teardown completed. Recompute desired
@@ -322,7 +320,15 @@ func (m *Manager) reconcile() {
 			continue
 		}
 		ctx, cancel := context.WithCancel(root)
-		r := &sourceRuntime{cfg: src, cancel: cancel, done: make(chan struct{}), epoch: m.sourceSeq.Add(1), turns: make(chan backgroundTurn, 1), status: SourceStatus{ID: src.ID, Name: src.Name, Kind: string(src.Kind), Running: true}}
+		r := &sourceRuntime{
+			cfg:      src,
+			cancel:   cancel,
+			done:     make(chan struct{}),
+			turnDone: make(chan struct{}),
+			epoch:    m.sourceSeq.Add(1),
+			turns:    make(chan backgroundTurn, 1),
+			status:   SourceStatus{ID: src.ID, Name: src.Name, Kind: string(src.Kind), Running: true},
+		}
 		m.sources[id] = r
 		go m.runSource(ctx, p.ID, r)
 		go m.runTurnQueue(ctx, p.ID, r)
@@ -339,6 +345,29 @@ func sourceFinished(runtime *sourceRuntime) bool {
 		return false
 	}
 }
+
+func waitForSourceStop(runtime *sourceRuntime, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	waitForChannelUntil(runtime.done, deadline)
+	waitForChannelUntil(runtime.turnDone, deadline)
+}
+
+func waitForChannelUntil(done <-chan struct{}, deadline time.Time) {
+	if done == nil {
+		return
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+}
+
 func (m *Manager) stopAll() {
 	m.mu.Lock()
 	list := make([]*sourceRuntime, 0, len(m.sources))
@@ -348,16 +377,14 @@ func (m *Manager) stopAll() {
 	}
 	m.sources = map[string]*sourceRuntime{}
 	m.mu.Unlock()
-	for _, r := range list {
-		select {
-		case <-r.done:
-		case <-time.After(2 * time.Second):
-		}
+	for _, runtime := range list {
+		waitForSourceStop(runtime, 2*time.Second)
 	}
 }
 
 func (m *Manager) runSource(ctx context.Context, pipelineID string, r *sourceRuntime) {
 	defer close(r.done)
+	defer close(r.turns)
 	defer func() { r.mu.Lock(); r.status.Running = false; r.mu.Unlock() }()
 	var err error
 	switch r.cfg.Kind {
@@ -682,11 +709,15 @@ func (m *Manager) enqueueBackgroundTurn(r *sourceRuntime, turn backgroundTurn) {
 }
 
 func (m *Manager) runTurnQueue(ctx context.Context, pipelineID string, r *sourceRuntime) {
+	defer close(r.turnDone)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case turn := <-r.turns:
+		case turn, ok := <-r.turns:
+			if !ok {
+				return
+			}
 			if !m.sourceCurrent(r.cfg.ID, r.epoch) {
 				continue
 			}

@@ -263,10 +263,19 @@ func TestStoppedAudioSourceCanBeStartedAgain(t *testing.T) {
 	}()
 
 	waitUntil(t, func() bool { return attempts.Load() == 1 }, "initial capture did not start")
+	var stoppedRuntime *sourceRuntime
 	waitUntil(t, func() bool {
-		runtime := m.source("a")
-		return runtime != nil && sourceFinished(runtime)
+		stoppedRuntime = m.source("a")
+		return stoppedRuntime != nil && sourceFinished(stoppedRuntime)
 	}, "failed source runtime did not finish")
+	waitUntil(t, func() bool {
+		select {
+		case <-stoppedRuntime.turnDone:
+			return true
+		default:
+			return false
+		}
+	}, "turn queue leaked after capture stopped")
 
 	if err := m.SetSourceRunning("a", true); err != nil {
 		t.Fatal(err)
