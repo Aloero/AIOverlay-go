@@ -233,6 +233,7 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	lastPacket := time.Now()
+	var captureClock captureClock
 	for {
 		select {
 		case <-ctx.Done():
@@ -282,7 +283,7 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 				emit(Block{
 					Samples:        samples,
 					Rate:           f.Rate,
-					At:             now.Add(-time.Duration(count) * time.Second / time.Duration(f.Rate)),
+					At:             captureClock.PacketStart(qpc, int(count), f.Rate, now, flags.TimestampError),
 					Discontinuity:  flags.Discontinuity,
 					TimestampError: flags.TimestampError,
 				})
