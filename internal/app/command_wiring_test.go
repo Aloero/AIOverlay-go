@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,5 +161,139 @@ func TestServerScreenDecideNoActionUsesSemanticDecisionCommand(t *testing.T) {
 	}
 	if !control.RestoresPreviousPresentation(job) {
 		t.Fatal("no_action decision command would not restore prior overlay presentation")
+	}
+}
+
+type needScreenProvider struct {
+	mu     sync.Mutex
+	images map[string]string
+	bad    string
+}
+
+func newNeedScreenProvider() *needScreenProvider {
+	return &needScreenProvider{images: map[string]string{}}
+}
+
+func (*needScreenProvider) ID() string { return "opencode" }
+func (provider *needScreenProvider) Stream(_ context.Context, request providers.Request, _ string) (<-chan providers.Event, <-chan error) {
+	provider.mu.Lock()
+	provider.images[request.ModelID] = string(request.ImageJPEG)
+	var text string
+	switch request.ModelID {
+	case "decision-fixture":
+		if string(request.ImageJPEG) != "screen-1" {
+			provider.bad = "decision did not receive pinned initial screen"
+		}
+		text = `{"action":"need_screen"}`
+	case "answer-fixture":
+		if string(request.ImageJPEG) != "screen-2" {
+			provider.bad = "answer did not receive fresh need_screen capture"
+		}
+		text = "fresh answer"
+	default:
+		provider.bad = "unexpected model request: " + request.ModelID
+	}
+	provider.mu.Unlock()
+
+	events := make(chan providers.Event, 2)
+	errors := make(chan error)
+	events <- providers.Event{Type: providers.EventDelta, Text: text, ModelID: request.ModelID}
+	events <- providers.Event{Type: providers.EventDone, ModelID: request.ModelID}
+	close(events)
+	close(errors)
+	return events, errors
+}
+
+func (provider *needScreenProvider) snapshot() (map[string]string, string) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	images := make(map[string]string, len(provider.images))
+	for model, image := range provider.images {
+		images[model] = image
+	}
+	return images, provider.bad
+}
+
+func TestServerScreenDecideNeedScreenUsesFreshManualCapture(t *testing.T) {
+	a := studioTestApp(t)
+	cfg := a.GetConfig()
+	pipeline := &cfg.Pipelines[0]
+	basePool := *pipeline.Nodes[1].ModelPool
+	oneModelPool := func(slotID, modelID, resultName string) *domain.ModelPoolConfig {
+		pool := basePool
+		pool.Selection = nil
+		pool.Policy = domain.PoolPriority
+		pool.Order = domain.PoolPriority
+		pool.Dispatch = domain.DispatchSequential
+		pool.MaxCalls = 1
+		pool.MaxParallel = 1
+		pool.ResultName = resultName
+		pool.Models = []domain.ModelSlot{{
+			ID: slotID, ProviderID: "opencode", ModelID: modelID, Enabled: true,
+			Priority: 100, Weight: 1, QualityScore: 90, MaxAttempts: 1,
+		}}
+		return &pool
+	}
+
+	decisionID := "need-screen-decision"
+	captureID := "need-screen-capture"
+	answerID := "need-screen-answer"
+	pipeline.Nodes = append(pipeline.Nodes,
+		domain.Node{ID: decisionID, Type: domain.NodeDecision, Name: "Need screen?", ModelPool: oneModelPool("decision-slot", "decision-fixture", "decision")},
+		domain.Node{ID: captureID, Type: domain.NodeCapture, Name: "Fresh screen"},
+		domain.Node{ID: answerID, Type: domain.NodeModelPool, Name: "Fresh answer", ModelPool: oneModelPool("answer-slot", "answer-fixture", "")},
+	)
+	pipeline.Edges = append(pipeline.Edges,
+		domain.Edge{ID: "decision-needs-screen", From: decisionID, To: captureID, On: []domain.Outcome{domain.OutcomeNeedScreen}, Priority: 100, MaxVisits: 1},
+		domain.Edge{ID: "fresh-screen-answer", From: captureID, To: answerID, On: []domain.Outcome{domain.OutcomeSuccess}, Priority: 100, MaxVisits: 1},
+		domain.Edge{ID: "fresh-answer-output", From: answerID, To: pipeline.OutputNodeID, On: []domain.Outcome{domain.OutcomeSuccess}, Priority: 100, MaxVisits: 1},
+	)
+	pipeline.Commands = append(pipeline.Commands, domain.CommandConfig{
+		ID: "screen-decide-fresh", Name: "Screen decide fresh", Action: "screen_decide",
+		EntryNodeID: decisionID, Intent: domain.IntentDecide, CaptureScreen: true,
+	})
+	if err := a.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := newNeedScreenProvider()
+	a.registry.Set("opencode", provider)
+	server := control.New("127.0.0.1:0", a)
+	var captures atomic.Int32
+	server.Capture = func() ([]byte, error) {
+		count := captures.Add(1)
+		return []byte(fmt.Sprintf("screen-%d", count)), nil
+	}
+
+	jobID, err := server.StartCommand("screen_decide")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for server.CurrentJob().Running && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	job := server.CurrentJob()
+	if job.ID != jobID || job.Running || job.Error != "" || job.Text != "fresh answer" || job.Trace.Outcome != domain.OutcomeSuccess {
+		t.Fatalf("need_screen job=%+v", job)
+	}
+	if captures.Load() != 2 {
+		t.Fatalf("manual captures=%d, want initial + fresh", captures.Load())
+	}
+	images, bad := provider.snapshot()
+	if bad != "" {
+		t.Fatal(bad)
+	}
+	if images["decision-fixture"] != "screen-1" || images["answer-fixture"] != "screen-2" {
+		t.Fatalf("model images=%+v", images)
+	}
+	captureEvents := 0
+	for _, event := range job.Trace.Events {
+		if event.Kind == "capture_start" && event.NodeID == captureID {
+			captureEvents++
+		}
+	}
+	if captureEvents != 1 {
+		t.Fatalf("need_screen capture trace events=%d", captureEvents)
 	}
 }

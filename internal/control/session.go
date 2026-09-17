@@ -44,18 +44,14 @@ func (s *Server) StartCommand(action string) (string, error) {
 	pipelineID := s.backend.GetConfig().ActivePipelineID
 	purpose := commandPurpose(action)
 	return s.jobs.startTaskPurpose(s.ctx, pipelineID, purpose, func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
-		prepared, err := b.PrepareCommand(ctx, action, func(callCtx context.Context) ([]byte, error) {
-			if s.Capture == nil {
-				return nil, fmt.Errorf("capture unavailable")
-			}
-			return s.Capture()
-		})
+		prepared, err := b.PrepareCommand(ctx, action, s.manualCapture)
 		if err != nil {
 			return engine.Result{}, nil, err
 		}
 		if prepared.SkipRun {
 			return engine.Result{Trace: emptyCommandTrace(prepared.PipelineID, prepared.Command.ID, purpose)}, nil, nil
 		}
+		opt.Capture = s.manualCapture
 		res, err := live.Run(ctx, prepared.PipelineID, prepared.Input, opt)
 		if err == nil {
 			b.RecordCommandResult(prepared, res)
@@ -63,6 +59,23 @@ func (s *Server) StartCommand(action string) (string, error) {
 		return res, nil, err
 	})
 }
+func (s *Server) manualCapture(ctx context.Context) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.Capture == nil {
+		return nil, fmt.Errorf("capture unavailable")
+	}
+	image, err := s.Capture()
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return image, nil
+}
+
 func commandPurpose(action string) string {
 	switch action {
 	case "screen_context":

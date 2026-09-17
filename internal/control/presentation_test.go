@@ -1,6 +1,9 @@
 package control
 
 import (
+	"context"
+	"errors"
+
 	"aioverlay/internal/domain"
 	"aioverlay/internal/session"
 	"testing"
@@ -110,5 +113,40 @@ func TestScreenDecisionUsesDecisionPresentationPurpose(t *testing.T) {
 	}
 	if got := commandPurpose("analyze"); got != "command" {
 		t.Fatalf("analyze purpose=%q", got)
+	}
+}
+
+func TestManualCaptureHonorsContextBeforeAndAfterNativeCapture(t *testing.T) {
+	server := New("127.0.0.1:0", &auditBackend{})
+	var calls int
+	server.Capture = func() ([]byte, error) {
+		calls++
+		return []byte("frame"), nil
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := server.manualCapture(cancelled); !errors.Is(err, context.Canceled) || calls != 0 {
+		t.Fatalf("pre-cancel capture err=%v calls=%d", err, calls)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server.Capture = func() ([]byte, error) {
+		calls++
+		close(started)
+		<-release
+		return []byte("late-frame"), nil
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := server.manualCapture(ctx)
+		result <- err
+	}()
+	<-started
+	stop()
+	close(release)
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("post-cancel capture err=%v", err)
 	}
 }
