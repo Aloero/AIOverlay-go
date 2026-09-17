@@ -5,7 +5,6 @@ import (
 	"aioverlay/internal/engine"
 	paudio "aioverlay/internal/platform/audio"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"math"
 	"reflect"
@@ -620,7 +619,7 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	var last [32]byte
+	changeGate := newScreenChangeGate(r.cfg)
 	for {
 		select {
 		case <-ctx.Done():
@@ -649,11 +648,9 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 			if !m.sourceCurrent(r.cfg.ID, r.epoch) {
 				continue
 			}
-			sum := sha256.Sum256(img)
-			if r.cfg.ChangedOnly && sum == last {
+			if !changeGate.Accept(img, at) {
 				continue
 			}
-			last = sum
 			r.mu.Lock()
 			r.status.LastEvent = at.Format(time.RFC3339Nano)
 			r.mu.Unlock()

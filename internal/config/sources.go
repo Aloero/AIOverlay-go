@@ -94,6 +94,15 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 			if !within(s.IntervalMS, 1000, 600000) {
 				return fmt.Errorf("screen source interval must be 1..600 seconds")
 			}
+			if !within(s.DebounceMS, 0, 60000) {
+				return fmt.Errorf("screen source debounce must be 0..60 seconds")
+			}
+			if !within(s.MaxWaitMS, 0, 600000) {
+				return fmt.Errorf("screen source maximum wait must be 0..600 seconds")
+			}
+			if s.MaxWaitMS > 0 && s.DebounceMS > s.MaxWaitMS {
+				return fmt.Errorf("screen source debounce cannot exceed maximum wait")
+			}
 			if s.Audio != nil {
 				return fmt.Errorf("screen source cannot contain audio settings")
 			}

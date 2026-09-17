@@ -49,6 +49,8 @@ type EventSource struct {
 	ContextID   string                     `json:"context_id,omitempty"`
 	IntervalMS  int                        `json:"interval_ms,omitempty"`
 	ChangedOnly bool                       `json:"changed_only,omitempty"`
+	DebounceMS  int                        `json:"debounce_ms,omitempty"`
+	MaxWaitMS   int                        `json:"max_wait_ms,omitempty"`
 	Audio       *AudioSourceConfig         `json:"audio,omitempty"`
 
 	// Command is a schema-4 compatibility field. Schema 5 materializes manual
