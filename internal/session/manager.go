@@ -181,7 +181,10 @@ func (m *Manager) Close() {
 	}
 	cancel := m.cancel
 	m.started = false
+	m.paused = false
+	m.sourceOverrides = map[string]bool{}
 	m.mu.Unlock()
+	m.resetAllAudioRestartFailures()
 	if cancel != nil {
 		cancel()
 	}
@@ -498,6 +501,12 @@ func (m *Manager) nextAudioRestartDelay(sourceID string) time.Duration {
 func (m *Manager) resetAudioRestartFailures(sourceID string) {
 	m.audioRestartMu.Lock()
 	delete(m.audioRestartFailures, sourceID)
+	m.audioRestartMu.Unlock()
+}
+
+func (m *Manager) resetAllAudioRestartFailures() {
+	m.audioRestartMu.Lock()
+	m.audioRestartFailures = map[string]int{}
 	m.audioRestartMu.Unlock()
 }
 

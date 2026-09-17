@@ -1105,3 +1105,46 @@ func TestPipelineSwitchClearsStartNowOverride(t *testing.T) {
 		t.Fatal("pipeline switch retained source runtime override")
 	}
 }
+
+func TestSessionRestartDropsPauseAndStartNowRuntimeState(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].AutoStart = false
+	manager := NewManager(nil)
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	manager.Start(firstCtx, cfg)
+	if err := manager.SetSourceRunning("a", true); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return manager.source("a") != nil }, "Start-now source did not start")
+	manager.Pause(true)
+	manager.audioRestartMu.Lock()
+	manager.audioRestartFailures["a"] = 4
+	manager.audioRestartMu.Unlock()
+	firstCancel()
+	manager.Close()
+
+	if manager.Paused() {
+		t.Fatal("pause state survived session Close")
+	}
+	manager.mu.RLock()
+	overrides := len(manager.sourceOverrides)
+	manager.mu.RUnlock()
+	manager.audioRestartMu.Lock()
+	retries := len(manager.audioRestartFailures)
+	manager.audioRestartMu.Unlock()
+	if overrides != 0 || retries != 0 {
+		t.Fatalf("runtime state survived Close: overrides=%d retries=%d", overrides, retries)
+	}
+
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	manager.Start(secondCtx, cfg)
+	defer func() { secondCancel(); manager.Close() }()
+	if manager.source("a") != nil {
+		t.Fatal("Start-now override survived into a new session")
+	}
+}
