@@ -46,7 +46,11 @@ func (p *Gemini) stream(ctx context.Context, r Request, key string, events chan<
 	}
 	parts := []any{map[string]any{"text": r.UserPrompt}}
 	if r.Audio != nil {
-		parts = append(parts, map[string]any{"inline_data": map[string]any{"mime_type": "audio/wav", "data": base64.StdEncoding.EncodeToString(r.Audio.WAV)}})
+		wav, err := wavPCM16(r.Audio)
+		if err != nil {
+			return &RequestError{Outcome: domain.OutcomeValidationFailed, Message: err.Error()}
+		}
+		parts = append(parts, map[string]any{"inline_data": map[string]any{"mime_type": "audio/wav", "data": base64.StdEncoding.EncodeToString(wav)}})
 	}
 
 	if len(r.ImageJPEG) > 0 {

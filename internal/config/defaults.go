@@ -126,6 +126,7 @@ func baseBudget() domain.ExecutionBudget {
 func pipelineWithPool(id, name, description string, pool domain.ModelPoolConfig) domain.Pipeline {
 	return domain.Pipeline{
 		ID: id, Name: name, Description: description, Enabled: true, EntryNodeID: "screen", OutputNodeID: "output", Budget: baseBudget(),
+		Commands: []domain.CommandConfig{{ID: "screen-answer", Name: "Снимок и ответ", Action: "analyze", EntryNodeID: "screen", Intent: domain.IntentRespond, CaptureScreen: true}},
 		Nodes: []domain.Node{
 			{ID: "screen", Type: domain.NodeScreen, Name: "Screen", Position: domain.Position{X: 80, Y: 180}},
 			{ID: "models", Type: domain.NodeModelPool, Name: "Model Pool", Position: domain.Position{X: 360, Y: 140}, ModelPool: &pool},

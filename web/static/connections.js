@@ -7,7 +7,7 @@ async function providerDirectory() {
  return providerDirectoryCache;
 }
 function providerTemplate(id, label) {
- return {id,label,kind:'openai_compatible',enabled:true,base_url:'',headers:{},credential_pool:{policy:'round_robin',keys:[],max_keys_per_request:3,rate_limit_cooldown_s:60},request_defaults:{connect_timeout_ms:3000,first_token_timeout_ms:12000,response_timeout_ms:20000,stream_idle_timeout_ms:5000,max_output_tokens:2048}};
+ return {id,label,kind:'openai_compatible',audio_input:false,enabled:true,base_url:'',headers:{},credential_pool:{policy:'round_robin',keys:[],max_keys_per_request:3,rate_limit_cooldown_s:60},request_defaults:{connect_timeout_ms:3000,first_token_timeout_ms:12000,response_timeout_ms:20000,stream_idle_timeout_ms:5000,max_output_tokens:2048}};
 }
 function catalogProviderID(p) {return p.kind==='embedded_opencode' ? (p.opencode_provider_id||'opencode') : p.catalog_provider_id || (p.kind==='gemini'?'google':p.id);}
 function nativeConnection(m) {return state.config.providers.find(p=>p.kind!=='embedded_opencode' && catalogProviderID(p)===m.provider_id);}
@@ -23,6 +23,7 @@ function newOpenCodeConnection(meta) {
  return p;
 }
 function routeLabel(p) {return p?.kind==='embedded_opencode'?'Via OpenCode':'Direct';}
+function connectionSupportsAudio(p){return !!p&&(p.kind==='gemini'||p.kind==='audio_transcription'||(p.kind==='openai_compatible'&&p.audio_input===true));}
 
 function providerDialog(connection, onDone) {
  const p=copy(connection);p.credential_pool.keys||=[];let committed=JSON.stringify(p);
@@ -30,7 +31,7 @@ function providerDialog(connection, onDone) {
  modal(p.label,`<div class="connection-identity">${tag(via?'Via OpenCode':'Direct')}<code>${esc(cp)}</code></div>
  <div class="connection-form"><section><h3>API-ключи</h3><div id="providerKeys"></div><div class="field"><label for="bulkKeys">Добавить ключи</label><textarea id="bulkKeys" class="secret-entry" rows="3" spellcheck="false" autocomplete="off" placeholder="Вставьте один или несколько ключей" data-help="Один ключ на строку; буквальная последовательность \\n тоже поддерживается. Повторы не добавляются. После добавления секрет скрыт."></textarea></div><button class="button" id="addKeys">Добавить</button><p class="secret-notice">Ключи хранятся в config.json в открытом виде.</p>${via&&cp==='opencode'?'<p class="note">Для доступных Free-моделей OpenCode ключ не нужен. Платным моделям нужен ключ OpenCode.</p>':''}</section>
  <section><h3>Использование</h3><label class="switch"><input type="checkbox" id="providerEnabled" ${p.enabled?'checked':''}>Подключение включено</label>${selectField('Выбор ключа','keyPolicy',keyPolicyNames,p.credential_pool.policy)}<div class="form-row">${field('Ключей на модель','keyMax',p.credential_pool.max_keys_per_request,'number')}${field('Пауза после 429, с','keyCooldown',p.credential_pool.rate_limit_cooldown_s,'number')}</div>${field('Макс. токенов ответа','providerTokens',p.request_defaults.max_output_tokens,'number')}</section></div>
- <details class="advanced-connection"><summary>Параметры подключения</summary>${field('Название','providerLabel',p.label)}${via?`<div class="field"><label>Provider ID</label><code>${esc(cp)}</code></div>${field('Переменная ключа','credentialEnv',(p.credential_env||[]).join(', '),'text','Определяется по Models.dev. OpenCode также получает apiKey в изолированной конфигурации текущего провайдера.')}`:selectField('Протокол','providerKind',{openai_compatible:'OpenAI-compatible API',gemini:'Gemini API'},p.kind)}${field(via?'Base URL (необязательно)':'Base URL','providerURL',p.base_url||'','url')}${!via?field('Provider ID в Models.dev','catalogProviderID',p.catalog_provider_id||catalogProviderID(p)):''}</details>
+ <details class="advanced-connection"><summary>Параметры подключения</summary>${field('Название','providerLabel',p.label)}${via?`<div class="field"><label>Provider ID</label><code>${esc(cp)}</code></div>${field('Переменная ключа','credentialEnv',(p.credential_env||[]).join(', '),'text','Определяется по Models.dev. OpenCode также получает apiKey в изолированной конфигурации текущего провайдера.')}`:selectField('Протокол','providerKind',{openai_compatible:'OpenAI-compatible Chat API',audio_transcription:'Audio transcription API',gemini:'Gemini API'},p.kind)+`<label class="switch"><input type="checkbox" id="providerAudioInput" ${p.audio_input?'checked':''}>Этот OpenAI-compatible Chat endpoint принимает raw AUDIO</label><small>Включайте только если endpoint действительно поддерживает audio content. Отдельный transcription API выбирайте протоколом выше.</small>`}${field(via?'Base URL (необязательно)':'Base URL','providerURL',p.base_url||'','url')}${!via?field('Provider ID в Models.dev','catalogProviderID',p.catalog_provider_id||catalogProviderID(p)):''}</details>
  <div class="dialog-footer"><span class="dim">${via&&!(p.credential_env||[]).length&&cp!=='opencode'?'OAuth и облачная авторизация не заменяются обычным API-ключом.':'Авторизация проверяется при запросе.'}</span><button class="button primary" id="providerDone">Сохранить подключение</button></div>`,via?'OPENCODE / ПОДКЛЮЧЕНИЕ':'DIRECT / ПОДКЛЮЧЕНИЕ');
  function keys() {
   $('#providerKeys').innerHTML=p.credential_pool.keys.map((k,i)=>`<div class="key-row"><input type="checkbox" data-key-enable="${i}" ${k.enabled?'checked':''} aria-label="Использовать ключ ${i+1}"><input class="key-name" data-key-name="${i}" value="${esc(k.label||k.id)}" aria-label="Название ключа"><span class="mono">•••• ${esc(k.secret?.length>4?k.secret.slice(-4):'')}</span><span class="key-health" data-provider-id="${esc(p.id)}" data-key-status="${esc(k.id)}">${esc(credentialBadge(p.id,k.id))}</span><button class="icon-button" data-key-remove="${i}" aria-label="Удалить ключ">×</button></div>`).join('')||'<div class="key-empty">Нет сохранённых ключей</div>';
@@ -40,7 +41,7 @@ function providerDialog(connection, onDone) {
  }
  // Connection edits are isolated from the graph draft until the endpoint accepts them.
  function bind(id,obj,key,numeric=false) {const el=$('#'+id);if(el)el.onchange=()=>{obj[key]=numeric?finite(el.value):el.value;};}
- bind('providerLabel',p,'label');bind('providerURL',p,'base_url');bind('providerKind',p,'kind');bind('catalogProviderID',p,'catalog_provider_id');
+ bind('providerLabel',p,'label');bind('providerURL',p,'base_url');bind('providerKind',p,'kind');if($('#providerAudioInput'))$('#providerAudioInput').onchange=e=>{p.audio_input=e.target.checked;};bind('catalogProviderID',p,'catalog_provider_id');
  bind('keyPolicy',p.credential_pool,'policy');bind('keyMax',p.credential_pool,'max_keys_per_request',true);bind('keyCooldown',p.credential_pool,'rate_limit_cooldown_s',true);bind('providerTokens',p.request_defaults,'max_output_tokens',true);
  if($('#credentialEnv'))$('#credentialEnv').onchange=e=>{p.credential_env=e.target.value.split(',').map(v=>v.trim()).filter(Boolean);};
  $('#providerEnabled').onchange=e=>{p.enabled=e.target.checked;};
@@ -90,7 +91,8 @@ async function selectCatalogModel(pool,meta,route,visionOnly,connectionID) {
   const id=p.kind==='embedded_opencode'?meta.provider_id+'/'+meta.model_id:meta.model_id;
   if(pool.models.some(s=>s.provider_id===p.id&&s.model_id===id)){notify('Модель уже в списке.');return;}
   pool.models.push({id:uid('model'),provider_id:p.id,model_id:id,enabled:true,priority:100-pool.models.length,weight:1,quality_score:80,timeout_ms:0,first_token_timeout_ms:0,max_attempts:1});
-  if(!visionOnly&&!meta.input_modalities.includes('image')&&!pool.vision_preprocessor) {
+  const audioRoute=pool.task==='transcribe'||['audio','audio_image'].includes(pool.selection?.modality);
+  if(!visionOnly&&!audioRoute&&!meta.input_modalities.includes('image')&&!pool.vision_preprocessor) {
    pool.vision_preprocessor=defaultVisionPool();notify('Перед текстовой моделью добавлен отдельный этап зрения.');
   }
   rememberCatalogModel(meta);dirty();closeModal();state.page='pipelines';renderPage();

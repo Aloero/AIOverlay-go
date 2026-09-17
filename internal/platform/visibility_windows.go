@@ -2,12 +2,12 @@
 
 package platform
 
-// Runs on the overlay window thread. Hiding never clears content, moves the HWND
-// or cancels inference. Automatic Show calls cannot undo an explicit user hide.
+// Runs on the overlay window thread. The user latch is independent from the
+// current HWND visibility: transient capture/Clear hiding cannot accidentally
+// turn an explicit user hide into a Show on the next callback.
 func (o *winOverlay) toggleVisibility() {
-	visible, _, _ := user32.NewProc("IsWindowVisible").Call(o.hwnd.Load())
-	o.userHidden = visible != 0
-	if o.userHidden {
+	show := o.visibility.toggleUser()
+	if !show {
 		pShowWindow.Call(o.hwnd.Load(), swHide)
 		return
 	}

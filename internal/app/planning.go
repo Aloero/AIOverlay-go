@@ -21,10 +21,12 @@ func (a *App) PreviewOrderedPool(cfg domain.Config, pool domain.ModelPoolConfig,
 			break
 		}
 	}
+	audio := false
 	if input.Known {
 		image = input.ImageRequired
+		audio = input.AudioRequired
 	}
-	plan := engine.PlanPool(cfg, a.catalog, pool, image)
+	plan := engine.PlanMediaPool(cfg, a.catalog, pool, image, audio)
 	plan.Input = input
 	if input.Known && !input.Reachable {
 		plan.Candidates = []domain.ModelSlot{}

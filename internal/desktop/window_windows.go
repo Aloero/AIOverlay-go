@@ -565,3 +565,36 @@ func cleanupProfile(path string) {
 	}
 	log.Printf("Studio profile cleanup pending: %v", err)
 }
+
+// CaptureBackground never blinks Studio. If an open visible Studio cannot be
+// confidently excluded from capture, the automatic source is paused instead of
+// risking screenshots of settings or secrets. Manual Capture keeps the existing
+// hide/restore path because it is an explicit user action.
+func (w *desktopWindow) CaptureBackground(fn func() ([]byte, error)) ([]byte, error) {
+	w.captureMu.Lock()
+	defer w.captureMu.Unlock()
+	w.mu.Lock()
+	v := w.view
+	protection := w.protection
+	w.mu.Unlock()
+	if v == nil {
+		return fn()
+	}
+	result := make(chan struct{ visible, minimized bool }, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	w.dispatchSession(ctx, v, func() {
+		vis, _, _ := getVisible.Call(uintptr(v.Window()))
+		minimized, _, _ := isIconic.Call(uintptr(v.Window()))
+		result <- struct{ visible, minimized bool }{vis != 0, minimized != 0}
+	})
+	select {
+	case state := <-result:
+		if state.visible && !state.minimized && !protection.Applied {
+			return nil, fmt.Errorf("Studio is visible and capture exclusion is not confirmed; background screen capture paused")
+		}
+		return fn()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("Studio did not acknowledge background capture safety check")
+	}
+}

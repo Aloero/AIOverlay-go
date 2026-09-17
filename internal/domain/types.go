@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = 4
+const ConfigVersion = 5
 
 type ProviderKind string
 
@@ -136,8 +136,10 @@ type Credential struct {
 }
 
 type Pipeline struct {
+	Commands      []CommandConfig            `json:"commands,omitempty"`
 	Sources       []EventSource              `json:"sources,omitempty"`
-	Context       *ConversationConfig        `json:"context,omitempty"`
+	Contexts      []ContextConfig            `json:"contexts,omitempty"`
+	Context       *ConversationConfig        `json:"context,omitempty"` // schema-4 migration only
 	SessionBudget *SessionBudget             `json:"session_budget,omitempty"`
 	Extra         map[string]json.RawMessage `json:"-"`
 	ID            string                     `json:"id"`

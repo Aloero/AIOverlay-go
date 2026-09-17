@@ -8,64 +8,116 @@ import (
 )
 
 func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
-	if len(p.Sources) > 8 {
-		return fmt.Errorf("at most 8 sources per pipeline")
+	if len(p.Sources) > 16 {
+		return fmt.Errorf("pipeline %s has too many background sources", p.ID)
 	}
-	seen, commands := map[string]bool{}, map[string]bool{}
+	if len(p.Commands) > 16 {
+		return fmt.Errorf("pipeline %s has too many commands", p.ID)
+	}
+	contexts := map[string]domain.ContextConfig{}
+	for _, c := range p.Contexts {
+		if c.ID == "" || len(c.ID) > 120 || strings.ContainsAny(c.ID, "\x00\r\n") {
+			return fmt.Errorf("pipeline %s has invalid context id", p.ID)
+		}
+		if _, dup := contexts[c.ID]; dup {
+			return fmt.Errorf("pipeline %s has duplicate context %q", p.ID, c.ID)
+		}
+		if !within(c.MaxAgeS, 1, 24*3600) || !within(c.MaxEntries, 1, 1000) || !within(c.MaxChars, 100, 2_000_000) || !within(c.ScreenMaxAgeS, 1, 3600) {
+			return fmt.Errorf("context %s limits invalid", c.ID)
+		}
+		contexts[c.ID] = c
+	}
+	entryOK := func(id string) bool { _, ok := nodes[id]; return ok }
+	contextOK := func(id string) bool {
+		if id == "" {
+			return true
+		}
+		c, ok := contexts[id]
+		return ok && c.Enabled
+	}
+	ids := map[string]bool{}
+	actions := map[string]bool{}
+	for _, c := range p.Commands {
+		if c.ID == "" || len(c.ID) > 120 || ids[c.ID] || strings.ContainsAny(c.ID, "\x00\r\n") {
+			return fmt.Errorf("invalid or duplicate command ID")
+		}
+		ids[c.ID] = true
+		if !enum(c.Action, "analyze", "screen_context", "screen_decide") {
+			return fmt.Errorf("command %s has unsupported action", c.ID)
+		}
+		if actions[c.Action] {
+			return fmt.Errorf("pipeline %s has duplicate command action %q", p.ID, c.Action)
+		}
+		actions[c.Action] = true
+		if !enum(c.Intent, domain.IntentRespond, domain.IntentDecide, domain.IntentContext) {
+			return fmt.Errorf("command %s has invalid intent", c.ID)
+		}
+		if !entryOK(c.EntryNodeID) {
+			return fmt.Errorf("command %s references missing entry", c.ID)
+		}
+		if !contextOK(c.ContextID) {
+			return fmt.Errorf("command %s references disabled or missing context", c.ID)
+		}
+		if !within(c.WaitForTranscriptMS, 0, 10000) {
+			return fmt.Errorf("command %s transcript wait is out of range", c.ID)
+		}
+		if c.Action == "analyze" && !c.CaptureScreen {
+			return fmt.Errorf("analyze command must capture the screen")
+		}
+	}
+	if _, ok := actions["analyze"]; !ok {
+		return fmt.Errorf("pipeline %s requires an analyze command", p.ID)
+	}
+
+	sourceIDs := map[string]bool{}
 	for _, s := range p.Sources {
-		if s.ID == "" || len(s.ID) > 120 || seen[s.ID] || strings.ContainsAny(s.ID, "\x00\r\n") {
+		if s.ID == "" || len(s.ID) > 120 || sourceIDs[s.ID] || strings.ContainsAny(s.ID, "\x00\r\n") {
 			return fmt.Errorf("invalid or duplicate source ID")
 		}
-		seen[s.ID] = true
-		if !enum(s.Kind, "manual_screen", "audio", "screen_timer") {
+		sourceIDs[s.ID] = true
+		if !enum(s.Kind, domain.SourceAudio, domain.SourceScreenTimer) {
 			return fmt.Errorf("unsupported source kind")
 		}
-		if !enum(s.Intent, "respond", "decide", "context") {
+		if !enum(s.Intent, domain.IntentRespond, domain.IntentDecide, domain.IntentContext) {
 			return fmt.Errorf("source intent must be respond, decide or context")
 		}
-		if _, ok := nodes[s.EntryNodeID]; !ok {
+		if !entryOK(s.EntryNodeID) {
 			return fmt.Errorf("source %s references missing entry", s.ID)
 		}
-		if s.Kind == "manual_screen" {
-			if !enum(s.Command, "analyze", "screen_context", "screen_decide") {
-				return fmt.Errorf("unknown manual source command")
-			}
-			if s.Enabled && commands[s.Command] {
-				return fmt.Errorf("duplicate manual command binding")
-			}
-			if s.Enabled {
-				commands[s.Command] = true
-			}
-		} else if s.Command != "" {
-			return fmt.Errorf("only manual sources may have a hotkey command")
+		if !contextOK(s.ContextID) {
+			return fmt.Errorf("source %s references disabled or missing context", s.ID)
 		}
-		if s.Kind == "screen_timer" && !within(s.IntervalMS, 1000, 600000) {
-			return fmt.Errorf("screen source interval must be 1..600 seconds")
+		if s.Command != "" {
+			return fmt.Errorf("schema-5 background source cannot own a hotkey command")
 		}
-		if s.Kind == "audio" {
+		if s.Kind == domain.SourceScreenTimer {
+			if !within(s.IntervalMS, 1000, 600000) {
+				return fmt.Errorf("screen source interval must be 1..600 seconds")
+			}
+			if s.Audio != nil {
+				return fmt.Errorf("screen source cannot contain audio settings")
+			}
+		}
+		if s.Kind == domain.SourceAudio {
 			if s.Audio == nil {
 				return fmt.Errorf("audio source missing settings")
 			}
 			if err := ValidateAudio(*s.Audio); err != nil {
-				return err
+				return fmt.Errorf("source %s: %w", s.ID, err)
 			}
 		}
-		if s.Intent == "context" && (p.Context == nil || !p.Context.Enabled) {
-			return fmt.Errorf("context-only source requires an enabled pipeline context")
-		}
-	}
-	if c := p.Context; c != nil {
-		if !within(c.MaxAgeS, 1, 3600) || !within(c.MaxEntries, 1, 100) || !within(c.MaxChars, 100, 100000) || !within(c.ScreenMaxAgeS, 1, 600) {
-			return fmt.Errorf("context limits invalid")
+		if s.Intent == domain.IntentContext && s.ContextID == "" {
+			return fmt.Errorf("context-only source requires a context")
 		}
 	}
 	if b := p.SessionBudget; b != nil {
-		if !within(b.CallsPerMinute, 1, 300) || !within(b.QueueCapacity, 1, 16) || !within(b.CooldownMS, 0, 60000) {
+		if !within(b.CallsPerMinute, 1, 300) || !within(b.QueueCapacity, 1, 64) || !within(b.CooldownMS, 0, 60000) || !within(b.MaxParallelCalls, 1, 64) || !within(b.EndToEndMS, 1000, 600000) {
 			return fmt.Errorf("session limits invalid")
 		}
 	}
 	return nil
 }
+
 func ValidateAudio(a domain.AudioSourceConfig) error {
 	if !enum(a.Mode, "system", "microphone") {
 		return fmt.Errorf("select system sound or microphone; process-only capture is not implemented")
@@ -73,7 +125,10 @@ func ValidateAudio(a domain.AudioSourceConfig) error {
 	if len(a.DeviceID) > 4096 || strings.ContainsRune(a.DeviceID, 0) {
 		return fmt.Errorf("invalid audio device")
 	}
-	if !within(a.SegmentMS, 1000, 30000) || !within(a.SilenceMS, 200, 3000) || !within(a.MinimumMS, 100, a.SegmentMS) || a.SilenceMS > a.SegmentMS {
+	if a.DeviceRole != "" && !enum(a.DeviceRole, "multimedia", "communications") {
+		return fmt.Errorf("invalid default audio device role")
+	}
+	if !within(a.SegmentMS, 1000, 30000) || !within(a.SilenceMS, 150, 5000) || !within(a.MinimumMS, 80, a.SegmentMS) || a.SilenceMS > a.SegmentMS {
 		return fmt.Errorf("invalid audio segment/silence limits")
 	}
 	if math.IsNaN(a.Threshold) || math.IsInf(a.Threshold, 0) || a.Threshold < 0 || a.Threshold > 0.5 {

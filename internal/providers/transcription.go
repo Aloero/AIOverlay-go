@@ -54,11 +54,15 @@ func (p *Transcription) request(ctx context.Context, r Request, key string, ev c
 			return err
 		}
 	}
+	wav, err := wavPCM16(r.Audio)
+	if err != nil {
+		return &RequestError{Outcome: domain.OutcomeValidationFailed, Message: err.Error()}
+	}
 	part, err := writer.CreateFormFile("file", "speech.wav")
 	if err != nil {
 		return err
 	}
-	if _, err = part.Write(r.Audio.WAV); err != nil {
+	if _, err = part.Write(wav); err != nil {
 		return err
 	}
 	if err = writer.Close(); err != nil {

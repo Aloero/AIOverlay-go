@@ -215,3 +215,44 @@ func TestStudioReviewWeightedPreviewDoesNotAdvanceRuntimeRandomness(t *testing.T
 		t.Fatal("preview changed live weighted choice state")
 	}
 }
+
+func TestDecisionNoActionIsNormalTerminalAndDoesNotRunAnswer(t *testing.T) {
+	e, cfg := testEngine(t, 1, &scriptedProvider{run: func(ctx context.Context, r providers.Request, key string, ch chan<- providers.Event) error {
+		ch <- providers.Event{Type: providers.EventDelta, Text: `{"action":"no_action"}`}
+		return nil
+	}})
+	p := &cfg.Pipelines[0]
+	answer := p.Nodes[1]
+	decisionPool := *answer.ModelPool
+	decisionPool.Prompt = domain.PromptConfig{User: "Decide"}
+	decision := domain.Node{ID: "decision", Type: domain.NodeDecision, Name: "Need response?", ModelPool: &decisionPool}
+	p.Nodes = append(p.Nodes, decision)
+	p.Edges = append(p.Edges, domain.Edge{ID: "decision-answer", From: "decision", To: answer.ID, On: []domain.Outcome{domain.OutcomeRespond}, MaxVisits: 1})
+	e.Reconfigure(cfg, e.registry)
+	var calls atomic.Int32
+	e.registry.Set("opencode", &scriptedProvider{run: func(ctx context.Context, r providers.Request, key string, ch chan<- providers.Event) error {
+		calls.Add(1)
+		ch <- providers.Event{Type: providers.EventDelta, Text: `{"action":"no_action"}`}
+		return nil
+	}})
+	got, err := e.Execute(context.Background(), p.ID, Input{EntryNodeID: "decision", Intent: string(domain.IntentDecide), Text: "hello"}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Published || got.Text != "" || got.Trace.Outcome != domain.OutcomeNoAction || calls.Load() != 1 {
+		t.Fatalf("published=%v text=%q outcome=%s calls=%d", got.Published, got.Text, got.Trace.Outcome, calls.Load())
+	}
+}
+
+func TestSelectedContextIsIncludedWithoutMagicTemplateVariable(t *testing.T) {
+	p := domain.PromptConfig{System: "system", User: "Answer the screenshot: {{input.text}}"}
+	_, user := RenderRequestPrompt(p, PromptValues{InputText: "task", ContextText: "older conversation"})
+	if !strings.Contains(user, "older conversation") || strings.Count(user, "older conversation") != 1 {
+		t.Fatalf("%q", user)
+	}
+	p.User = "Context={{context.text}}\nTask={{input.text}}"
+	_, user = RenderRequestPrompt(p, PromptValues{InputText: "task", ContextText: "older conversation"})
+	if strings.Count(user, "older conversation") != 1 {
+		t.Fatalf("duplicate context: %q", user)
+	}
+}

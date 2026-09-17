@@ -55,11 +55,15 @@ func (p *OpenAICompatible) stream(ctx context.Context, r Request, credential str
 		}
 	}
 	if r.Audio != nil {
+		wav, err := wavPCM16(r.Audio)
+		if err != nil {
+			return &RequestError{Outcome: domain.OutcomeValidationFailed, Message: err.Error()}
+		}
 		parts, ok := content.([]any)
 		if !ok {
 			parts = []any{map[string]any{"type": "text", "text": r.UserPrompt}}
 		}
-		content = append(parts, map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": base64.StdEncoding.EncodeToString(r.Audio.WAV), "format": "wav"}})
+		content = append(parts, map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": base64.StdEncoding.EncodeToString(wav), "format": "wav"}})
 	}
 	messages := []any{}
 	if strings.TrimSpace(r.SystemPrompt) != "" {

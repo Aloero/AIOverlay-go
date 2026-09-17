@@ -50,6 +50,11 @@ func main() {
 	var ov platform.Overlay
 	if !*headless {
 		ov, err = platform.NewOverlay(cfg.Overlay, platform.Callbacks{
+			Command: func(name string) {
+				if _, e := server.StartCommand(name); e != nil && ov != nil {
+					ov.SetMeta(e.Error())
+				}
+			},
 			Capture: func() ([]byte, error) { return server.Capture() },
 			Analyze: func(image []byte) {
 				if _, e := server.StartImage(image); e != nil && ov != nil {
@@ -57,7 +62,7 @@ func main() {
 				}
 			},
 			Control: studio.Show,
-			Cancel:  server.ClearRun,
+			Cancel:  server.ClearPresentation,
 			Geometry: func(next domain.OverlayConfig) {
 				if err := a.SaveGeometry(next); err != nil {
 					log.Printf("geometry save: %v", err)
@@ -76,6 +81,21 @@ func main() {
 		}
 		return studio.Capture(platform.CaptureScreen)
 	}
+	if !*headless {
+		a.SetSessionCapture(func(callCtx context.Context) ([]byte, error) {
+			if err := callCtx.Err(); err != nil {
+				return nil, err
+			}
+			return studio.Capture(platform.CaptureScreen)
+		}, func(callCtx context.Context) ([]byte, error) {
+			if err := callCtx.Err(); err != nil {
+				return nil, err
+			}
+			return studio.CaptureBackground(platform.CaptureScreen)
+		})
+		a.SetSessionPublisher(server.PublishBackground)
+		a.StartSessions(ctx)
+	}
 	if ov != nil {
 		a.BeforeConfigSave(func(next domain.Config) (func(), error) {
 			old := a.GetConfig().Overlay
@@ -93,7 +113,7 @@ func main() {
 			server.HotkeyEditor = editor.SetHotkeyEditor
 		}
 		server.Diagnostics = func() any {
-			result := map[string]any{"vpn": a.VPNStatus(), "catalog": a.CatalogStatus()}
+			result := map[string]any{"vpn": a.VPNStatus(), "catalog": a.CatalogStatus(), "session": a.SessionStatus()}
 			if d, ok := ov.(interface{ Diagnostics() any }); ok {
 				result["overlay"] = d.Diagnostics()
 			}
@@ -137,64 +157,81 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	var lastID, lastText, lastMeta string
+	var lastAuto uint64
+	var manualFence time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			job := s.CurrentJob()
-			if job.Purpose == "connection_test" {
-				continue
-			}
-			if job.Cleared {
-				if job.ID == lastID && lastText == "" && lastMeta == "" {
-					continue
+			manual := job.ID != "" && job.Purpose != "connection_test"
+			if manual && job.Cleared {
+				if job.ID != lastID || lastText != "" || lastMeta != "" {
+					ov.Clear()
+					ov.Hide()
+					lastID = job.ID
+					lastText = ""
+					lastMeta = ""
 				}
-				ov.Clear()
-				ov.Hide()
-				lastID = job.ID
-				lastText = ""
-				lastMeta = ""
-				continue
-			}
-			if job.ID == "" {
-				continue
-			}
-			if job.ID != lastID {
-				lastID = job.ID
-				lastText = "Анализирую экран…"
-				lastMeta = "TRYING"
-				ov.SetText(lastText)
-				ov.SetMeta(lastMeta)
-				ov.Show()
-			}
-			text := job.Text
-			if job.Running && job.Phase == "preparing" {
-				text = "Захватываю экран…"
-			}
-			meta := "TRYING"
-			if job.Error != "" {
-				text = "Ошибка запроса\n" + job.Error
-				meta = "ERROR"
-			}
-			for _, ev := range job.Trace.Events {
-				if ev.Attempt != nil {
-					meta = ev.Attempt.ProviderID + " · " + ev.Attempt.ModelID
-					if job.Running {
-						meta = "TRYING · " + meta
+				if !job.Finished.IsZero() && job.Finished.After(manualFence) {
+					manualFence = job.Finished
+				}
+			} else if manual {
+				if job.ID != lastID {
+					lastID = job.ID
+					manualFence = job.Started
+					lastText = "Анализирую экран…"
+					lastMeta = "TRYING"
+					ov.SetText(lastText)
+					ov.SetMeta(lastMeta)
+					ov.Show()
+				}
+				text := job.Text
+				if job.Running && job.Phase == "preparing" {
+					text = "Захватываю экран…"
+				}
+				meta := "TRYING"
+				if job.Error != "" {
+					text = "Ошибка запроса\n" + job.Error
+					meta = "ERROR"
+				}
+				for _, ev := range job.Trace.Events {
+					if ev.Attempt != nil {
+						meta = ev.Attempt.ProviderID + " · " + ev.Attempt.ModelID
+						if job.Running {
+							meta = "TRYING · " + meta
+						}
 					}
 				}
+				if !job.Running && job.Trace.Winner != nil {
+					meta = job.Trace.Winner.ProviderID + " · " + job.Trace.Winner.ModelID
+				}
+				if text != lastText {
+					ov.SetText(text)
+					lastText = text
+				}
+				if meta != lastMeta {
+					ov.SetMeta(meta)
+					lastMeta = meta
+				}
+				if !job.Running && !job.Finished.IsZero() && job.Finished.After(manualFence) {
+					manualFence = job.Finished
+				}
 			}
-			if !job.Running && job.Trace.Winner != nil {
-				meta = job.Trace.Winner.ProviderID + " · " + job.Trace.Winner.ModelID
-			}
-			if text != lastText {
-				ov.SetText(text)
-				lastText = text
-			}
-			if meta != lastMeta {
-				ov.SetMeta(meta)
-				lastMeta = meta
+
+			auto := s.BackgroundPublication()
+			if auto.ID > lastAuto {
+				lastAuto = auto.ID
+				// A background turn that was triggered before/during the newest manual
+				// command is stale for presentation, even if its network callback arrived later.
+				if !job.Running && auto.TriggeredAt.After(manualFence) && auto.Text != "" {
+					lastText = auto.Text
+					lastMeta = "AUTO · " + auto.SourceID
+					ov.SetText(lastText)
+					ov.SetMeta(lastMeta)
+					ov.Show()
+				}
 			}
 		}
 	}

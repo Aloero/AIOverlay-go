@@ -123,6 +123,8 @@ const settingTargets=[
  {label:'Подключения и API-ключи',keywords:'provider opencode direct ключи',page:'providers',field:'providerSearch'},
  {label:'AI VPN',keywords:'vless hysteria sing-box сеть туннель',page:'settings',field:'vpnEnabled'},
  {label:'Горячая клавиша снимка',keywords:'hotkey screenshot capture',page:'settings',field:'hotkey_analyze'},
+ {label:'Показать / скрыть оверлей',keywords:'visibility hide overlay окно',page:'settings',field:'hotkey_visibility'},
+ {label:'Источники, контекст и постоянный фон',keywords:'audio звук контекст разговор source background',page:'pipelines',field:'openRuntimeEditor'},
  {label:'Проверить захват без AI',keywords:'screenshot preview снимок',page:'settings',field:'settingsCapture'},
  {label:'Шрифт оверлея',keywords:'размер текст',page:'settings',field:'fontSize'},
  {label:'Ghost Mode',keywords:'click through клики мышь',page:'settings',field:'ghost'},

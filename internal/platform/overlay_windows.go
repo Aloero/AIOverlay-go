@@ -84,7 +84,8 @@ const (
 	mfString              = 0x0000
 	trayOpenStudio        = 1001
 	trayToggleOverlay     = 1002
-	trayQuit              = 1003
+	trayPauseBackground   = 1003
+	trayQuit              = 1004
 	overlayHeaderHeight   = 36
 	overlayEdgeHit        = 8
 	overlaySettingsWidth  = 34
@@ -207,7 +208,7 @@ type winOverlay struct {
 	registered                            map[string]string
 	suspended                             atomic.Bool
 	suspendUntil                          atomic.Int64
-	userHidden                            bool
+	visibility                            visibilityState
 	configGhost                           bool
 	hotkeyError                           string
 	protection                            ProtectionStatus
@@ -333,7 +334,7 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 		o.toggleVisibility()
 		return 0
 	case 0x8004:
-		if o.userHidden {
+		if !o.visibility.mayShow() {
 			return 0
 		}
 		o.applyNative()
@@ -670,6 +671,7 @@ func (o *winOverlay) showTrayMenu() {
 	}
 	add(trayOpenStudio, "Открыть Studio")
 	add(trayToggleOverlay, "Показать / скрыть overlay")
+	add(trayPauseBackground, "Пауза / продолжить фон")
 	add(trayQuit, "Выход")
 	var pt point
 	pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -682,6 +684,10 @@ func (o *winOverlay) showTrayMenu() {
 		}
 	case trayToggleOverlay:
 		o.toggleVisibility()
+	case trayPauseBackground:
+		if o.cb.Command != nil {
+			go o.cb.Command("session_pause")
+		}
 	case trayQuit:
 		if o.cb.Quit != nil {
 			go o.cb.Quit()

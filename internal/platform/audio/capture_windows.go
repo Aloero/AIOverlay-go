@@ -24,15 +24,15 @@ var iidEnumerator = windows.GUID{Data1: 0xa95664d2, Data2: 0x9614, Data3: 0x4f35
 var iidClient = windows.GUID{Data1: 0x1cb9ad4c, Data2: 0xdbfa, Data3: 0x4c32, Data4: [8]byte{0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2}}
 var iidCapture = windows.GUID{Data1: 0xc8adbd64, Data2: 0xe71e, Data3: 0x48a0, Data4: [8]byte{0xa4, 0xde, 0x18, 0x5c, 0x39, 0x5c, 0xd3, 0x17}}
 
-func call(obj uintptr, index int, args ...uintptr) uintptr {
-	vt := *(*uintptr)(unsafe.Pointer(obj))
-	fn := *(*uintptr)(unsafe.Pointer(vt + uintptr(index)*unsafe.Sizeof(uintptr(0))))
-	a := append([]uintptr{obj}, args...)
+func call(obj unsafe.Pointer, index int, args ...uintptr) uintptr {
+	vt := *(*unsafe.Pointer)(obj)
+	fn := *(*uintptr)(unsafe.Add(vt, uintptr(index)*unsafe.Sizeof(uintptr(0))))
+	a := append([]uintptr{uintptr(obj)}, args...)
 	hr, _, _ := syscall.SyscallN(fn, a...)
 	return hr
 }
-func release(p uintptr) {
-	if p != 0 {
+func release(p unsafe.Pointer) {
+	if p != nil {
 		call(p, 2)
 	}
 }
@@ -42,14 +42,14 @@ func result(name string, hr uintptr) error {
 	}
 	return nil
 }
-func enumerator() (uintptr, error) {
-	var p uintptr
+func enumerator() (unsafe.Pointer, error) {
+	var p unsafe.Pointer
 	hr, _, _ := coCreate.Call(uintptr(unsafe.Pointer(&clsEnumerator)), 0, 23, uintptr(unsafe.Pointer(&iidEnumerator)), uintptr(unsafe.Pointer(&p)))
 	if err := result("enumerator", hr); err != nil {
-		return 0, err
+		return nil, err
 	}
-	if p == 0 {
-		return 0, fmt.Errorf("WASAPI enumerator unavailable")
+	if p == nil {
+		return nil, fmt.Errorf("WASAPI enumerator unavailable")
 	}
 	return p, nil
 }
@@ -62,7 +62,7 @@ func apartment() (func(), error) {
 	}
 	return func() { coUninit.Call(); runtime.UnlockOSThread() }, nil
 }
-func deviceID(p uintptr) (string, error) {
+func deviceID(p unsafe.Pointer) (string, error) {
 	var text *uint16
 	if e := result("device ID", call(p, 5, uintptr(unsafe.Pointer(&text)))); e != nil {
 		return "", e
@@ -73,9 +73,9 @@ func deviceID(p uintptr) (string, error) {
 	defer coFree.Call(uintptr(unsafe.Pointer(text)))
 	return windows.UTF16PtrToString(text), nil
 }
-func deviceName(p uintptr) string {
-	var store uintptr
-	if result("properties", call(p, 4, 0, uintptr(unsafe.Pointer(&store)))) != nil || store == 0 {
+func deviceName(p unsafe.Pointer) string {
+	var store unsafe.Pointer
+	if result("properties", call(p, 4, 0, uintptr(unsafe.Pointer(&store)))) != nil || store == nil {
 		return "Audio device"
 	}
 	defer release(store)
@@ -110,11 +110,11 @@ func Devices() ([]Device, error) {
 	defer release(en)
 	out := []Device{}
 	for flow, mode := range []string{"system", "microphone"} {
-		var collection uintptr
+		var collection unsafe.Pointer
 		if err := result("list endpoints", call(en, 3, uintptr(flow), 1, uintptr(unsafe.Pointer(&collection)))); err != nil {
 			return nil, err
 		}
-		if collection == 0 {
+		if collection == nil {
 			continue
 		}
 		var count uint32
@@ -124,8 +124,8 @@ func Devices() ([]Device, error) {
 			return nil, err
 		}
 		for i := uint32(0); i < count && i < 128; i++ {
-			var d uintptr
-			if result("endpoint", call(collection, 4, uintptr(i), uintptr(unsafe.Pointer(&d)))) != nil || d == 0 {
+			var d unsafe.Pointer
+			if result("endpoint", call(collection, 4, uintptr(i), uintptr(unsafe.Pointer(&d)))) != nil || d == nil {
 				continue
 			}
 			id, e := deviceID(d)
@@ -158,13 +158,17 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 		return err
 	}
 	defer release(en)
-	var device uintptr
+	var device unsafe.Pointer
 	if cfg.DeviceID == "" {
 		flow := uintptr(0)
 		if cfg.Mode == "microphone" {
 			flow = 1
 		}
-		err = result("default endpoint", call(en, 4, flow, 1, uintptr(unsafe.Pointer(&device))))
+		role := uintptr(1) // eMultimedia
+		if cfg.DeviceRole == "communications" {
+			role = 2
+		}
+		err = result("default endpoint", call(en, 4, flow, role, uintptr(unsafe.Pointer(&device))))
 	} else {
 		id, e := windows.UTF16PtrFromString(cfg.DeviceID)
 		if e != nil {
@@ -175,15 +179,15 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 	if err != nil {
 		return err
 	}
-	if device == 0 {
+	if device == nil {
 		return fmt.Errorf("audio device not available")
 	}
 	defer release(device)
-	var client uintptr
+	var client unsafe.Pointer
 	if err = result("activate", call(device, 3, uintptr(unsafe.Pointer(&iidClient)), 23, 0, uintptr(unsafe.Pointer(&client)))); err != nil {
 		return err
 	}
-	if client == 0 {
+	if client == nil {
 		return fmt.Errorf("audio client not available")
 	}
 	defer release(client)
@@ -211,11 +215,11 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 	if err = result("initialize shared capture", call(client, 3, 0, flags, 1000000, 0, uintptr(unsafe.Pointer(format)), 0)); err != nil {
 		return err
 	}
-	var capture uintptr
+	var capture unsafe.Pointer
 	if err = result("capture service", call(client, 14, uintptr(unsafe.Pointer(&iidCapture)), uintptr(unsafe.Pointer(&capture)))); err != nil {
 		return err
 	}
-	if capture == 0 {
+	if capture == nil {
 		return fmt.Errorf("audio capture service unavailable")
 	}
 	defer release(capture)
@@ -259,7 +263,8 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 					call(capture, 4, uintptr(count))
 					return fmt.Errorf("audio packet exceeds safe allocation")
 				}
-				if flag&2 == 0 {
+				flags := decodeWASAPIBufferFlags(flag)
+				if !flags.Silent {
 					if data == nil {
 						call(capture, 4, uintptr(count))
 						return fmt.Errorf("audio packet pointer missing")
@@ -269,12 +274,18 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 				if err = result("release buffer", call(capture, 4, uintptr(count))); err != nil {
 					return err
 				}
-				samples, e := MonoPCM(raw, int(count), f, flag&2 != 0)
+				samples, e := MonoPCM(raw, int(count), f, flags.Silent)
 				if e != nil {
 					return e
 				}
 				lastPacket = now
-				emit(Block{Samples: samples, Rate: f.Rate, At: now.Add(-time.Duration(count) * time.Second / time.Duration(f.Rate)), Discontinuity: flag&1 != 0})
+				emit(Block{
+					Samples:        samples,
+					Rate:           f.Rate,
+					At:             now.Add(-time.Duration(count) * time.Second / time.Duration(f.Rate)),
+					Discontinuity:  flags.Discontinuity,
+					TimestampError: flags.TimestampError,
+				})
 			}
 			if now.Sub(lastPacket) > 100*time.Millisecond {
 				emit(Block{Rate: f.Rate, At: now})

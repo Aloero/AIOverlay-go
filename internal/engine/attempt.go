@@ -29,6 +29,17 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	if ctx.Err() != nil {
 		return "", domain.OutcomeCancelled, ctx.Err()
 	}
+	var release func()
+	if r.opt.BeforeCall != nil {
+		var gateErr error
+		release, gateErr = r.opt.BeforeCall(ctx)
+		if gateErr != nil {
+			return "", providers.OutcomeOf(gateErr), gateErr
+		}
+		if release != nil {
+			defer release()
+		}
+	}
 	if err := r.admit(n, pool, m, key); err != nil {
 		emit(domain.TraceEvent{Kind: "budget_exhausted", NodeID: n.ID, BudgetScope: budgetScope(err), Message: err.Error()})
 		return "", domain.OutcomeCancelled, err
@@ -57,8 +68,7 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	actx, cancel := context.WithTimeout(ctx, respTimeout)
 	defer cancel()
 	values := PromptValues{InputText: r.input.Text, PreviousOutput: input.text, VisionText: input.vision, AudioText: input.transcript, ContextText: r.input.ContextText}
-	user := RenderPrompt(pool.Prompt.User, values)
-	system := RenderPrompt(pool.Prompt.System, values)
+	system, user := RenderRequestPrompt(pool.Prompt, values)
 	req := providers.Request{Audio: input.audio, Task: pool.Task, ProviderID: m.ProviderID, ModelID: m.ModelID, SystemPrompt: system, UserPrompt: user, ImageJPEG: input.image, TextInput: input.text, MaxOutputTokens: limits.MaxOutputTokens, ConnectTimeout: durationMS(limits.ConnectMS), FirstTokenTimeout: durationMS(limits.FirstTokenMS), ResponseTimeout: respTimeout, StreamIdleTimeout: durationMS(limits.IdleMS)}
 	if r.opt.OnPrompt != nil {
 		snapshot := BoundPromptSnapshot(PromptSnapshot{NodeID: r.redact.text(n.ID), ProviderID: r.redact.text(m.ProviderID), ModelID: r.redact.text(m.ModelID), ImageAttached: len(req.ImageJPEG) > 0, Values: PromptValues{InputText: r.redact.text(values.InputText), PreviousOutput: r.redact.text(values.PreviousOutput), VisionText: r.redact.text(values.VisionText), AudioText: r.redact.text(values.AudioText), ContextText: r.redact.text(values.ContextText)}})

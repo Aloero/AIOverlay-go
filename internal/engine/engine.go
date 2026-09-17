@@ -16,6 +16,7 @@ import (
 type Input struct {
 	Audio                                  *domain.AudioClip
 	AudioText, ContextText, VisionText     string
+	ContextIncomplete                      bool
 	EntryNodeID, Intent, SourceID, EventID string
 
 	ImageJPEG []byte
@@ -24,14 +25,15 @@ type Input struct {
 
 type RunOptions struct {
 	Capture    func(context.Context) ([]byte, error)
-	BeforeCall func() error
+	BeforeCall func(context.Context) (func(), error)
 
-	OnPrompt func(PromptSnapshot)
-	OnStart  func(domain.ExecutionTrace)
-	Purpose  string
-	OnDelta  func(string)
-	OnReset  func()
-	OnTrace  func(domain.TraceEvent)
+	OnPrompt      func(PromptSnapshot)
+	OnObservation func(Observation)
+	OnStart       func(domain.ExecutionTrace)
+	Purpose       string
+	OnDelta       func(string)
+	OnReset       func()
+	OnTrace       func(domain.TraceEvent)
 }
 
 type Result struct {
@@ -90,6 +92,9 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 		opt.OnStart(domain.CloneTrace(t))
 	}
 	r := newRunner(e, p, input, opt, &t)
+	if input.ContextIncomplete {
+		r.emit(domain.TraceEvent{Kind: "context_incomplete", NodeID: input.EntryNodeID, Message: "A manual command reached its transcript wait limit; newer pending speech was not added to this immutable input snapshot."})
+	}
 	entry := p.EntryNodeID
 	if input.EntryNodeID != "" {
 		entry = input.EntryNodeID
@@ -106,7 +111,11 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 	}
 	finishTrace(&t, err, terminalCause, r.lastNode, r.lastOutcome, r.redact)
 	if err == nil && r.waited {
-		t.Outcome = domain.OutcomeWait
+		if input.Intent == string(domain.IntentContext) {
+			t.Outcome = domain.OutcomeContextOnly
+		} else {
+			t.Outcome = domain.OutcomeNoAction
+		}
 		t.Winner = nil
 	}
 	t.FinishedAt = time.Now()

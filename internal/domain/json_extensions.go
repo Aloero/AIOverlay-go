@@ -483,3 +483,35 @@ func (v *SessionBudget) UnmarshalJSON(raw []byte) error {
 	v.Extra = extra
 	return nil
 }
+
+func (v CommandConfig) MarshalJSON() ([]byte, error) {
+	type plain CommandConfig
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *CommandConfig) UnmarshalJSON(raw []byte) error {
+	type plain CommandConfig
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = CommandConfig(p)
+	v.Extra = extra
+	return nil
+}
+
+func (v ContextConfig) MarshalJSON() ([]byte, error) {
+	type plain ContextConfig
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *ContextConfig) UnmarshalJSON(raw []byte) error {
+	type plain ContextConfig
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = ContextConfig(p)
+	v.Extra = extra
+	return nil
+}

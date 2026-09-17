@@ -17,6 +17,7 @@ import (
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
 	"aioverlay/internal/providers"
+	"aioverlay/internal/session"
 	tracestore "aioverlay/internal/trace"
 	"aioverlay/internal/tunnel"
 )
@@ -33,6 +34,7 @@ type App struct {
 	tunnel            *tunnel.Manager
 	engine            *engine.Engine
 	traces            *tracestore.Store
+	sessions          *session.Manager
 	onConfigChanged   func(domain.Config)
 	beforeConfigSave  func(domain.Config) (func(), error)
 	maintenanceCancel context.CancelFunc
@@ -61,6 +63,9 @@ func New(configPath, catalogPath string) (*App, error) {
 		eng.ImportStatistics(cfg.RuntimeStatistics)
 	}
 	a := &App{recentModels: append([]string(nil), cfg.ControlCenter.RecentModels...), store: store, cfg: cfg, catalog: cat, registry: reg, tunnel: tun, engine: eng, traces: traces}
+	a.sessions = session.NewManager(func(ctx context.Context, pipelineID string, input engine.Input, opt engine.RunOptions) (engine.Result, error) {
+		return a.Run(ctx, pipelineID, input, opt)
+	})
 	a.startMaintenance()
 	return a, nil
 }
@@ -75,6 +80,9 @@ func (a *App) OnConfigChanged(fn func(domain.Config)) {
 	a.mu.Unlock()
 }
 func (a *App) Close() {
+	if a.sessions != nil {
+		a.sessions.Close()
+	}
 	if a.maintenanceCancel != nil {
 		a.maintenanceCancel()
 		<-a.maintenanceDone
@@ -105,6 +113,11 @@ func (a *App) GetConfig() domain.Config {
 	return cloneConfig(a.cfg)
 }
 func (a *App) SaveConfig(cfg domain.Config) error {
+	var thaw func()
+	if a.sessions != nil {
+		thaw = a.sessions.FreezeTurns()
+		defer thaw()
+	}
 	if !a.operation.TryLock() {
 		return fmt.Errorf("analysis is running; stop it before saving settings")
 	}
@@ -178,6 +191,9 @@ func (a *App) saveConfigLocked(cfg domain.Config) error {
 		oldReg.Close()
 		oldTun.Close()
 	}
+	if a.sessions != nil {
+		a.sessions.Apply(cfg)
+	}
 	if callback != nil {
 		callback(cloneConfig(cfg))
 	}
@@ -212,6 +228,9 @@ func (a *App) Catalog(q control.CatalogQuery) (control.CatalogPage, error) {
 			continue
 		}
 		if q.Vision && !m.HasImageInput() {
+			continue
+		}
+		if q.Audio && !m.HasAudioInput() {
 			continue
 		}
 		if q.Free && !m.Free {
@@ -284,6 +303,10 @@ func (a *App) Run(ctx context.Context, pipelineID string, input engine.Input, op
 		pipelineID = a.cfg.ActivePipelineID
 	}
 	a.mu.RUnlock()
+	if opt.BeforeCall == nil && a.sessions != nil {
+		high := opt.Purpose != "background"
+		opt.BeforeCall = func(callCtx context.Context) (func(), error) { return a.sessions.Governor().Acquire(callCtx, high) }
+	}
 	result, err := eng.Execute(ctx, pipelineID, input, opt)
 	a.recordRecentUsage(result.Trace)
 	return result, err

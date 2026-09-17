@@ -30,6 +30,7 @@ type Job struct {
 	Error           string                `json:"error,omitempty"`
 	Trace           domain.ExecutionTrace `json:"trace"`
 	Started         time.Time             `json:"started"`
+	Finished        time.Time             `json:"finished,omitempty"`
 	DurationMS      int64                 `json:"duration_ms"`
 }
 
@@ -150,6 +151,7 @@ func (j *JobManager) startTaskPurpose(parent context.Context, pipeline, purpose 
 			return
 		}
 		j.job.Running = false
+		j.job.Finished = time.Now()
 		j.job.Phase = "finished"
 		j.job.Trace = domain.CloneTrace(result.Trace)
 		j.job.DurationMS = time.Since(j.job.Started).Milliseconds()
@@ -274,7 +276,7 @@ func (s *Server) StartImage(image []byte) (string, error) {
 }
 func (s *Server) CurrentJob() Job { return s.jobs.Snapshot() }
 
-func (s *Server) StartScreen() (string, error) {
+func (s *Server) StartScreenLegacy() (string, error) {
 	b, ok := s.backend.(liveBackend)
 	if !ok {
 		return "", fmt.Errorf("live execution unavailable")
@@ -288,3 +290,5 @@ func (s *Server) StartScreen() (string, error) {
 	})
 }
 func (s *Server) ClearRun() { s.jobs.Clear() }
+
+func (s *Server) StartScreen() (string, error) { return s.StartCommand("analyze") }

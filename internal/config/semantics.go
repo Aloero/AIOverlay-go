@@ -146,7 +146,7 @@ func validateEdge(e domain.Edge) error {
 		return fmt.Errorf("invalid transition limits or empty outcomes")
 	}
 	for _, o := range e.On {
-		if !enum(o, domain.OutcomeSuccess, domain.OutcomeAnyError, domain.OutcomeAuthFailed, domain.OutcomeRateLimited, domain.OutcomeQuotaExceeded, domain.OutcomeTimeout, domain.OutcomeFirstTokenTimeout, domain.OutcomeStreamIdleTimeout, domain.OutcomeNetworkError, domain.OutcomeModelUnavailable, domain.OutcomeRegionRestricted, domain.OutcomeUnsupportedModality, domain.OutcomeProviderUnavailable, domain.OutcomeInvalidResponse, domain.OutcomeValidationFailed, domain.OutcomeCancelled, domain.OutcomeWait, domain.OutcomeRespond, domain.OutcomeNeedScreen) {
+		if !enum(o, domain.OutcomeSuccess, domain.OutcomeAnyError, domain.OutcomeAuthFailed, domain.OutcomeRateLimited, domain.OutcomeQuotaExceeded, domain.OutcomeTimeout, domain.OutcomeFirstTokenTimeout, domain.OutcomeStreamIdleTimeout, domain.OutcomeNetworkError, domain.OutcomeModelUnavailable, domain.OutcomeRegionRestricted, domain.OutcomeUnsupportedModality, domain.OutcomeProviderUnavailable, domain.OutcomeInvalidResponse, domain.OutcomeValidationFailed, domain.OutcomeCancelled, domain.OutcomeWait, domain.OutcomeNoAction, domain.OutcomeRespond, domain.OutcomeNeedScreen, domain.OutcomeContextOnly) {
 			return fmt.Errorf("unknown transition outcome")
 		}
 	}
@@ -156,7 +156,7 @@ func validatePoolLimits(p *domain.ModelPoolConfig) error {
 	if !enum(p.Task, "", "generate", "transcribe") {
 		return fmt.Errorf("unknown model task")
 	}
-	if !enum(p.ResultName, "", "audio.text", "vision.text") {
+	if !enum(p.ResultName, "", "audio.text", "vision.text", "decision") {
 		return fmt.Errorf("unknown output binding")
 	}
 

@@ -29,18 +29,27 @@ func parseDecision(text string) (decision, error) {
 		return d, fmt.Errorf("decision requires JSON with action, optional text and transcript")
 	}
 	switch d.Action {
-	case "wait", "respond", "need_screen":
+	case "wait":
+		d.Action = "no_action"
+		return d, nil
+	case "no_action", "respond", "need_screen":
 		return d, nil
 	}
-	return d, fmt.Errorf("decision action must be wait, respond or need_screen")
+	return d, fmt.Errorf("decision action must be no_action, respond or need_screen")
 }
 func (r *runner) observe(kind, text string) {
 	if text == "" {
 		return
 	}
 	text = r.redact.text(text)
+	o := Observation{Kind: kind, Text: clipText(text, 32000)}
 	if len(r.observations) < 100 {
-		r.observations = append(r.observations, Observation{kind, clipText(text, 32000)})
+		r.observations = append(r.observations, o)
+	}
+	if r.opt.OnObservation != nil {
+		r.callbackMu.Lock()
+		r.opt.OnObservation(o)
+		r.callbackMu.Unlock()
 	}
 }
 func clipText(s string, n int) string {
@@ -81,7 +90,7 @@ func (r *runner) decide(ctx context.Context, n domain.Node, v nodeValue) (nodeVa
 		return v, domain.OutcomeRespond, nil
 	}
 	if r.input.Intent == "context" {
-		return v, domain.OutcomeWait, nil
+		return v, domain.OutcomeContextOnly, nil
 	}
 	raw, _, err := r.runPool(context.WithValue(ctx, silentKey{}, true), n, v)
 	if err != nil {
@@ -96,9 +105,14 @@ func (r *runner) decide(ctx context.Context, n domain.Node, v nodeValue) (nodeVa
 		r.observe("audio.text", d.Transcript)
 	}
 	o := domain.Outcome(d.Action)
-	if o == domain.OutcomeRespond && d.Text != "" {
-		v.text = d.Text
-		v.hasOutput = true
+	if o == domain.OutcomeRespond {
+		if d.Text != "" {
+			v.text = d.Text
+			v.hasOutput = true
+		} else {
+			v.text = ""
+			v.hasOutput = false
+		}
 	}
 	r.emit(domain.TraceEvent{Kind: "decision", NodeID: n.ID, Outcome: o, Message: "Structured model decision"})
 	return v, o, nil

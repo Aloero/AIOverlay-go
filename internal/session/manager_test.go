@@ -1,0 +1,190 @@
+package session
+
+import (
+	"aioverlay/internal/domain"
+	"aioverlay/internal/engine"
+	paudio "aioverlay/internal/platform/audio"
+	"context"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func managerConfig() domain.Config {
+	return domain.Config{ActivePipelineID: "p", Pipelines: []domain.Pipeline{{
+		ID: "p", Enabled: true, EntryNodeID: "screen", OutputNodeID: "output",
+		Budget:        domain.ExecutionBudget{MaxParallelCalls: 2, MaxWallTimeMS: 10000},
+		Commands:      []domain.CommandConfig{{ID: "answer", Action: "analyze", EntryNodeID: "screen", Intent: domain.IntentRespond, CaptureScreen: true}},
+		Contexts:      []domain.ContextConfig{{ID: "c", Name: "c", Enabled: true, MaxAgeS: 60, MaxEntries: 10, MaxChars: 1000, IncludeTranscript: true, IncludeAnswers: true, KeepLatestScreen: true, ScreenMaxAgeS: 60}},
+		Sources:       []domain.EventSource{{ID: "a", Name: "a", Kind: domain.SourceAudio, Enabled: true, AutoStart: true, EntryNodeID: "audio", Intent: domain.IntentContext, ContextID: "c", Audio: &domain.AudioSourceConfig{Mode: "system", SegmentMS: 1000, SilenceMS: 200, MinimumMS: 80, Threshold: .01}}},
+		SessionBudget: &domain.SessionBudget{CallsPerMinute: 60, QueueCapacity: 2, MaxParallelCalls: 2, EndToEndMS: 10000},
+	}}}
+}
+
+func TestPrepareLegacyStyleCommandHasNoContextUnlessSelected(t *testing.T) {
+	m := NewManager(nil)
+	cfg := managerConfig()
+	cfg.Pipelines[0].Commands[0].ContextID = ""
+	m.cfg = cfg
+	m.capture = func(context.Context) ([]byte, error) { return []byte("screen"), nil }
+	p, e := m.PrepareCommand(context.Background(), "analyze")
+	if e != nil || string(p.Input.ImageJPEG) != "screen" || p.Input.ContextText != "" {
+		t.Fatalf("%+v %v", p, e)
+	}
+}
+func TestContextCommandDoesNotRunModel(t *testing.T) {
+	m := NewManager(nil)
+	cfg := managerConfig()
+	cfg.Pipelines[0].Commands = append(cfg.Pipelines[0].Commands, domain.CommandConfig{ID: "ctx", Action: "screen_context", EntryNodeID: "screen", Intent: domain.IntentContext, ContextID: "c", CaptureScreen: true})
+	m.cfg = cfg
+	m.capture = func(context.Context) ([]byte, error) { return []byte("screen"), nil }
+	p, e := m.PrepareCommand(context.Background(), "screen_context")
+	if e != nil || !p.SkipRun {
+		t.Fatalf("%+v %v", p, e)
+	}
+	snap := m.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now())
+	if string(snap.ImageJPEG) != "screen" {
+		t.Fatal("screen not stored")
+	}
+}
+func TestAudioCaptureDoesNotBlockOnSlowExecutor(t *testing.T) {
+	cfg := managerConfig()
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	m := NewManager(func(ctx context.Context, _ string, _ engine.Input, _ engine.RunOptions) (engine.Result, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return engine.Result{}, nil
+	})
+	m.SetAudioCapture(func(ctx context.Context, c domain.AudioSourceConfig, emit func(paudio.Block)) error {
+		samples := make([]int16, 1600)
+		for i := range samples {
+			samples[i] = 10000
+		}
+		for i := 0; i < 5; i++ {
+			emit(paudio.Block{Samples: samples, Rate: 16000, At: time.Now().Add(time.Duration(i) * 100 * time.Millisecond)})
+		}
+		emit(paudio.Block{Rate: 16000, At: time.Now().Add(time.Second)})
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	m.Start(ctx, cfg)
+	defer func() { close(release); cancel(); m.Close() }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background turn did not start")
+	}
+	if m.Status()["sources"] == nil {
+		t.Fatal("status missing")
+	}
+}
+
+func TestManualCommandWaitsOnlyForPendingTranscriptAtCutoff(t *testing.T) {
+	m := NewManager(nil)
+	cfg := managerConfig()
+	cmd := &cfg.Pipelines[0].Commands[0]
+	cmd.ContextID = "c"
+	cmd.WaitForTranscriptMS = 200
+	m.cfg = cfg
+	m.capture = func(context.Context) ([]byte, error) { return []byte("screen"), nil }
+	ctxCfg := cfg.Pipelines[0].Contexts[0]
+	gen := m.contexts.Generation("p", "c")
+	start := time.Now().Add(-time.Second)
+	m.addPending(pendingSegment{pipelineID: "p", contextID: "c", eventID: "seg", generation: gen, start: start, end: start.Add(2 * time.Second)})
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		m.contexts.Append(ctxCfg, "p", gen, ContextEntry{ID: "seg", Kind: "transcript", Text: "question before hotkey", At: start, Start: start, End: start.Add(2 * time.Second), SourceID: "audio"})
+		m.finishPending("seg")
+	}()
+	prepared, err := m.PrepareCommand(context.Background(), "analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Input.ContextIncomplete {
+		t.Fatal("completed transcript marked incomplete")
+	}
+	if prepared.Input.ContextText != "[transcript/audio] question before hotkey" {
+		t.Fatalf("context=%q", prepared.Input.ContextText)
+	}
+}
+func TestManualCommandTranscriptWaitIsBounded(t *testing.T) {
+	m := NewManager(nil)
+	cfg := managerConfig()
+	cfg.Pipelines[0].Commands[0].ContextID = "c"
+	cfg.Pipelines[0].Commands[0].WaitForTranscriptMS = 20
+	m.cfg = cfg
+	m.capture = func(context.Context) ([]byte, error) { return []byte("screen"), nil }
+	gen := m.contexts.Generation("p", "c")
+	m.addPending(pendingSegment{pipelineID: "p", contextID: "c", eventID: "stuck", generation: gen, start: time.Now().Add(-time.Second)})
+	started := time.Now()
+	prepared, err := m.PrepareCommand(context.Background(), "analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prepared.Input.ContextIncomplete {
+		t.Fatal("timeout not disclosed")
+	}
+	if time.Since(started) > 200*time.Millisecond {
+		t.Fatal("manual wait was not bounded")
+	}
+}
+
+func TestLegacyPipelineDoesNotStartAudioCapture(t *testing.T) {
+	m := NewManager(nil)
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources = nil
+	var calls atomic.Int32
+	m.SetAudioCapture(func(context.Context, domain.AudioSourceConfig, func(paudio.Block)) error { calls.Add(1); return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	m.Start(ctx, cfg)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	m.Close()
+	if calls.Load() != 0 {
+		t.Fatalf("audio capture started %d times", calls.Load())
+	}
+}
+
+func TestAudioPreviewRefusesConcurrentLiveCapture(t *testing.T) {
+	m := NewManager(nil)
+	m.sources["a"] = &sourceRuntime{cfg: domain.EventSource{ID: "a", Kind: domain.SourceAudio}}
+	_, err := m.PreviewAudio(context.Background(), domain.AudioSourceConfig{Mode: "system"}, time.Second)
+	if err == nil {
+		t.Fatal("preview opened over live audio source")
+	}
+}
+
+func TestAudioTimestampErrorRecordsContextGap(t *testing.T) {
+	m := NewManager(nil)
+	cfg := managerConfig()
+	emitted := make(chan struct{})
+	m.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, emit func(paudio.Block)) error {
+		emit(paudio.Block{Rate: 16000, At: time.Now(), TimestampError: true})
+		close(emitted)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	m.Start(ctx, cfg)
+	defer func() { cancel(); m.Close() }()
+	select {
+	case <-emitted:
+	case <-time.After(time.Second):
+		t.Fatal("audio source did not emit timestamp error")
+	}
+	snap := m.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+	if len(snap.Entries) != 1 || !snap.Entries[0].Gap {
+		t.Fatalf("timestamp error gap missing: %+v", snap.Entries)
+	}
+	if snap.Text != "[context gap]" {
+		t.Fatalf("context=%q", snap.Text)
+	}
+}

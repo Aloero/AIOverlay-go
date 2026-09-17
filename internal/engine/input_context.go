@@ -2,19 +2,26 @@ package engine
 
 import (
 	"aioverlay/internal/domain"
+	"sort"
 	"strings"
 )
 
-// PoolInput describes possible screenshot paths without executing a graph.
-// A retained original image is not the same thing as a required model payload:
-// after a successful model stage, text-only models can use previous.output.
+// PoolInput is a conservative graph-derived description used by Studio. It is
+// not a captured payload and never starts a source or consumes model ordering.
 type PoolInput struct {
-	Known         bool   `json:"known"`
-	Reachable     bool   `json:"reachable"`
-	ImageRequired bool   `json:"image_required"`
-	TextAvailable bool   `json:"text_available"`
-	Mixed         bool   `json:"mixed"`
-	Source        string `json:"source"`
+	Known         bool     `json:"known"`
+	Reachable     bool     `json:"reachable"`
+	ImageRequired bool     `json:"image_required"`
+	AudioRequired bool     `json:"audio_required"`
+	TextAvailable bool     `json:"text_available"`
+	Mixed         bool     `json:"mixed"`
+	Source        string   `json:"source"`
+	Sources       []string `json:"sources,omitempty"`
+}
+type inputState struct {
+	id                            string
+	image, audio, text, hasOutput bool
+	source                        string
 }
 
 func DescribePoolInput(p domain.Pipeline, nodeID string) PoolInput {
@@ -36,13 +43,33 @@ func DescribePoolInput(p domain.Pipeline, nodeID string) PoolInput {
 			return PoolInput{}
 		}
 	}
-	type step struct {
-		id   string
-		text bool
+	starts := []inputState{}
+	if p.EntryNodeID != "" {
+		starts = append(starts, inputState{id: p.EntryNodeID, image: true, source: "legacy/manual screen"})
 	}
-	queue := []step{{p.EntryNodeID, false}}
-	seen := map[step]bool{}
-	image, text := false, false
+	for _, c := range p.Commands {
+		starts = append(starts, inputState{id: c.EntryNodeID, image: c.CaptureScreen, text: c.ContextID != "", source: "command:" + c.Action})
+	}
+	for _, src := range p.Sources {
+		if !src.Enabled {
+			continue
+		}
+		st := inputState{id: src.EntryNodeID, text: src.ContextID != "", source: "source:" + src.ID}
+		if src.Kind == domain.SourceAudio {
+			st.audio = true
+		}
+		if src.Kind == domain.SourceScreenTimer {
+			st.image = true
+		}
+		starts = append(starts, st)
+	}
+	if len(starts) == 0 {
+		return PoolInput{Known: true}
+	}
+	seen := map[inputState]bool{}
+	queue := starts
+	image, audio, text := false, false, false
+	sources := map[string]bool{}
 	for len(queue) > 0 {
 		st := queue[0]
 		queue = queue[1:]
@@ -50,39 +77,65 @@ func DescribePoolInput(p domain.Pipeline, nodeID string) PoolInput {
 			continue
 		}
 		seen[st] = true
-		node, ok := findNode(p, st.id)
-		if !ok {
+		node, found := findNode(p, st.id)
+		if !found {
 			continue
 		}
 		if st.id == rootID {
-			if st.text {
-				text = true
-			} else {
-				image = true
-			}
-		}
-		if node.Type == domain.NodeOutput {
+			image = image || (st.image && !st.hasOutput)
+			audio = audio || st.audio
+			text = text || st.text || st.hasOutput
+			sources[st.source] = true
 			continue
+		}
+		success := st
+		switch node.Type {
+		case domain.NodeCapture:
+			success.image = true
+		case domain.NodeContext:
+			success.text = true
+		case domain.NodeModelPool, domain.NodeDecision:
+			success.text = true
+			success.hasOutput = true
+			if node.ModelPool != nil && node.ModelPool.Task == "transcribe" {
+				success.audio = false
+			}
 		}
 		for _, ed := range p.Edges {
 			if ed.From != st.id || ed.MaxVisits <= 0 {
 				continue
 			}
 			for _, o := range ed.On {
-				nextText := st.text || node.Type == domain.NodeModelPool && o == domain.OutcomeSuccess
-				queue = append(queue, step{ed.To, nextText})
+				q := success
+				if o == domain.OutcomeAnyError || domain.IsErrorOutcome(o) {
+					q = st
+				}
+				q.id = ed.To
+				queue = append(queue, q)
 			}
 		}
 	}
-	out := PoolInput{Known: true, Reachable: image || text, ImageRequired: image, TextAvailable: text, Mixed: image && text, Source: "screen"}
-	if text {
-		out.Source = "previous.output"
+	out := PoolInput{Known: true, Reachable: image || audio || text, ImageRequired: image, AudioRequired: audio, TextAvailable: text, Mixed: (boolInt(image) + boolInt(audio) + boolInt(text)) > 1}
+	for src := range sources {
+		out.Sources = append(out.Sources, src)
 	}
-	if out.Reachable && pool.VisionPreprocessor != nil {
+	sort.Strings(out.Sources)
+	out.Source = strings.Join(out.Sources, ", ")
+	if pool.Task == "transcribe" {
+		out.AudioRequired = true
+		out.ImageRequired = false
+	}
+	if out.Reachable && pool.VisionPreprocessor != nil && out.ImageRequired {
 		out.ImageRequired = false
 		out.TextAvailable = true
-		out.Mixed = false
+		out.Mixed = out.AudioRequired
 		out.Source = nodeID + "/vision"
 	}
 	return out
+}
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }

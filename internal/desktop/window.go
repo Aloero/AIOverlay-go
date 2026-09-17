@@ -20,4 +20,5 @@ type Window interface {
 	Close()
 	SetStealth(bool)
 	Capture(func() ([]byte, error)) ([]byte, error)
+	CaptureBackground(func() ([]byte, error)) ([]byte, error)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -101,11 +102,6 @@ func (r *runner) admit(n domain.Node, pool domain.ModelPoolConfig, m domain.Mode
 	if _, used := r.providersUsed[m.ProviderID]; !used && r.pipeline.Budget.MaxProviders > 0 && len(r.providersUsed) >= r.pipeline.Budget.MaxProviders {
 		return &BudgetError{Scope: "providers"}
 	}
-	if r.opt.BeforeCall != nil {
-		if err := r.opt.BeforeCall(); err != nil {
-			return err
-		}
-	}
 	r.providersUsed[m.ProviderID] = struct{}{}
 	keys[key.ID] = true
 	r.calls.Add(1)
@@ -149,17 +145,20 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 		case domain.NodeContext:
 			out = value
 			if r.input.ContextText != "" {
-				out.text = r.input.ContextText + "\n" + value.text
+				out.text = strings.TrimSpace(r.input.ContextText + "\n" + value.text)
 			}
-			if r.input.Intent == "context" {
+			if r.input.Intent == string(domain.IntentContext) {
 				r.waited = true
+				r.lastOutcome = domain.OutcomeContextOnly
+				r.emit(domain.TraceEvent{Kind: "node_end", NodeID: n.ID, Outcome: domain.OutcomeContextOnly, Message: "Context updated without requesting an answer"})
 				return "", nil
 			}
 		case domain.NodeDecision:
 			out, outcome, err = r.decide(ctx, n, value)
-			if err == nil && outcome == domain.OutcomeWait {
+			if err == nil && (outcome == domain.OutcomeNoAction || outcome == domain.OutcomeWait || outcome == domain.OutcomeContextOnly) {
 				r.waited = true
-				r.emit(domain.TraceEvent{Kind: "decision", NodeID: n.ID, Outcome: domain.OutcomeWait, Message: "Continue observing; no answer requested"})
+				r.lastOutcome = outcome
+				r.emit(domain.TraceEvent{Kind: "decision", NodeID: n.ID, Outcome: outcome, Message: "Continue observing; no answer requested"})
 				return "", nil
 			}
 		case domain.NodeModelPool:
@@ -168,9 +167,12 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 			out = value
 			outcome, err = runValidator(n.Validator, value.text)
 		case domain.NodeOutput:
-			if r.input.Intent == "context" {
+			if r.input.Intent == string(domain.IntentContext) {
 				r.waited = true
 				return "", nil
+			}
+			if !value.hasOutput && strings.TrimSpace(value.text) == "" {
+				return "", fmt.Errorf("output reached without an accepted answer")
 			}
 			r.published = true
 			return value.text, nil

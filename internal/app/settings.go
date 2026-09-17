@@ -8,6 +8,11 @@ import (
 // Switching a saved pipeline must not tear down warm transports or reset model
 // rotation and credential health. The runner receives the selected ID explicitly.
 func (a *App) SetActivePipeline(id string) error {
+	var thaw func()
+	if a.sessions != nil {
+		thaw = a.sessions.FreezeTurns()
+		defer thaw()
+	}
 	if !a.operation.TryLock() {
 		return fmt.Errorf("analysis is running; stop it before changing the active pipeline")
 	}
@@ -33,12 +38,20 @@ func (a *App) SetActivePipeline(id string) error {
 	a.mu.Lock()
 	a.cfg = cfg
 	a.mu.Unlock()
+	if a.sessions != nil {
+		a.sessions.Apply(cfg)
+	}
 	return nil
 }
 
 // Provider-only changes are atomic against other saves and do not commit an
 // incomplete graph draft submitted by the UI.
 func (a *App) SaveProvider(p domain.ProviderConfig) error {
+	var thaw func()
+	if a.sessions != nil {
+		thaw = a.sessions.FreezeTurns()
+		defer thaw()
+	}
 	if !a.operation.TryLock() {
 		return fmt.Errorf("analysis is running; stop it before saving a connection")
 	}

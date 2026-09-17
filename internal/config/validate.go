@@ -124,6 +124,9 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 			if n.ModelPool == nil {
 				return fmt.Errorf("pipeline %s model pool node %s has no config", p.ID, n.ID)
 			}
+			if n.Type == domain.NodeDecision && n.ModelPool.Task == "transcribe" {
+				return fmt.Errorf("pipeline %s decision node %s cannot use transcription task", p.ID, n.ID)
+			}
 			if err := validatePool(p.ID, n.ID, n.ModelPool, providers); err != nil {
 				return err
 			}
@@ -165,6 +168,19 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 	}
 	if !reachable(p) {
 		return fmt.Errorf("pipeline %s output is unreachable", p.ID)
+	}
+	for _, c := range p.Commands {
+		if !entryHasTerminal(p, nodes, c.EntryNodeID, c.Intent) {
+			return fmt.Errorf("pipeline %s command %s has no valid terminal path", p.ID, c.ID)
+		}
+	}
+	for _, src := range p.Sources {
+		if !src.Enabled {
+			continue
+		}
+		if !entryHasTerminal(p, nodes, src.EntryNodeID, src.Intent) {
+			return fmt.Errorf("pipeline %s source %s has no valid terminal path", p.ID, src.ID)
+		}
 	}
 	return nil
 }
@@ -232,4 +248,49 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 		}
 	}
 	return nil
+}
+
+func entryHasTerminal(p domain.Pipeline, nodes map[string]domain.Node, entry string, intent domain.CommandIntent) bool {
+	type state struct {
+		id                string
+		decision, context bool
+	}
+	seen := map[state]bool{}
+	queue := []state{{id: entry}}
+	for len(queue) > 0 {
+		st := queue[0]
+		queue = queue[1:]
+		if seen[st] {
+			continue
+		}
+		seen[st] = true
+		n, ok := nodes[st.id]
+		if !ok {
+			continue
+		}
+		st.decision = st.decision || n.Type == domain.NodeDecision
+		st.context = st.context || n.Type == domain.NodeContext
+		switch intent {
+		case domain.IntentContext:
+			if st.context {
+				return true
+			}
+		case domain.IntentDecide:
+			if st.decision && (n.Type == domain.NodeDecision || n.Type == domain.NodeOutput) {
+				return true
+			}
+		default:
+			if n.Type == domain.NodeOutput {
+				return true
+			}
+		}
+		for _, e := range p.Edges {
+			if e.From == st.id && e.MaxVisits > 0 {
+				next := st
+				next.id = e.To
+				queue = append(queue, next)
+			}
+		}
+	}
+	return false
 }

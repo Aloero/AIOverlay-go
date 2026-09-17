@@ -27,7 +27,7 @@ func (s *Segmenter) Push(b Block) []Segment {
 	if b.Rate < 8000 || b.Rate > 192000 {
 		return out
 	}
-	if s.rate != b.Rate || b.Discontinuity {
+	if s.rate != b.Rate || b.Discontinuity || b.TimestampError {
 		s.Reset()
 		s.rate = b.Rate
 	}
@@ -82,7 +82,7 @@ func (s *Segmenter) flush() (Segment, bool) {
 	seg := Segment{Started: s.started, Ended: s.started.Add(time.Duration(n) * time.Second / time.Duration(s.rate))}
 	ok := n >= s.rate*s.Config.MinimumMS/1000 && !s.started.IsZero()
 	if ok {
-		seg.Clip = domain.AudioClip{WAV: WAV(s.pending, s.rate), DurationMS: n * 1000 / s.rate, SampleRate: s.rate, Channels: 1}
+		seg.Clip = domain.AudioClip{PCM16: append([]int16(nil), s.pending...), DurationMS: n * 1000 / s.rate, SampleRate: s.rate, Channels: 1, StartedAt: seg.Started, EndedAt: seg.Ended, Final: true}
 	}
 	s.pending = nil
 	s.started = time.Time{}

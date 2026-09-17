@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
+	"aioverlay/internal/session"
 	webassets "aioverlay/web"
 )
 
@@ -24,6 +26,7 @@ type CatalogQuery struct {
 	Search         string   `json:"search"`
 	Provider       string   `json:"provider"`
 	Vision         bool     `json:"vision"`
+	Audio          bool     `json:"audio"`
 	Free           bool     `json:"free"`
 	Reasoning      bool     `json:"reasoning"`
 	Ready          bool     `json:"ready"`
@@ -84,15 +87,18 @@ type Backend interface {
 }
 
 type Server struct {
-	ctx          context.Context
-	jobs         JobManager
-	Capture      func() ([]byte, error)
-	backend      Backend
-	http         *http.Server
-	core         http.Handler
-	token        string
-	HotkeyEditor func(bool)
-	Diagnostics  func() any
+	ctx               context.Context
+	jobs              JobManager
+	backgroundMu      sync.Mutex
+	background        session.Publication
+	backgroundClearAt time.Time
+	Capture           func() ([]byte, error)
+	backend           Backend
+	http              *http.Server
+	core              http.Handler
+	token             string
+	HotkeyEditor      func(bool)
+	Diagnostics       func() any
 }
 
 func New(addr string, b Backend) *Server {
@@ -125,6 +131,12 @@ func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ct
 
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/state", s.handleStudioState)
+	mux.HandleFunc("/api/session/status", s.handleSessionStatus)
+	mux.HandleFunc("/api/session/pause", s.handleSessionPause)
+	mux.HandleFunc("/api/session/source", s.handleSessionSource)
+	mux.HandleFunc("/api/session/context/clear", s.handleContextClear)
+	mux.HandleFunc("/api/audio/devices", s.handleAudioDevices)
+	mux.HandleFunc("/api/audio/preview", s.handleAudioPreview)
 	mux.HandleFunc("/api/simulation", s.handleSimulation)
 	mux.HandleFunc("/api/providers/test", s.handleConnectionProbe)
 	mux.HandleFunc("/api/limits/preview", s.handleLimitsPreview)
@@ -202,6 +214,19 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=AIOverlay-config.json")
 	json.NewEncoder(w).Encode(s.backend.GetConfig())
 }
+
+func disableImportedAutoStart(cfg *domain.Config) int {
+	n := 0
+	for i := range cfg.Pipelines {
+		for j := range cfg.Pipelines[i].Sources {
+			if cfg.Pipelines[i].Sources[j].AutoStart {
+				cfg.Pipelines[i].Sources[j].AutoStart = false
+				n++
+			}
+		}
+	}
+	return n
+}
 func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(405)
@@ -212,11 +237,12 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	autoDisabled := disableImportedAutoStart(&cfg)
 	if err := s.saveConfiguration(cfg); err != nil {
 		settingsError(w, err, 400)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true})
+	writeJSON(w, map[string]any{"ok": true, "autostart_disabled": autoDisabled})
 }
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -225,7 +251,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	page, err := s.backend.Catalog(CatalogQuery{ProviderID: q.Get("provider_id"), Search: q.Get("q"), Provider: q.Get("provider"), Vision: boolQ(q.Get("vision")), Free: boolQ(q.Get("free")), Reasoning: boolQ(q.Get("reasoning")), Ready: boolQ(q.Get("ready")), Limit: limit, Offset: offset})
+	page, err := s.backend.Catalog(CatalogQuery{ProviderID: q.Get("provider_id"), Search: q.Get("q"), Provider: q.Get("provider"), Vision: boolQ(q.Get("vision")), Audio: boolQ(q.Get("audio")), Free: boolQ(q.Get("free")), Reasoning: boolQ(q.Get("reasoning")), Ready: boolQ(q.Get("ready")), Limit: limit, Offset: offset})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

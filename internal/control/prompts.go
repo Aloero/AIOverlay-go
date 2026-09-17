@@ -19,5 +19,6 @@ func (s *Server) handlePromptPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid prompt preview", 400)
 		return
 	}
-	writeJSON(w, map[string]string{"system": engine.RenderPrompt(req.Prompt.System, req.Values), "user": engine.RenderPrompt(req.Prompt.User, req.Values)})
+	system, user := engine.RenderRequestPrompt(req.Prompt, req.Values)
+	writeJSON(w, map[string]string{"system": system, "user": user})
 }
