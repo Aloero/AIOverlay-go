@@ -46,6 +46,7 @@ type SourceStatus struct {
 	Segments        uint64  `json:"segments,omitempty"`
 	Dropped         uint64  `json:"dropped,omitempty"`
 	LastError       string  `json:"last_error,omitempty"`
+	LastDiagnostic  string  `json:"last_diagnostic,omitempty"`
 	LastOutcome     string  `json:"last_outcome,omitempty"`
 	LastSuppression string  `json:"last_suppression,omitempty"`
 	TransportState  string  `json:"transport_state,omitempty"`
@@ -632,7 +633,7 @@ func (m *Manager) recordAudioGap(pipelineID string, r *sourceRuntime, at time.Ti
 	}
 	r.mu.Lock()
 	r.status.Dropped++
-	r.status.LastError = reason
+	r.status.LastDiagnostic = reason
 	r.mu.Unlock()
 	m.mu.RLock()
 	cfg := m.cfg
@@ -969,7 +970,7 @@ func (m *Manager) recordDroppedTurn(runtime *sourceRuntime, turn backgroundTurn,
 	}
 	runtime.mu.Lock()
 	runtime.status.Dropped++
-	runtime.status.LastError = reason
+	runtime.status.LastDiagnostic = reason
 	runtime.mu.Unlock()
 }
 

@@ -44,6 +44,10 @@ function ok(c,m){assert.ok(c,m);checks++}
   ok($('#dialog').textContent.includes('Что получает AI'),'behavior report exposes AI inputs');
   ok(calls.some(c=>c.path==='/api/pipeline/behavior'&&c.method==='POST'),'behavior report uses pure core route');click('#closeDialog');
   ok(!errors.length,'boot has JS errors: '+errors.join(';'));
+  const diagnosticState=w.runtimeSourceSummary({name:'Audio',running:true,last_diagnostic:'queue coalesced',last_error:''});
+  ok(diagnosticState.includes('диагностика: queue coalesced')&&!diagnosticState.includes('ошибка:'),'bounded source diagnostic is not shown as error');
+  const errorState=w.runtimeSourceSummary({name:'Audio',running:true,last_error:'device unavailable'});
+  ok(errorState.includes('ошибка: device unavailable'),'source failure is labeled as error');
   const incompleteSummary=w.runSummaryMarkup({pipeline_id:'fixture',outcome:'success',events:[{kind:'context_incomplete',at_ms:0}],budget:{max_model_calls:8}},{});
   ok(incompleteSummary.includes('Контекст неполный'),'manual transcript timeout is visible in run summary');
   ok(w.traceTable([{kind:'context_incomplete',at_ms:0}]).includes('Контекст неполный'),'manual transcript timeout is named in full trace');

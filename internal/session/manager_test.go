@@ -345,6 +345,9 @@ func TestCoalescedAudioTurnRecordsContextGap(t *testing.T) {
 	if _, exists := manager.pending["audio-event"]; exists {
 		t.Fatal("coalesced audio event remained pending")
 	}
+	if runtime.status.LastError != "" || runtime.status.LastDiagnostic == "" {
+		t.Fatalf("audio loss was classified as an error instead of a diagnostic: %+v", runtime.status)
+	}
 }
 
 func TestCoalescedScreenTurnDoesNotInventTranscriptGap(t *testing.T) {
@@ -369,6 +372,9 @@ func TestCoalescedScreenTurnDoesNotInventTranscriptGap(t *testing.T) {
 	}
 	if runtime.status.Dropped != 1 {
 		t.Fatalf("screen coalescing was not counted: %+v", runtime.status)
+	}
+	if runtime.status.LastError != "" || runtime.status.LastDiagnostic == "" {
+		t.Fatalf("screen coalescing was classified as an error instead of a diagnostic: %+v", runtime.status)
 	}
 }
 
