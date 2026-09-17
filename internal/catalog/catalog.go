@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,12 +14,16 @@ import (
 	"sync"
 	"time"
 
+	"aioverlay/internal/atomicfile"
 	"aioverlay/internal/domain"
 )
 
 const LiveURL = "https://models.dev/api.json"
 
 type Service struct {
+	refreshMu     sync.Mutex
+	lastRefresh   time.Time
+	lastError     string
 	mu            sync.RWMutex
 	models        []domain.ModelMeta
 	byRef         map[string]domain.ModelMeta
@@ -70,23 +76,57 @@ func (s *Service) LoadSnapshot() error {
 	return nil
 }
 
-func (s *Service) Refresh() error {
-	req, _ := http.NewRequest(http.MethodGet, LiveURL, nil)
-	req.Header.Set("User-Agent", "AIOverlay-go/0.1")
-	resp, err := s.client.Do(req)
+func (s *Service) Refresh() error { return s.RefreshContext(context.Background()) }
+func (s *Service) RefreshContext(ctx context.Context) (err error) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err != nil {
+			s.lastError = err.Error()
+		} else {
+			s.lastError = ""
+			s.lastRefresh = time.Now()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, LiveURL, nil)
 	if err != nil {
 		return err
+	}
+	req.Header.Set("User-Agent", "AIOverlay-go/0.2.6")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("catalog download failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("models.dev: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("catalog HTTP %d", resp.StatusCode)
 	}
-	models, err := parse(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20+1))
+	if err != nil || len(raw) > 32<<20 {
+		return fmt.Errorf("catalog response unreadable or larger than 32 MiB")
+	}
+	models, err := parse(bytes.NewReader(raw))
 	if err != nil {
-		return err
+		return fmt.Errorf("catalog validation failed")
+	}
+	if len(models) == 0 {
+		return fmt.Errorf("empty catalog response; existing snapshot retained")
+	}
+	// Save before publishing: failed writes preserve both disk and live snapshot.
+	if err := atomicfile.Write(s.path, raw, 0o644); err != nil {
+		return fmt.Errorf("catalog snapshot save: %w", err)
 	}
 	s.replace(models)
 	return nil
+}
+func (s *Service) Status() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return map[string]any{"models": len(s.models), "last_refresh": s.lastRefresh, "error": s.lastError}
 }
 
 func (s *Service) replace(models []domain.ModelMeta) {

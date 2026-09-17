@@ -3,10 +3,13 @@ package providers
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"aioverlay/internal/childprocess"
 	"aioverlay/internal/domain"
 )
 
@@ -78,9 +82,9 @@ func (p *EmbeddedOpenCode) run(ctx context.Context, r Request, credential string
 			return "", fmt.Errorf("IPv4 proxy: %w", err)
 		}
 	}
-	runtimeKey := openCodeRuntimeKey(credential, upstreamProxy)
+	runtimeKey := openCodeRuntimeKey(credential, upstreamProxy) + "\x00" + strconv.Itoa(r.MaxOutputTokens)
 	instance, release, err := p.runtimes.acquire(ctx, runtimeKey, func(ctx context.Context, _ string) (runtimeInstance, error) {
-		srv := &openCodeServer{providerID: expected, credentialEnv: p.cfg.CredentialEnv, credential: credential, baseURL: p.cfg.BaseURL, upstreamProxy: upstreamProxy}
+		srv := &openCodeServer{providerID: expected, credentialEnv: p.cfg.CredentialEnv, credential: credential, baseURL: p.cfg.BaseURL, upstreamProxy: upstreamProxy, maxOutputTokens: r.MaxOutputTokens}
 		if err := srv.start(ctx); err != nil {
 			srv.stop()
 			return nil, err
@@ -106,9 +110,13 @@ func (p *EmbeddedOpenCode) run(ctx context.Context, r Request, credential string
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if ctx.Err() != nil {
-			_ = srv.doJSON(cleanup, http.MethodPost, "/session/"+sid+"/abort", nil, nil, time.Second)
+			if err := srv.doJSON(cleanup, http.MethodPost, "/session/"+sid+"/abort", nil, nil, time.Second); err != nil {
+				log.Print("OpenCode session abort was not acknowledged")
+			}
 		}
-		_ = srv.doJSON(cleanup, http.MethodDelete, "/session/"+sid, nil, nil, time.Second)
+		if err := srv.doJSON(cleanup, http.MethodDelete, "/session/"+sid, nil, nil, time.Second); err != nil {
+			log.Print("OpenCode session deletion was not acknowledged")
+		}
 	}()
 	payload := map[string]any{"model": map[string]any{"providerID": providerID, "modelID": modelID}, "system": r.SystemPrompt, "parts": parts, "tools": map[string]bool{"*": false}}
 	var resp struct {
@@ -170,19 +178,24 @@ func sanitizedEnv() []string {
 }
 
 type openCodeServer struct {
-	baseURL       string
-	port          int
-	password      string
-	cmd           *exec.Cmd
-	providerID    string
-	credentialEnv []string
-	credential    string
-	upstreamProxy string
-	tempDir       string
+	maxOutputTokens int
+	baseURL         string
+	port            int
+	password        string
+	cmd             *exec.Cmd
+	process         *childprocess.Process
+	providerID      string
+	credentialEnv   []string
+	credential      string
+	upstreamProxy   string
+	tempDir         string
 }
 
 func (s *openCodeServer) environment(cfgJSON []byte) []string {
 	env := sanitizedEnv()
+	if s.maxOutputTokens > 0 {
+		env = append(env, "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX="+strconv.Itoa(s.maxOutputTokens))
+	}
 	env = append(env, "HOME="+s.tempDir, "USERPROFILE="+s.tempDir, "APPDATA="+filepath.Join(s.tempDir, "config"), "LOCALAPPDATA="+filepath.Join(s.tempDir, "data"), "OPENCODE_SERVER_PASSWORD="+s.password, "OPENCODE_CONFIG_CONTENT="+string(cfgJSON), "XDG_CONFIG_HOME="+filepath.Join(s.tempDir, "config"), "XDG_DATA_HOME="+filepath.Join(s.tempDir, "data"), "XDG_CACHE_HOME="+filepath.Join(s.tempDir, "cache"), "XDG_STATE_HOME="+filepath.Join(s.tempDir, "state"), "HTTPS_PROXY="+s.upstreamProxy, "HTTP_PROXY="+s.upstreamProxy, "NO_PROXY=127.0.0.1,localhost")
 	if s.credential != "" && len(s.credentialEnv) > 0 {
 		env = append(env, s.credentialEnv[0]+"="+s.credential)
@@ -191,7 +204,7 @@ func (s *openCodeServer) environment(cfgJSON []byte) []string {
 }
 
 func (s *openCodeServer) alive() bool {
-	return s.cmd != nil && s.cmd.Process != nil && s.cmd.ProcessState == nil
+	return s.process.Alive()
 }
 func (s *openCodeServer) start(ctx context.Context) error {
 	bin, err := findOpenCodeBinary()
@@ -204,7 +217,11 @@ func (s *openCodeServer) start(ctx context.Context) error {
 	}
 	s.port = ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
-	s.password = fmt.Sprintf("%d", time.Now().UnixNano())
+	token := make([]byte, 32)
+	if _, err = rand.Read(token); err != nil {
+		return fmt.Errorf("OS random source unavailable for OpenCode control credentials")
+	}
+	s.password = hex.EncodeToString(token)
 	s.tempDir, err = os.MkdirTemp("", "aioverlay-go-opencode-")
 	if err != nil {
 		return err
@@ -225,7 +242,8 @@ func (s *openCodeServer) start(ctx context.Context) error {
 	s.cmd.Dir = s.tempDir
 	s.cmd.Stdout = io.Discard
 	s.cmd.Stderr = io.Discard
-	if err := s.cmd.Start(); err != nil {
+	s.process, err = childprocess.Start(s.cmd)
+	if err != nil {
 		return err
 	}
 	deadline := time.Now().Add(7 * time.Second)
@@ -246,15 +264,14 @@ func (s *openCodeServer) start(ctx context.Context) error {
 	return &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "embedded OpenCode did not become healthy", Retryable: true}
 }
 func (s *openCodeServer) stop() {
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
-		_, _ = s.cmd.Process.Wait()
-	}
-	s.cmd = nil
+	s.process.Stop()
 	if s.tempDir != "" {
-		_ = os.RemoveAll(s.tempDir)
+		if err := os.RemoveAll(s.tempDir); err != nil {
+			log.Printf("OpenCode temporary profile cleanup failed: %v", err)
+		}
 	}
 }
+
 func (s *openCodeServer) createSession(ctx context.Context) (string, error) {
 	var out struct {
 		ID string `json:"id"`
@@ -283,7 +300,7 @@ func (s *openCodeServer) doJSON(ctx context.Context, method, path string, payloa
 	client := http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return &RequestError{Outcome: domain.OutcomeNetworkError, Message: err.Error(), Retryable: true}
+		return networkError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -293,13 +310,23 @@ func (s *openCodeServer) doJSON(ctx context.Context, method, path string, payloa
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
+	if err != nil {
+		return networkError(err)
+	}
+	if len(raw) > 16<<20 {
+		return &RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "OpenCode response exceeds 16 MiB"}
+	}
+	if json.Unmarshal(raw, out) != nil {
+		return &RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "Invalid OpenCode JSON response"}
+	}
+	return nil
 }
 
 func findOpenCodeBinary() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("AIOVERLAY_OPENCODE_BIN")); override != "" {
 		if st, err := os.Stat(override); err == nil && !st.IsDir() {
-			return override, nil
+			return filepath.Abs(override)
 		}
 	}
 	candidates := []string{}
@@ -310,7 +337,7 @@ func findOpenCodeBinary() (string, error) {
 	candidates = append(candidates, filepath.Join("runtime", "opencode", "opencode.exe"), filepath.Join("runtime", "opencode", "opencode"))
 	for _, p := range candidates {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
+			return filepath.Abs(p)
 		}
 	}
 	return "", fmt.Errorf("embedded OpenCode runtime not found")

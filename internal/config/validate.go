@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"aioverlay/internal/domain"
+	"aioverlay/internal/hotkey"
 	"aioverlay/internal/tunnel"
 )
 
@@ -24,6 +25,9 @@ func Validate(cfg domain.Config) error {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		providers[p.ID] = struct{}{}
+		if err := validateProvider(p); err != nil {
+			return err
+		}
 		if err := validateCredentials(p); err != nil {
 			return err
 		}
@@ -36,7 +40,7 @@ func Validate(cfg domain.Config) error {
 		}
 		pipelineIDs[p.ID] = struct{}{}
 		if p.ID == cfg.ActivePipelineID {
-			activeFound = true
+			activeFound = p.Enabled
 		}
 		if err := validatePipeline(i, p, providers); err != nil {
 			return err
@@ -51,16 +55,8 @@ func Validate(cfg domain.Config) error {
 	if cfg.Overlay.Width < 240 || cfg.Overlay.Height < 120 {
 		return fmt.Errorf("overlay dimensions are too small")
 	}
-	seenHotkeys := map[string]string{}
-	for action, binding := range cfg.Overlay.Hotkeys {
-		norm := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(binding), " ", ""))
-		if norm == "" {
-			continue
-		}
-		if other, dup := seenHotkeys[norm]; dup {
-			return fmt.Errorf("hotkey %s duplicates %s", action, other)
-		}
-		seenHotkeys[norm] = action
+	if err := hotkey.Validate(cfg.Overlay.Hotkeys); err != nil {
+		return err
 	}
 	if cfg.VPN.Enabled {
 		engine := strings.TrimSpace(cfg.VPN.Engine)
@@ -77,11 +73,15 @@ func Validate(cfg domain.Config) error {
 	if cfg.Build.ExecutableName == "" {
 		return fmt.Errorf("build.executable_name is required")
 	}
+	if err := validateApplication(cfg); err != nil {
+		return err
+	}
 	return nil
 }
 
 func validateCredentials(p domain.ProviderConfig) error {
 	ids := map[string]struct{}{}
+	secrets := map[string]bool{}
 	for i, k := range p.CredentialPool.Keys {
 		if strings.TrimSpace(k.ID) == "" {
 			return fmt.Errorf("provider %s key[%d].id is required", p.ID, i)
@@ -89,6 +89,10 @@ func validateCredentials(p domain.ProviderConfig) error {
 		if _, dup := ids[k.ID]; dup {
 			return fmt.Errorf("provider %s has duplicate credential id %q", p.ID, k.ID)
 		}
+		if k.Secret != "" && secrets[k.Secret] {
+			return fmt.Errorf("provider %s has duplicate credential secrets", p.ID)
+		}
+		secrets[k.Secret] = true
 		ids[k.ID] = struct{}{}
 	}
 	return nil
@@ -101,6 +105,9 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 	if p.Budget.MaxWallTimeMS <= 0 || p.Budget.MaxModelCalls <= 0 || p.Budget.MaxParallelCalls <= 0 {
 		return fmt.Errorf("pipeline %s has invalid execution budget", p.ID)
 	}
+	if err := validateBudget(p.Budget); err != nil {
+		return fmt.Errorf("pipeline %s: %w", p.ID, err)
+	}
 	nodes := map[string]domain.Node{}
 	for _, n := range p.Nodes {
 		if n.ID == "" {
@@ -108,6 +115,9 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 		}
 		if _, dup := nodes[n.ID]; dup {
 			return fmt.Errorf("pipeline %s duplicate node %q", p.ID, n.ID)
+		}
+		if err := validateNode(n); err != nil {
+			return fmt.Errorf("pipeline %s node %s: %w", p.ID, n.ID, err)
 		}
 		nodes[n.ID] = n
 		if n.Type == domain.NodeModelPool {
@@ -133,6 +143,9 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 		if _, dup := edges[e.ID]; dup {
 			return fmt.Errorf("pipeline %s duplicate edge %q", p.ID, e.ID)
 		}
+		if err := validateEdge(e); err != nil {
+			return fmt.Errorf("pipeline %s edge %s: %w", p.ID, e.ID, err)
+		}
 		edges[e.ID] = struct{}{}
 		if _, ok := nodes[e.From]; !ok {
 			return fmt.Errorf("pipeline %s edge %s has unknown from %q", p.ID, e.ID, e.From)
@@ -144,10 +157,19 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 			return fmt.Errorf("pipeline %s edge %s max_visits must be > 0", p.ID, e.ID)
 		}
 	}
+	if nodes[p.OutputNodeID].Type != domain.NodeOutput {
+		return fmt.Errorf("pipeline output node must have output type")
+	}
+	if !reachable(p) {
+		return fmt.Errorf("pipeline %s output is unreachable", p.ID)
+	}
 	return nil
 }
 
 func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, providers map[string]struct{}) error {
+	if err := validatePoolLimits(pool); err != nil {
+		return fmt.Errorf("pool %s: %w", nodeID, err)
+	}
 	if pool.MaxCalls <= 0 || pool.MaxParallel <= 0 {
 		return fmt.Errorf("pipeline %s pool %s has invalid call limits", pipelineID, nodeID)
 	}
@@ -187,6 +209,9 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 		if _, dup := seen[m.ID]; dup {
 			return fmt.Errorf("pipeline %s pool %s duplicate model slot %q", pipelineID, nodeID, m.ID)
 		}
+		if err := validateSlot(m); err != nil {
+			return fmt.Errorf("pool %s: %w", nodeID, err)
+		}
 		seen[m.ID] = struct{}{}
 		if _, ok := providers[m.ProviderID]; !ok {
 			return fmt.Errorf("pipeline %s pool %s references unknown provider %q", pipelineID, nodeID, m.ProviderID)
@@ -194,6 +219,9 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 		if strings.TrimSpace(m.ModelID) == "" {
 			return fmt.Errorf("pipeline %s pool %s model %s missing model_id", pipelineID, nodeID, m.ID)
 		}
+	}
+	if len(nodeID) > 2048 {
+		return fmt.Errorf("vision nesting too deep")
 	}
 	if pool.VisionPreprocessor != nil {
 		if err := validatePool(pipelineID, nodeID+".vision_preprocessor", pool.VisionPreprocessor, providers); err != nil {

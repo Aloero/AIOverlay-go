@@ -43,13 +43,39 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 		attempt.CredentialAlias = key.ID
 	}
 	r.emit(domain.TraceEvent{Kind: "attempt_start", NodeID: n.ID, Attempt: attempt, Message: fmt.Sprintf("priority=%d", m.Priority)})
-	respTimeout := durationMS(firstPositive(m.TimeoutMS, r.pipeline.Budget.ResponseTimeoutMS, 15000))
+	pc, _ := findProvider(r.engine.cfg, m.ProviderID)
+	limits := ResolveLimits(m, r.pipeline.Budget, pc.RequestDefaults)
+	r.emit(domain.TraceEvent{Kind: "effective_limits", NodeID: n.ID, Attempt: attempt, Message: fmt.Sprintf("connect=%dms; first_token=%dms; response=%dms; idle=%dms; output_tokens=%d", limits.ConnectMS, limits.FirstTokenMS, limits.ResponseMS, limits.IdleMS, limits.MaxOutputTokens)})
+	respTimeout := durationMS(limits.ResponseMS)
 	actx, cancel := context.WithTimeout(ctx, respTimeout)
 	defer cancel()
-	user := renderPrompt(pool.Prompt.User, input.text)
-	system := renderPrompt(pool.Prompt.System, input.text)
-	req := providers.Request{ProviderID: m.ProviderID, ModelID: m.ModelID, SystemPrompt: system, UserPrompt: user, ImageJPEG: input.image, TextInput: input.text, MaxOutputTokens: firstPositive(pcMaxOutput(r.engine.cfg, m.ProviderID), 2048), ConnectTimeout: durationMS(r.pipeline.Budget.ConnectTimeoutMS), FirstTokenTimeout: durationMS(firstPositive(m.FirstTokenTimeoutMS, r.pipeline.Budget.FirstTokenTimeoutMS, 8000)), ResponseTimeout: respTimeout, StreamIdleTimeout: durationMS(r.pipeline.Budget.StreamIdleTimeoutMS)}
+	values := PromptValues{InputText: r.input.Text, PreviousOutput: input.text, VisionText: input.vision}
+	user := RenderPrompt(pool.Prompt.User, values)
+	system := RenderPrompt(pool.Prompt.System, values)
+	req := providers.Request{ProviderID: m.ProviderID, ModelID: m.ModelID, SystemPrompt: system, UserPrompt: user, ImageJPEG: input.image, TextInput: input.text, MaxOutputTokens: limits.MaxOutputTokens, ConnectTimeout: durationMS(limits.ConnectMS), FirstTokenTimeout: durationMS(limits.FirstTokenMS), ResponseTimeout: respTimeout, StreamIdleTimeout: durationMS(limits.IdleMS)}
 	events, errs := p.Stream(actx, req, key.Secret)
+	defer func() {
+		cancel()
+		// Channel closure is the provider completion contract. Drain after cancel
+		// so cooperative workers can release connections and runtime leases.
+		timer := time.NewTimer(1500 * time.Millisecond)
+		defer timer.Stop()
+		for events != nil || errs != nil {
+			select {
+			case _, ok := <-events:
+				if !ok {
+					events = nil
+				}
+			case _, ok := <-errs:
+				if !ok {
+					errs = nil
+				}
+			case <-timer.C:
+				r.emit(domain.TraceEvent{Kind: "worker_cleanup_timeout", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeProviderUnavailable, Message: "Provider did not acknowledge cancellation within 1500ms"})
+				return
+			}
+		}
+	}()
 	buffered := false
 	if mode, ok := p.(interface{ Incremental() bool }); ok {
 		buffered = !mode.Incremental()
@@ -121,6 +147,12 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 					}
 				}
 				resetIdle()
+				if text.Len()+len(ev.Text) > 16<<20 {
+					err := &providers.RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "Model text exceeded the 16 MiB safety limit"}
+					r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Message, DurationMS: time.Since(started).Milliseconds()})
+					r.engine.recordModel(m, err.Outcome, 0, time.Since(started))
+					return "", err.Outcome, err
+				}
 				text.WriteString(ev.Text)
 				if gate != nil {
 					gate.push(attemptID, ev.Text)
@@ -150,12 +182,14 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 				cancel()
 				err := &providers.RequestError{Outcome: domain.OutcomeFirstTokenTimeout, Message: "first token timeout", Retryable: true}
 				r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
+				r.engine.recordModel(m, err.Outcome, time.Duration(ttft)*time.Millisecond, time.Since(started))
 				return "", err.Outcome, err
 			}
 		case <-idleC:
 			cancel()
 			err := &providers.RequestError{Outcome: domain.OutcomeStreamIdleTimeout, Message: "stream idle timeout", Retryable: true}
 			r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Error(), TTFTMS: ttft, DurationMS: time.Since(started).Milliseconds()})
+			r.engine.recordModel(m, err.Outcome, time.Duration(ttft)*time.Millisecond, time.Since(started))
 			return "", err.Outcome, err
 		case <-actx.Done():
 			outcome := domain.OutcomeTimeout
@@ -164,12 +198,14 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 			}
 			err := actx.Err()
 			r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: outcome, Message: err.Error(), TTFTMS: ttft, DurationMS: time.Since(started).Milliseconds()})
+			r.engine.recordModel(m, outcome, time.Duration(ttft)*time.Millisecond, time.Since(started))
 			return "", outcome, err
 		}
 	}
 	if strings.TrimSpace(text.String()) == "" {
 		err := fmt.Errorf("empty response")
 		r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeInvalidResponse, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
+		r.engine.recordModel(m, domain.OutcomeInvalidResponse, 0, time.Since(started))
 		return "", domain.OutcomeInvalidResponse, err
 	}
 	dur := time.Since(started)
@@ -190,5 +226,5 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	r.traceMu.Lock()
 	r.successes[n.ID+"/"+m.ID] = attempt
 	r.traceMu.Unlock()
-	return strings.TrimSpace(text.String()), domain.OutcomeSuccess, nil
+	return r.redact.text(strings.TrimSpace(text.String())), domain.OutcomeSuccess, nil
 }

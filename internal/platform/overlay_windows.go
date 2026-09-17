@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +14,7 @@ import (
 	"unsafe"
 
 	"aioverlay/internal/domain"
+	"aioverlay/internal/hotkey"
 )
 
 const (
@@ -202,6 +202,14 @@ type notifyIconData struct {
 var windowMap sync.Map
 
 type winOverlay struct {
+	uiCalls                               chan func()
+	done                                  chan struct{}
+	registered                            map[string]string
+	suspended                             atomic.Bool
+	suspendUntil                          atomic.Int64
+	configGhost                           bool
+	hotkeyError                           string
+	protection                            ProtectionStatus
 	mu                                    sync.RWMutex
 	hwnd                                  atomic.Uintptr
 	capturing                             atomic.Bool
@@ -218,12 +226,13 @@ type winOverlay struct {
 }
 
 func NewOverlay(cfg domain.OverlayConfig, cb Callbacks) (Overlay, error) {
-	return &winOverlay{cfg: cfg, cb: cb, ghost: cfg.ClickThrough}, nil
+	return &winOverlay{cfg: cfg, cb: cb, ghost: cfg.ClickThrough, configGhost: cfg.ClickThrough, uiCalls: make(chan func(), 16), done: make(chan struct{})}, nil
 }
 
 func (o *winOverlay) Run(ctx context.Context) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	defer close(o.done)
 	if err := o.createWindow(); err != nil {
 		return err
 	}
@@ -269,7 +278,12 @@ func (o *winOverlay) createWindow() error {
 	if x < 0 {
 		x = 0
 	}
-	hwnd, _, e := pCreateWindowEx.Call(style, uintptr(unsafe.Pointer(name)), 0, wsPopup, uintptr(x), 30, uintptr(w), uintptr(h), 0, 0, inst, 0)
+	y := 30
+	if o.cfg.Positioned {
+		x = o.cfg.X
+		y = o.cfg.Y
+	}
+	hwnd, _, e := pCreateWindowEx.Call(style, uintptr(unsafe.Pointer(name)), 0, wsPopup, uintptr(x), uintptr(y), uintptr(w), uintptr(h), 0, 0, inst, 0)
 	if hwnd == 0 {
 		return fmt.Errorf("CreateWindowExW: %v", e)
 	}
@@ -277,7 +291,9 @@ func (o *winOverlay) createWindow() error {
 	windowMap.Store(hwnd, o)
 	o.recreateGDI()
 	o.applyNative()
-	o.registerHotkeys()
+	if err := o.registerHotkeys(); err != nil {
+		nativeSettingError(err.Error())
+	}
 	o.addTrayIcon()
 	pShowWindow.Call(hwnd, swShowNoActivate)
 	pUpdateWindow.Call(hwnd)
@@ -293,12 +309,19 @@ func globalWndProc(hwnd uintptr, message uint32, wparam, lparam uintptr) uintptr
 }
 func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 	switch message {
-	case 0x8001: // apply settings, on the window's owning thread
-		o.recreateGDI()
-		o.applyNative()
-		o.registerHotkeys()
-		pInvalidateRect.Call(o.hwnd.Load(), 0, 1)
+	case 0x8006:
+		for {
+			select {
+			case fn := <-o.uiCalls:
+				fn()
+			default:
+				return 0
+			}
+		}
+	case 0x0232: // WM_EXITSIZEMOVE
+		o.saveGeometry()
 		return 0
+
 	case 0x8002:
 		o.applyCaptureExclusion(true)
 		return 0
@@ -338,13 +361,16 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case wmHotKey:
+		if o.suspended.Load() {
+			return 0
+		}
 		switch int(wparam) {
 		case 1:
 			go o.captureAndAnalyze()
 		case 2:
 			o.mu.Lock()
 			o.ghost = !o.ghost
-			o.cfg.ClickThrough = o.ghost
+			// Ghost hotkey is transient until explicitly saved in Studio.
 			o.mu.Unlock()
 			o.applyNative()
 		case 3:
@@ -431,7 +457,10 @@ func drawText(dc uintptr, s string, r *rect, flags uintptr) {
 	if s == "" {
 		return
 	}
-	u, _ := syscall.UTF16FromString(s)
+	u, err := syscall.UTF16FromString(displayText(s))
+	if err != nil || len(u) == 0 {
+		return
+	}
 	pDrawText.Call(dc, uintptr(unsafe.Pointer(&u[0])), wordFromInt32(-1), uintptr(unsafe.Pointer(r)), flags)
 }
 func (o *winOverlay) recreateGDI() {
@@ -485,18 +514,12 @@ func (o *winOverlay) applyNative() {
 	}
 }
 func (o *winOverlay) applyCaptureExclusion(on bool) {
-	aff := uintptr(0)
-	if on {
-		aff = wdaExcludeFromCapture
-	}
-	pSetWindowDisplayAffinity.Call(o.hwnd.Load(), aff)
-	value := int32(0)
-	if on {
-		value = 1
-	}
-	data := compositionData{Attrib: wcaExcludedFromDDA, Data: unsafe.Pointer(&value), Size: unsafe.Sizeof(value)}
-	pSetWindowCompositionAttribute.Call(o.hwnd.Load(), uintptr(unsafe.Pointer(&data)))
+	status := ApplyWindowProtection(o.hwnd.Load(), on)
+	o.mu.Lock()
+	o.protection = status
+	o.mu.Unlock()
 }
+
 func (o *winOverlay) hitTest() uintptr {
 	var p point
 	var r rect
@@ -529,66 +552,28 @@ func (o *winOverlay) hitTest() uintptr {
 		return htClient
 	}
 }
-func (o *winOverlay) registerHotkeys() {
-	if o.hwnd.Load() == 0 {
-		return
-	}
-	for i := 1; i <= 4; i++ {
-		pUnregisterHotKey.Call(o.hwnd.Load(), uintptr(i))
-	}
-	pairs := []struct {
-		id   int
-		name string
-	}{{1, "analyze"}, {2, "ghost"}, {3, "clear"}, {4, "control"}}
-	for _, x := range pairs {
-		if s := o.cfg.Hotkeys[x.name]; s != "" {
-			mods, vk, err := parseHotkey(s)
-			if err == nil {
-				pRegisterHotKey.Call(o.hwnd.Load(), uintptr(x.id), uintptr(mods|modNoRepeat), uintptr(vk))
-			}
-		}
-	}
+func (o *winOverlay) registerHotkeys() error {
+	o.mu.RLock()
+	bindings := copyBindings(o.cfg.Hotkeys)
+	o.mu.RUnlock()
+	return o.replaceHotkeys(bindings)
 }
 func parseHotkey(s string) (uint32, uint32, error) {
-	var mods uint32
-	var key string
-	for _, p := range strings.Split(s, "+") {
-		x := strings.ToUpper(strings.TrimSpace(p))
-		switch x {
-		case "CTRL", "CONTROL":
-			mods |= modControl
-		case "ALT":
-			mods |= modAlt
-		case "SHIFT":
-			mods |= modShift
-		case "WIN", "META", "WINDOWS":
-			mods |= modWin
-		default:
-			key = x
-		}
-	}
-	if mods == 0 || key == "" {
-		return 0, 0, fmt.Errorf("invalid hotkey")
-	}
-	if len(key) == 1 {
-		c := key[0]
-		if c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
-			return mods, uint32(c), nil
-		}
-	}
-	if strings.HasPrefix(key, "F") {
-		n, err := strconv.Atoi(key[1:])
-		if err == nil && n >= 1 && n <= 24 {
-			return mods, uint32(0x70 + n - 1), nil
-		}
-	}
-	m := map[string]uint32{"LEFT": 0x25, "UP": 0x26, "RIGHT": 0x27, "DOWN": 0x28, "HOME": 0x24, "END": 0x23, "PGUP": 0x21, "PGDN": 0x22, "INSERT": 0x2D, "DELETE": 0x2E, "SPACE": 0x20}
-	if v, ok := m[key]; ok {
-		return mods, v, nil
-	}
-	return 0, 0, fmt.Errorf("unsupported key")
+	b, err := hotkey.Parse(s)
+	return b.Modifiers, b.Key, err
 }
+
 func (o *winOverlay) captureAndAnalyze() {
+	if o.cb.Request != nil {
+		o.mu.Lock()
+		o.stationaryFired = true
+		o.mu.Unlock()
+		if err := o.cb.Request(); err != nil {
+			o.SetMeta(err.Error())
+		}
+		return
+	}
+
 	if !o.capturing.CompareAndSwap(false, true) {
 		return
 	}
@@ -748,6 +733,9 @@ func (o *winOverlay) guardLoop(ctx context.Context) {
 				o.post(0x8002)
 			}
 		case <-stationary.C:
+			if o.suspended.Load() && time.Now().UnixNano() > o.suspendUntil.Load() {
+				o.SetHotkeyEditor(false)
+			}
 			o.post(0x8003)
 		case <-ctx.Done():
 			return
@@ -780,13 +768,20 @@ func (o *winOverlay) checkStationary() {
 	o.mu.Unlock()
 }
 func (o *winOverlay) Apply(cfg domain.OverlayConfig) error {
-	o.mu.Lock()
-	o.cfg = cfg
-	o.ghost = cfg.ClickThrough
-	o.mu.Unlock()
-	o.post(0x8001)
-	return nil
+	if err := hotkey.Validate(cfg.Hotkeys); err != nil {
+		return err
+	}
+	if o.hwnd.Load() == 0 {
+		o.mu.Lock()
+		o.cfg = cfg
+		o.configGhost = cfg.ClickThrough
+		o.ghost = cfg.ClickThrough
+		o.mu.Unlock()
+		return nil
+	}
+	return o.onUI(func() error { return o.applySettings(cfg) })
 }
+
 func (o *winOverlay) post(message uint32) {
 	if h := o.hwnd.Load(); h != 0 {
 		user32.NewProc("PostMessageW").Call(h, uintptr(message), 0, 0)

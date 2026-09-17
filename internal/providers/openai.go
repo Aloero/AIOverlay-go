@@ -61,7 +61,7 @@ func (p *OpenAICompatible) stream(ctx context.Context, r Request, credential str
 	endpoint := strings.TrimRight(p.cfg.BaseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return &RequestError{Outcome: domain.OutcomeValidationFailed, Message: "Invalid provider endpoint URL"}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -83,10 +83,7 @@ func (p *OpenAICompatible) stream(ctx context.Context, r Request, credential str
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			return &RequestError{Outcome: "timeout", Message: ctx.Err().Error(), Retryable: true}
-		}
-		return &RequestError{Outcome: "network_error", Message: err.Error(), Retryable: true}
+		return networkError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -167,7 +164,7 @@ func (p *OpenAICompatible) stream(ctx context.Context, r Request, credential str
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return &RequestError{Outcome: "network_error", Message: err.Error(), Retryable: true}
+		return networkError(err)
 	}
 	if finished {
 		if !sendEvent(ctx, events, Event{Type: EventDone, ModelID: resolved, InputTokens: inputTokens, OutputTokens: outputTokens}) {

@@ -66,7 +66,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-sys@v0.0.0-20210218145245-beda7e5e158e
+sys@v0.44.0
 ============================================================
 Copyright (c) 2009 The Go Authors. All rights reserved.
 
@@ -116,3 +116,25 @@ Project: https://github.com/SagerNet/sing-box
 License notice: runtime/sing-box/LICENSE
 The bundled libcronet.dll is part of the official sing-box release archive.
 
+
+Maintained go-webview2 host patch (0.2.6)
+============================================================
+AIOverlay uses a narrow local patch to github.com/jchv/go-webview2
+commit 56598839c808. The original MIT license and author attribution
+remain in third_party/go-webview2/LICENSE. Patch details are recorded
+in third_party/go-webview2/PATCHES.md. This is not a fork of WebView2.
+
+External runtime source/provenance
+============================================================
+The unmodified sing-box 1.14.1 runtime's source is available from the
+official SagerNet repository, tag v1.14.1:
+https://github.com/SagerNet/sing-box/tree/v1.14.1
+https://github.com/SagerNet/sing-box/archive/refs/tags/v1.14.1.tar.gz
+The binary distribution's license notice is runtime/sing-box/LICENSE.
+Runtime files and original verified checksums are in runtime/manifest.json
+and runtime/sing-box/VERSION.txt. The optional bundled libcronet.dll is
+from the same official archive, not modified by AIOverlay.
+
+The separate OpenCode runtime retains runtime/opencode/LICENSE.
+No claim is made that scanning AIOverlay's Go modules audits all code
+inside external executables, libcronet or the installed WebView2 runtime.

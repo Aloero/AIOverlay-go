@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "app": {
     "name": "AIOverlay",
     "secret_storage": "portable_json",
@@ -532,7 +532,7 @@
     "product_name": "AIOverlay",
     "file_description": "AI Overlay Assistant",
     "company": "Local",
-    "version": "0.2.5",
+    "version": "0.2.6",
     "icon_path": "assets/app.ico"
   }
 }

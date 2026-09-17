@@ -1,4 +1,4 @@
-# Architecture · 0.2.5
+# Architecture · 0.2.6
 
 Production: native Win32 overlay + embedded WebView2 Studio + Go execution engine.
 Studio HTML/CSS/JS is compiled into the executable; its JSON requests call the existing handlers in-process via `internal/desktop/bridge.go`. A development HTTP listener is used only with `--headless`.
@@ -23,7 +23,7 @@ External runtimes: OpenCode is a separate process with its own storage/network b
 
 ## Lazy Studio lifecycle · 0.2.5
 
-The application lifetime is owned by the Go core/overlay, not by a WebView2 message loop. `desktop.Window.Run` is a session manager. With `auto_open=false` it creates no WebView at startup. `Show` starts or foregrounds one isolated WebView2 session; Close/WM_CLOSE cancel that session, wait for its message loop to unwind, call `Destroy`, and delete its temporary profile. A Show request received during teardown is queued and creates a fresh session after the old one is released.
+The application lifetime is owned by the Go core/overlay, not by a WebView2 message loop. `desktop.Window.Run` is a session manager with explicit per-session STA COM initialization. With `auto_open=false` it creates no WebView at startup. `Show` starts or foregrounds one isolated WebView2 session; Close/WM_CLOSE protect pending drafts, cancel the session, and synchronously close the controller/COM references and destroy HWND on the owning STA thread while its message loop still runs. The loop then unwinds and the isolated profile is removed with bounded retries. Upstream asynchronous Destroy is not used. A Show request received during teardown is queued and creates a fresh session after the old one is released.
 
 Native WM_CLOSE asks the page to save a valid draft and then calls the in-process `/desktop/close` bridge. A failed save leaves Studio open. Closing Studio never calls the application Quit callback. Capture bypasses desktop coordination entirely when no WebView session exists; a currently visible Studio is still hidden only for the capture frame. `SetStealth` updates both an active session and the value used by future sessions.
 
@@ -60,3 +60,24 @@ Frontend modules: app.js retains common UI and catalog/trace rendering; connecti
 A hidden or iconic Studio is not hidden/restored during capture. Only a visible non-iconic window is temporarily hidden. The GDI capture and native overlay privacy path remain unchanged.
 
 Schema remains version 1, with optional additive fields. Strict unknown-field rejection is retained from 0.2.2; general forward-preserving migrations are not implemented by this change. Configs using new fields require a version of the application that understands them.
+
+
+## Audit stabilization · 0.2.6
+
+- `third_party/go-webview2`: narrow maintained MIT fork of the previous pin. The host owns COM initialization; the fork provides synchronous destruction, reference release, initialization errors instead of process exits, initially hidden windows and guarded dispatch. Its native test is opt-in; Linux tests cannot establish native memory reclamation.
+- `childprocess`: one `cmd.Wait` per instance; Done/Alive are synchronized. Windows startup is suspended until kill-on-close Job Object membership exists. Process exit releases descendants and OS handles once; Stop is idempotent.
+- `atomicfile`: temp file in the destination directory, flush, and replace without delete-first. Windows uses ReplaceFileW for existing files and MoveFileEx for new files. Sharing violations retain the last-good file. Directory durability and physical power-loss behavior are platform/filesystem acceptance concerns.
+- `hotkey`: one grammar shared by portable validation and RegisterHotKey. Transactional registration restores previous bindings on failure; editor suspension has a short lease.
+- `domain`: schema 2 extension codecs retain unknown RawMessage fields, including nested structures; it remains independent of HTTP, Win32, provider requests and UI. `config` migrates schema 1, rejects duplicate JSON keys/trailing bytes/excess depth and validates graph reachability, enum semantics and bounded budgets before writing.
+- `control.JobManager`: owns capture preparation, inference and benchmark batches. A cancelled capture cannot start inference later. Clear discards stale output. Both legacy run and benchmark routes use the same single-flight gate. Long-lived work belongs to application/job context, not a transient WebView session.
+- `control`: separate trusted DesktopHandler and authenticated loopback HTTP Handler. Byte limit is enforced by max+1 read, not EOF synthesized by LimitReader. Prompt preview calls the same engine renderer.
+- `engine`: original input is independent from previous and vision outputs. The screenshot remains in execution context for fallback; known text-only requests drop the image payload. Key admission filtering precedes key-attempt truncation. Exhausted edges are skipped. Effective timeout precedence is centralized. Cooperative provider channel closure is joined after cancellation, with a traced 1500 ms bound for broken adapters.
+- `engine/stream`: stage ownership resets on first output; winners never concatenate competing/stale stage content. Redaction preserves a possible secret prefix across chunk boundaries; cached per-run secrets avoid repeated JSON parsing. The final answer and metadata pass through the same redactor.
+- `trace`: List/Get/Add and Job snapshots copy nested event/attempt/winner data. Returning a trace never exports a mutable stored slice.
+- `app`: writes are serialized against runs; UI-only saves do not recreate connections. Network identity comparison ignores labels/policy/default changes but notices credential/endpoint changes. The same Engine survives validated reconfiguration. Optional statistics persist only when enabled and never replace quality scores. Catalogue refresh is bounded/contextual, atomically saved before publication and joined at shutdown.
+- `tunnel`: the application owns the authenticated mixed loopback listener. A SOCKS username/password handshake, not merely an open TCP port, confirms local startup. Imported standalone DNS dependencies are retained; endpoint resolution is IPv4-only. Multi-outbound detours are rejected. No TUN, system proxy or arbitrary route injection. This remains userspace routing, not an OS per-process egress firewall.
+- `web/static/studio-lifecycle.js`: dialog drafts and graph revisions are separate. Close coalesces requests, asks save/discard/cancel for a connection draft, and refuses to close over changes made during PUT. Normalization converts optional/null arrays to editable collections without dropping extension fields.
+- `benchmark`: batch progress and exact/unverified fixture grading are explicit. Reports separate requested and completed rows; even sample counts use the average of the middle latencies.
+- `releaseguard` / `releasepack` / `cmd/release`: no runtime config in Git, no credentials or LFS pointers in packaged inputs, explicit inventory, deterministic ZIP timestamps, full manifest coverage/CRC/clean extraction and reproducible Windows EXE from extracted source. No CDN, private configuration upload, runtime Python or test-browser payload is added.
+
+The original layer boundaries remain: adapters execute one request, the engine chooses fallback, app/control own operations and platform/desktop own Windows. Details and evidence boundaries for every audit issue are in AUDIT_FIXES.md and VERIFICATION.md.

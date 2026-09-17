@@ -5,7 +5,7 @@ const base=process.env.TEST_SERVER;if(!base)throw Error('Run with the isolated t
 const artifacts=process.env.ARTIFACT_DIR||path.join(os.tmpdir(),'aio-studio-visual');fs.mkdirSync(artifacts,{recursive:true});
 const calls=[],errors=[];let count=0,browser,page;
 function ok(value,message){assert.ok(value,message);count++;}
-async function readConfig(){const r=await fetch(base+'/api/config');if(!r.ok)throw Error('config failed');return r.json();}
+async function readConfig(){const r=await fetch(base+'/api/config',{headers:{Authorization:'Bearer '+process.env.TEST_TOKEN}});if(!r.ok)throw Error('config failed');return r.json();}
 (async()=>{
  try {
   browser=await chromium.launch({headless:true});
@@ -19,13 +19,22 @@ async function readConfig(){const r=await fetch(base+'/api/config');if(!r.ok)thr
    if(r.path==='/desktop/close')return {};
    if(r.path==='/api/capture')return {image_base64:'dGVzdA==',bytes:4,duration_ms:1,method:'Synthetic fixture'};
    if(!r.path.startsWith('/api/'))throw Error('Unexpected test route');
-   const reply=await fetch(base+r.path,{method:r.method,headers:{'Content-Type':'application/json'},body:r.body===null||r.body===undefined?undefined:JSON.stringify(r.body)});
+   const reply=await fetch(base+r.path,{method:r.method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.TEST_TOKEN},body:r.body===null||r.body===undefined?undefined:JSON.stringify(r.body)});
    if(!reply.ok)throw Error(await reply.text());return reply.json();
   });
   await page.addInitScript(()=>{window.studioDispatch=r=>window.__testDispatch(r).then(data=>window.__studioReply(r.id,{ok:true,data}),e=>window.__studioReply(r.id,{ok:false,error:e.message}));});
   await page.goto(base);await page.waitForSelector('#solverModels');
   ok(await page.locator('#runScreen').count()===0,'ordinary Run button removed');
   await page.click('[data-page="settings"]');await page.waitForSelector('#vpnEnabled');ok(await page.locator('#buildExe').count()===0,'build identity removed from runtime Studio');ok(await page.locator('#vpnConfig').count()===1,'AI VPN editor present');await page.click('[data-page="pipelines"]');await page.waitForSelector('#solverModels');
+  await page.click('[data-page="runs"]');await page.waitForSelector('#benchmarkRuns');
+  ok(await page.locator('#benchmarkRuns').inputValue()==='3','batch benchmark defaults to three runs');
+  await page.evaluate(()=>{state.job={id:'fixture-benchmark',running:false,benchmark:{requested:3,total:2,median_ms:150,successful:2,success_rate:1,correct:1,unverified:1,cancelled:true,runs:[{run:1,duration_ms:100,verdict:'correct',text:'Q4 210',winner:{provider_id:'fake',model_id:'fixture'},ttft_ms:20,tps:5},{run:2,duration_ms:200,verdict:'unverified',text:'explanation',winner:null,ttft_ms:0,tps:0}]}};renderBenchmarkResult();});
+  ok((await page.locator('#benchmarkResult').textContent()).includes('0.15'),'benchmark renders correct median');
+  ok((await page.locator('#benchmarkResult').textContent()).includes('Проверить вручную'),'benchmark does not claim prose grading');
+  await page.click('[data-page="settings"]');await page.waitForSelector('#runtimeDiagnostics');
+  await page.locator('#hotkey_control').focus();await page.waitForTimeout(80);
+  ok(calls.some(r=>r.path==='/api/hotkeys/editor'),'hotkey editor suppression reaches core');
+  await page.click('[data-page="pipelines"]');await page.waitForSelector('#solverModels');
   ok(await page.locator('#studioRecovery').count()===0,'sidebar hotkey clutter removed');
   ok(!(await page.locator('.sidebar').textContent()).includes('JSON с ключами'),'sidebar secret banner removed');
   ok(!(await page.locator('#graphNodes').textContent()).includes('Основной монитор'),'source card clutter removed');

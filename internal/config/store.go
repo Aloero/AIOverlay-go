@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"aioverlay/internal/atomicfile"
 	"aioverlay/internal/domain"
 )
 
@@ -40,8 +42,17 @@ func (s *Store) Load() (domain.Config, error) {
 }
 
 func Decode(r io.Reader) (domain.Config, error) {
-	dec := json.NewDecoder(r)
-	dec.DisallowUnknownFields()
+	raw, err := io.ReadAll(io.LimitReader(r, 8<<20+1))
+	if err != nil {
+		return domain.Config{}, err
+	}
+	if len(raw) > 8<<20 {
+		return domain.Config{}, fmt.Errorf("configuration exceeds 8 MiB")
+	}
+	if err := checkJSON(raw); err != nil {
+		return domain.Config{}, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	var cfg domain.Config
 	if err := dec.Decode(&cfg); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
@@ -50,6 +61,9 @@ func Decode(r io.Reader) (domain.Config, error) {
 	if err := dec.Decode(&extra); err != io.EOF {
 		return cfg, fmt.Errorf("config contains trailing JSON or invalid data")
 	}
+	if err := Migrate(&cfg); err != nil {
+		return cfg, err
+	}
 	if err := Validate(cfg); err != nil {
 		return cfg, err
 	}
@@ -57,6 +71,9 @@ func Decode(r io.Reader) (domain.Config, error) {
 }
 
 func (s *Store) Save(cfg domain.Config) error {
+	if err := Migrate(&cfg); err != nil {
+		return err
+	}
 	if err := Validate(cfg); err != nil {
 		return err
 	}
@@ -68,32 +85,7 @@ func (s *Store) Save(cfg domain.Config) error {
 		return fmt.Errorf("encode config: %w", err)
 	}
 	data = append(data, '\n')
-	dir := filepath.Dir(s.Path)
-	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, s.Path); err != nil {
-		return err
-	}
-	return nil
+	return atomicfile.Write(s.Path, data, 0o600)
 }
 
 func (s *Store) Export(w io.Writer) error {

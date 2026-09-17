@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+command -v git-lfs >/dev/null 2>&1 || { echo 'Git LFS is required for bundled runtime files.' >&2; exit 1; }
+git lfs post-checkout "$@"

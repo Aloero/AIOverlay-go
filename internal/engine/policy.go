@@ -10,6 +10,7 @@ import (
 )
 
 type modelStat struct {
+	TTFTSamples int
 	Success     int
 	Failure     int
 	AvgTTFT     float64
@@ -27,14 +28,22 @@ func (e *Engine) orderModelsForPolicy(nodeID string, policy domain.PoolPolicy, m
 	case domain.PoolFastest:
 		sort.SliceStable(out, func(i, j int) bool {
 			a, b := e.stats[modelKey(out[i])], e.stats[modelKey(out[j])]
+			// Beta(1,1) estimate: reliability is independent of manual quality.
+			ra, rb := float64(a.Success+1)/float64(a.Success+a.Failure+2), float64(b.Success+1)/float64(b.Success+b.Failure+2)
+			if ra != rb {
+				return ra > rb
+			}
 			if a.Success > 0 && b.Success == 0 {
 				return true
 			}
 			if b.Success > 0 && a.Success == 0 {
 				return false
 			}
-			if a.Success > 0 && b.Success > 0 && a.AvgTTFT != b.AvgTTFT {
+			if a.Success > 0 && b.Success > 0 && a.AvgTTFT > 0 && b.AvgTTFT > 0 && a.AvgTTFT != b.AvgTTFT {
 				return a.AvgTTFT < b.AvgTTFT
+			}
+			if a.AvgDuration > 0 && b.AvgDuration > 0 && a.AvgDuration != b.AvgDuration {
+				return a.AvgDuration < b.AvgDuration
 			}
 			return out[i].Priority > out[j].Priority
 		})
@@ -131,9 +140,12 @@ func (e *Engine) recordModel(slot domain.ModelSlot, outcome domain.Outcome, ttft
 	s := e.stats[k]
 	if outcome == domain.OutcomeSuccess {
 		s.Success++
-		s.AvgTTFT = rolling(s.AvgTTFT, float64(ttft.Milliseconds()), s.Success)
+		if ttft > 0 {
+			s.TTFTSamples++
+			s.AvgTTFT = rolling(s.AvgTTFT, float64(ttft.Milliseconds()), s.TTFTSamples)
+		}
 		s.AvgDuration = rolling(s.AvgDuration, float64(duration.Milliseconds()), s.Success)
-	} else {
+	} else if outcome != domain.OutcomeCancelled {
 		s.Failure++
 	}
 	e.stats[k] = s

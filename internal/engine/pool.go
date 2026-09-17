@@ -4,6 +4,7 @@ import (
 	"aioverlay/internal/catalog"
 	"aioverlay/internal/providers"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 		if err != nil {
 			return nodeValue{}, outcome, err
 		}
-		modelInput = nodeValue{text: v.text}
+		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true}
 	}
 	gate := &streamGate{runner: r, silent: ctx.Value(silentKey{}) == true}
 	ctx = context.WithValue(ctx, streamKey{}, gate)
@@ -35,9 +36,13 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 	ordered := r.engine.orderPoolModels(r.pipeline.ID+"/"+n.ID, *pool, models)
 	switch pool.Policy {
 	case domain.PoolParallel:
-		return r.racePool(ctx, n, *pool, modelInput, ordered, 0)
+		out, outcome, err := r.racePool(ctx, n, *pool, modelInput, ordered, 0)
+		out.image = input.image
+		return out, outcome, err
 	case domain.PoolStaggered:
-		return r.racePool(ctx, n, *pool, modelInput, ordered, time.Duration(max(0, pool.HedgeDelayMS))*time.Millisecond)
+		out, outcome, err := r.racePool(ctx, n, *pool, modelInput, ordered, time.Duration(max(0, pool.HedgeDelayMS))*time.Millisecond)
+		out.image = input.image
+		return out, outcome, err
 	default:
 		var lastErr error
 		lastOutcome := domain.OutcomeModelUnavailable
@@ -45,7 +50,13 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 			res, outcome, err := r.attemptModel(ctx, n, *pool, modelInput, m)
 			if err == nil {
 				r.commit(ctx, n, m, res)
-				return nodeValue{text: res}, domain.OutcomeSuccess, nil
+				modelInput.text = res
+				modelInput.hasOutput = true
+				modelInput.image = input.image
+				if modelInput.vision == "" && len(input.image) > 0 {
+					modelInput.vision = res
+				}
+				return modelInput, domain.OutcomeSuccess, nil
 			}
 			lastErr = err
 			lastOutcome = outcome
@@ -117,7 +128,12 @@ func (r *runner) racePool(ctx context.Context, n domain.Node, pool domain.ModelP
 			if got.err == nil {
 				r.commit(ctx, n, got.slot, got.text)
 				cancel()
-				return nodeValue{text: got.text}, domain.OutcomeSuccess, nil
+				input.text = got.text
+				input.hasOutput = true
+				if input.vision == "" && len(input.image) > 0 {
+					input.vision = got.text
+				}
+				return input, domain.OutcomeSuccess, nil
 			}
 			lastErr = got.err
 			lastOutcome = got.outcome
@@ -168,30 +184,41 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 	if len(input.image) > 0 && r.engine.catalog != nil {
 		ref := catalog.ProviderID(pc) + "/" + strings.TrimPrefix(m.ModelID, catalog.ProviderID(pc)+"/")
 		if meta, known := r.engine.catalog.Find(ref); known && !meta.HasImageInput() {
-			return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "text-only model requires a vision preprocessor"}
+			if !input.hasOutput {
+				return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "text-only model requires a vision preprocessor"}
+			}
+			input.image = nil
 		}
 	}
-	keys := r.engine.orderCredentials(m.ProviderID, pc.CredentialPool)
+	keys := r.allowedCredentials(m.ProviderID, r.engine.orderCredentials(m.ProviderID, pc.CredentialPool))
 	if pc.Kind == domain.ProviderEmbeddedOpenCode && (pc.OpenCodeProviderID == "" || pc.OpenCodeProviderID == "opencode") && len(keys) == 0 {
 		keys = []domain.Credential{{ID: "keyless", Enabled: true}}
 	}
 	limit := pc.CredentialPool.MaxKeysPerRequest
-	if r.pipeline.Budget.MaxKeysPerProvider > 0 && (limit <= 0 || r.pipeline.Budget.MaxKeysPerProvider < limit) {
-		limit = r.pipeline.Budget.MaxKeysPerProvider
-	}
 	if limit <= 0 || limit > len(keys) {
 		limit = len(keys)
 	}
+
 	var lastErr error = fmt.Errorf("no healthy credentials configured for %s", m.ProviderID)
 	lastOutcome := domain.OutcomeAuthFailed
 	maxAttempts := m.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
-	for i := 0; i < limit; i++ {
-		key := keys[i]
+	used := 0
+	for _, key := range keys {
+		if used >= limit {
+			break
+		}
+		admitted := false
 		for attemptNo := 0; attemptNo < maxAttempts; attemptNo++ {
 			text, outcome, err := r.singleAttempt(ctx, n, pool, input, m, p, key)
+			var budget *BudgetError
+			if errors.As(err, &budget) && (budget.Scope == "keys" || budget.Scope == "providers") {
+				lastErr, lastOutcome = err, outcome
+				break
+			}
+			admitted = true
 			r.engine.markCredential(m.ProviderID, key, outcome, pc.CredentialPool.RateLimitCooldownS)
 			if err == nil {
 				return text, domain.OutcomeSuccess, nil
@@ -206,6 +233,9 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 			if outcome != domain.OutcomeTimeout && outcome != domain.OutcomeNetworkError && outcome != domain.OutcomeProviderUnavailable {
 				break
 			}
+		}
+		if admitted {
+			used++
 		}
 	}
 	return "", lastOutcome, lastErr

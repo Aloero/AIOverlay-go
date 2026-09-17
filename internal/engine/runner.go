@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,10 +27,13 @@ func terminalPoolBudget(err error) bool {
 }
 
 type nodeValue struct {
-	image []byte
-	text  string
+	image     []byte
+	text      string
+	vision    string
+	hasOutput bool
 }
 type runner struct {
+	redact        redactor
 	traceMu       sync.Mutex
 	callbackMu    sync.Mutex
 	workers       sync.WaitGroup
@@ -53,7 +55,7 @@ type runner struct {
 
 func newRunner(e *Engine, p domain.Pipeline, input Input, opt RunOptions, trace *domain.ExecutionTrace) *runner {
 	return &runner{
-		engine: e, pipeline: p, input: input, opt: opt, trace: trace,
+		engine: e, pipeline: p, input: input, opt: opt, trace: trace, redact: redactor{e.secrets()},
 		started: time.Now(), successes: map[string]*domain.AttemptRef{}, nodeCalls: map[string]int{}, keysUsed: map[string]map[string]bool{}, providersUsed: map[string]struct{}{}, edgeVisits: map[string]int{},
 		sem: make(chan struct{}, max(1, p.Budget.MaxParallelCalls)),
 	}
@@ -61,19 +63,13 @@ func newRunner(e *Engine, p domain.Pipeline, input Input, opt RunOptions, trace 
 
 func (r *runner) emit(ev domain.TraceEvent) {
 	ev.AtMS = time.Since(r.started).Milliseconds()
-	for _, p := range r.engine.cfg.Providers {
-		for _, k := range p.CredentialPool.Keys {
-			if k.Secret != "" {
-				ev.Message = strings.ReplaceAll(ev.Message, k.Secret, "[redacted]")
-			}
-		}
-	}
+	ev = r.redact.event(ev)
 	r.traceMu.Lock()
-	r.trace.Events = append(r.trace.Events, ev)
+	r.trace.Events = append(r.trace.Events, domain.CloneTraceEvent(ev))
 	r.traceMu.Unlock()
 	if r.opt.OnTrace != nil {
 		r.callbackMu.Lock()
-		r.opt.OnTrace(ev)
+		r.opt.OnTrace(domain.CloneTraceEvent(ev))
 		r.callbackMu.Unlock()
 	}
 }
@@ -168,7 +164,7 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 func (r *runner) nextEdge(from string, outcome domain.Outcome) (domain.Edge, bool) {
 	var list []domain.Edge
 	for _, ed := range r.pipeline.Edges {
-		if ed.From != from {
+		if ed.From != from || r.edgeVisits[ed.ID] >= ed.MaxVisits {
 			continue
 		}
 		for _, o := range ed.On {

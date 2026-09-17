@@ -3,6 +3,8 @@ package control
 import (
 	"context"
 	"net/http"
+	"os"
+	"runtime"
 	"time"
 
 	"aioverlay/internal/domain"
@@ -33,5 +35,9 @@ func (s *Server) handleVPNCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "engine": "sing-box", "scope": "ai_requests_only"})
+	check := "structure"
+	if runtime.GOOS == "windows" || os.Getenv("AIOVERLAY_SINGBOX_BIN") != "" {
+		check = "engine"
+	}
+	writeJSON(w, map[string]any{"ok": true, "engine": "sing-box", "scope": "ai_requests_only", "check": check})
 }

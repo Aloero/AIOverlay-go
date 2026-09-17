@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,6 +17,7 @@ import (
 	"time"
 	"unsafe"
 
+	"aioverlay/internal/platform"
 	assets "aioverlay/web"
 	webview "github.com/jchv/go-webview2"
 	"github.com/jchv/go-webview2/webviewloader"
@@ -48,6 +50,7 @@ type desktopWindow struct {
 	ctx         context.Context
 	captureMu   sync.Mutex
 	origWndProc uintptr
+	protection  platform.ProtectionStatus
 	appClosing  atomic.Bool
 	openCh      chan struct{}
 	closeCh     chan struct{}
@@ -73,7 +76,8 @@ func (w *desktopWindow) Run(ctx context.Context) error {
 		sessionCtx, cancel := context.WithCancel(ctx)
 		sessionCancel = cancel
 		sessionDone = make(chan error, 1)
-		go func() { sessionDone <- w.runSession(sessionCtx) }()
+		done := sessionDone
+		go func() { done <- w.runSession(sessionCtx) }()
 	}
 	if initiallyVisible {
 		life.running = true
@@ -120,6 +124,18 @@ func (w *desktopWindow) Run(ctx context.Context) error {
 func (w *desktopWindow) runSession(ctx context.Context) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	uninit, err := initializeSTA()
+	if err != nil {
+		return err
+	}
+	defer uninit()
+	ctx, endSession := context.WithCancel(ctx)
+	defer endSession()
+	defer func() {
+		if w.options.HotkeyEditor != nil {
+			w.options.HotkeyEditor(false)
+		}
+	}()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -133,7 +149,7 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(profile)
+	defer cleanupProfile(profile)
 	html, err := assets.DesktopHTML()
 	if err != nil {
 		return err
@@ -141,7 +157,7 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	w.mu.Lock()
 	options := w.options
 	w.mu.Unlock()
-	v := webview.NewWithOptions(webview.WebViewOptions{Debug: false, DataPath: profile, AutoFocus: true, WindowOptions: webview.WindowOptions{Title: options.Title, Width: 1320, Height: 880, Center: false}})
+	v := webview.NewWithOptions(webview.WebViewOptions{Debug: false, DataPath: profile, AutoFocus: true, WindowOptions: webview.WindowOptions{Title: options.Title, Width: 1320, Height: 880, Center: false, Hidden: true}})
 	if v == nil {
 		return fmt.Errorf("не удалось создать WebView2. Установите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1 и повторите открытие Studio")
 	}
@@ -151,8 +167,11 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	w.mu.Unlock()
 	w.installCloseToUnload(v)
 	watchDone := make(chan struct{})
+	var requests sync.WaitGroup
 	defer func() {
+		endSession()
 		close(watchDone)
+		requests.Wait()
 		w.uninstallCloseSubclass(v)
 		w.mu.Lock()
 		if w.view == v {
@@ -178,7 +197,9 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 		default:
 			return fmt.Errorf("too many outstanding desktop requests")
 		}
+		requests.Add(1)
 		go func() {
+			defer requests.Done()
 			defer func() { <-semaphore }()
 			closeAfterReply := false
 			var reply Reply
@@ -192,14 +213,14 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 				}
 				reply = Reply{OK: true, Data: json.RawMessage(`{}`)}
 			case "/desktop/export":
-				reply = w.exportConfig(r.Body)
+				reply = w.exportConfig(ctx, v)
 			default:
 				reply = Call(ctx, w.options.Handler, r)
 			}
 			encoded, _ := json.Marshal(reply)
 			id, _ := json.Marshal(r.ID)
-			w.dispatch(func(v webview.WebView) { v.Eval("window.__studioReply(" + string(id) + "," + string(encoded) + ")") })
-			if closeAfterReply {
+			w.dispatchSession(ctx, v, func() { v.Eval("window.__studioReply(" + string(id) + "," + string(encoded) + ")") })
+			if closeAfterReply && ctx.Err() == nil {
 				w.Close()
 			}
 		}()
@@ -209,10 +230,11 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 		return err
 	}
 	v.SetHtml(html)
+	showWindow.Call(uintptr(v.Window()), 5)
 	go func() {
 		select {
 		case <-ctx.Done():
-			v.Dispatch(func() { v.Terminate() })
+			v.Dispatch(func() { v.Destroy() })
 		case <-watchDone:
 		}
 	}()
@@ -270,12 +292,32 @@ func (w *desktopWindow) uninstallCloseSubclass(v webview.WebView) {
 	desktopWindowMap.Delete(hwnd)
 }
 
+func (w *desktopWindow) dispatchSession(ctx context.Context, v webview.WebView, fn func()) {
+	if ctx.Err() != nil {
+		return
+	}
+	v.Dispatch(func() {
+		w.mu.Lock()
+		valid := w.view == v
+		w.mu.Unlock()
+		if valid && ctx.Err() == nil {
+			fn()
+		}
+	})
+}
 func (w *desktopWindow) dispatch(fn func(webview.WebView)) {
 	w.mu.Lock()
 	v := w.view
 	w.mu.Unlock()
 	if v != nil {
-		v.Dispatch(func() { fn(v) })
+		v.Dispatch(func() {
+			w.mu.Lock()
+			valid := w.view == v
+			w.mu.Unlock()
+			if valid {
+				fn(v)
+			}
+		})
 	}
 }
 func (w *desktopWindow) requestCloseFromPage() {
@@ -284,7 +326,14 @@ func (w *desktopWindow) requestCloseFromPage() {
 	})
 }
 func (w *desktopWindow) showActive() {
-	w.dispatch(func(v webview.WebView) { showWindow.Call(uintptr(v.Window()), 9); foreground.Call(uintptr(v.Window())) })
+	w.dispatch(func(v webview.WebView) {
+		w.mu.Lock()
+		stealth := w.options.Stealth
+		w.mu.Unlock()
+		w.applyStealth(v, stealth)
+		showWindow.Call(uintptr(v.Window()), 9)
+		foreground.Call(uintptr(v.Window()))
+	})
 }
 func (w *desktopWindow) Show() {
 	select {
@@ -308,12 +357,17 @@ func (w *desktopWindow) SetStealth(on bool) {
 	}
 }
 func (w *desktopWindow) applyStealth(v webview.WebView, on bool) {
-	flag := uintptr(0)
-	if on {
-		flag = 0x11
-	}
-	affinity.Call(uintptr(v.Window()), flag)
+	status := platform.ApplyWindowProtection(uintptr(v.Window()), on)
+	w.mu.Lock()
+	w.protection = status
+	w.mu.Unlock()
 }
+func (w *desktopWindow) Diagnostics() any {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return map[string]any{"loaded": w.view != nil, "protection": w.protection}
+}
+
 func (w *desktopWindow) Capture(fn func() ([]byte, error)) ([]byte, error) {
 	w.captureMu.Lock()
 	defer w.captureMu.Unlock()
@@ -324,7 +378,9 @@ func (w *desktopWindow) Capture(fn func() ([]byte, error)) ([]byte, error) {
 		return fn()
 	}
 	done := make(chan bool, 1)
-	v.Dispatch(func() {
+	requestCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	w.dispatchSession(requestCtx, v, func() {
 		visible, _, _ := getVisible.Call(uintptr(v.Window()))
 		minimized, _, _ := isIconic.Call(uintptr(v.Window()))
 		hide := hideForCapture(visible != 0, minimized != 0)
@@ -336,7 +392,7 @@ func (w *desktopWindow) Capture(fn func() ([]byte, error)) ([]byte, error) {
 	var visible bool
 	select {
 	case visible = <-done:
-	case <-time.After(2 * time.Second):
+	case <-requestCtx.Done():
 		w.mu.Lock()
 		stillActive := w.view == v
 		w.mu.Unlock()
@@ -392,9 +448,9 @@ func (w *desktopWindow) applyIdentity(v webview.WebView) {
 
 // A save dialog can only export the current config; the bridge does not expose
 // arbitrary filesystem reads or writes. File picker runs on the owning thread.
-func (w *desktopWindow) exportConfig(body json.RawMessage) Reply {
+func (w *desktopWindow) exportConfig(ctx context.Context, v webview.WebView) Reply {
 	result := make(chan Reply, 1)
-	w.dispatch(func(v webview.WebView) {
+	w.dispatchSession(ctx, v, func() {
 		path, err := saveDialog(uintptr(v.Window()), filepath.Dir(w.options.ConfigPath))
 		if err != nil {
 			result <- Reply{Error: err.Error()}
@@ -404,7 +460,7 @@ func (w *desktopWindow) exportConfig(body json.RawMessage) Reply {
 			result <- Reply{OK: true, Data: json.RawMessage(`{"cancelled":true}`)}
 			return
 		}
-		resp := Call(w.ctx, w.options.Handler, Request{Path: "/api/config", Method: "GET"})
+		resp := Call(ctx, w.options.Handler, Request{Path: "/api/config", Method: "GET"})
 		if !resp.OK {
 			result <- resp
 			return
@@ -418,7 +474,7 @@ func (w *desktopWindow) exportConfig(body json.RawMessage) Reply {
 	select {
 	case r := <-result:
 		return r
-	case <-w.ctx.Done():
+	case <-ctx.Done():
 		return Reply{Error: "application closed"}
 	}
 }
@@ -469,4 +525,43 @@ func saveDialog(owner uintptr, dir string) (string, error) {
 		return "", nil
 	}
 	return syscall.UTF16ToString(buf), nil
+}
+
+func initializeSTA() (func(), error) {
+	ole := syscall.NewLazyDLL("ole32.dll")
+	hr, _, _ := ole.NewProc("CoInitializeEx").Call(0, 2)
+	if int32(hr) < 0 {
+		return nil, fmt.Errorf("Studio COM initialization failed: 0x%08x", uint32(hr))
+	}
+	return func() {
+		// A failed constructor may destroy HWND before Run consumes WM_QUIT. Do not
+		// leave it on a Go thread that can later host another Studio session.
+		var msg struct {
+			Hwnd    uintptr
+			Message uint32
+			WParam  uintptr
+			LParam  uintptr
+			Time    uint32
+			X, Y    int32
+			Private uint32
+		}
+		peek := user32.NewProc("PeekMessageW")
+		for {
+			ok, _, _ := peek.Call(uintptr(unsafe.Pointer(&msg)), 0, 0x12, 0x12, 1)
+			if ok == 0 {
+				break
+			}
+		}
+		ole.NewProc("CoUninitialize").Call()
+	}, nil
+}
+func cleanupProfile(path string) {
+	var err error
+	for i := 0; i < 25; i++ {
+		if err = os.RemoveAll(path); err == nil {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+	log.Printf("Studio profile cleanup pending: %v", err)
 }

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"aioverlay/internal/domain"
@@ -13,12 +14,14 @@ type silentKey struct{}
 // Only one provisional response can paint the UI. A different completed winner
 // replaces it explicitly instead of concatenating unrelated model responses.
 type streamGate struct {
-	mu     sync.Mutex
-	runner *runner
-	owner  string
-	text   string
-	closed bool
-	silent bool
+	mu      sync.Mutex
+	runner  *runner
+	owner   string
+	text    strings.Builder
+	pending string
+	started bool
+	closed  bool
+	silent  bool
 }
 
 func (g *streamGate) push(id, delta string) {
@@ -36,11 +39,19 @@ func (g *streamGate) push(id, delta string) {
 	if g.owner != id {
 		return
 	}
-	g.text += delta
+	var safe string
+	safe, g.pending = g.runner.redact.chunk(g.pending, delta)
+	g.text.WriteString(safe)
 	g.runner.callbackMu.Lock()
 	defer g.runner.callbackMu.Unlock()
-	if g.runner.opt.OnDelta != nil {
-		g.runner.opt.OnDelta(delta)
+	if !g.started {
+		g.started = true
+		if g.runner.opt.OnReset != nil {
+			g.runner.opt.OnReset()
+		}
+	}
+	if g.runner.opt.OnDelta != nil && safe != "" {
+		g.runner.opt.OnDelta(safe)
 	}
 }
 func (g *streamGate) release(id string) {
@@ -53,7 +64,8 @@ func (g *streamGate) release(id string) {
 		return
 	}
 	g.owner = ""
-	g.text = ""
+	g.text.Reset()
+	g.pending = ""
 	g.runner.callbackMu.Lock()
 	defer g.runner.callbackMu.Unlock()
 	if g.runner.opt.OnReset != nil {
@@ -68,7 +80,7 @@ func (r *runner) commit(ctx context.Context, n domain.Node, m domain.ModelSlot, 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.closed = true
-	if g.text != text {
+	if g.text.String() != text {
 		r.callbackMu.Lock()
 		if r.opt.OnReset != nil {
 			r.opt.OnReset()

@@ -17,7 +17,8 @@ func TestPipelineStudioContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(app) + string(index)
+	settings, _ := os.ReadFile(filepath.Join(root, "application-settings.js"))
+	s := string(app) + string(index) + string(settings)
 	for _, token := range []string{"studioDispatch", "__studioReply", "/api/job", "/api/capture", "vision_preprocessor", "first_token_timeout_ms", "max_attempts", "quality_score", "renderEdgeInspector", "renderProviders", "renderSettings", "renderRuns", "Экспорт JSON", "Проверить захват", "TEXT ONLY", "IMAGE", "FREE", "AI VPN", "vpnEnabled", "vpnConfig", "/api/vpn/check"} {
 		if !strings.Contains(s, token) {
 			t.Errorf("Studio missing contract %q", token)

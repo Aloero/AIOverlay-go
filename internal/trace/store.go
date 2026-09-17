@@ -21,7 +21,7 @@ func New(max int) *Store {
 func (s *Store) Add(t domain.ExecutionTrace) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.items = append([]domain.ExecutionTrace{t}, s.items...)
+	s.items = append([]domain.ExecutionTrace{domain.CloneTrace(t)}, s.items...)
 	if len(s.items) > s.max {
 		s.items = s.items[:s.max]
 	}
@@ -30,7 +30,9 @@ func (s *Store) List() []domain.ExecutionTrace {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]domain.ExecutionTrace, len(s.items))
-	copy(out, s.items)
+	for i, t := range s.items {
+		out[i] = domain.CloneTrace(t)
+	}
 	return out
 }
 func (s *Store) Get(id string) (domain.ExecutionTrace, bool) {
@@ -38,7 +40,7 @@ func (s *Store) Get(id string) (domain.ExecutionTrace, bool) {
 	defer s.mu.RUnlock()
 	for _, x := range s.items {
 		if x.ID == id {
-			return x, true
+			return domain.CloneTrace(x), true
 		}
 	}
 	return domain.ExecutionTrace{}, false

@@ -33,6 +33,7 @@ type Engine struct {
 	registry *providers.Registry
 	catalog  *catalog.Service
 	traces   *tracestore.Store
+	configMu sync.RWMutex
 	mu       sync.Mutex
 	rr       map[string]int
 	lastGood map[string]string
@@ -54,6 +55,8 @@ func New(cfg domain.Config, registry *providers.Registry, cat *catalog.Service, 
 func (e *Engine) Traces() *tracestore.Store { return e.traces }
 
 func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, opt RunOptions) (Result, error) {
+	e.configMu.RLock()
+	defer e.configMu.RUnlock()
 	p, ok := findPipeline(e.cfg, pipelineID)
 	if !ok {
 		return Result{}, fmt.Errorf("pipeline %q not found", pipelineID)
@@ -66,6 +69,10 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 	cancel()
 	r.workers.Wait()
 	t.FinishedAt = time.Now()
+	if t.Winner != nil {
+		t.Winner = r.redact.event(domain.TraceEvent{Attempt: t.Winner}).Attempt
+	}
+	t.PipelineID = r.redact.text(t.PipelineID)
 	e.traces.Add(t)
-	return Result{Text: text, Trace: t}, e.safeError(err)
+	return Result{Text: text, Trace: domain.CloneTrace(t)}, e.safeError(err)
 }

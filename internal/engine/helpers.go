@@ -57,7 +57,7 @@ func findPipeline(cfg domain.Config, id string) (domain.Pipeline, bool) {
 		id = cfg.ActivePipelineID
 	}
 	for _, p := range cfg.Pipelines {
-		if p.ID == id {
+		if p.ID == id && p.Enabled {
 			return p, true
 		}
 	}

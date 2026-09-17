@@ -6,12 +6,13 @@ import (
 )
 
 type Options struct {
-	Title      string
-	Visible    bool
-	Stealth    bool
-	Handler    http.Handler
-	ConfigPath string
-	Quit       func()
+	Title        string
+	Visible      bool
+	Stealth      bool
+	Handler      http.Handler
+	ConfigPath   string
+	Quit         func()
+	HotkeyEditor func(bool)
 }
 type Window interface {
 	Run(context.Context) error

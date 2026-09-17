@@ -24,6 +24,7 @@ func main() {
 	configPath := flag.String("config", resourcePath("config.json"), "portable configuration")
 	headless := flag.Bool("headless", false, "development HTTP interface, no desktop UI")
 	hidden := flag.Bool("no-browser", false, "legacy flag: start embedded Studio hidden (never opens a browser)")
+	devToken := flag.String("headless-token", "", "development-only bearer token (at least 32 characters)")
 	flag.Parse()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -37,22 +38,37 @@ func main() {
 	platform.ConfigureProcessIdentity(buildinfo.Company, buildinfo.ProductName)
 	server := control.New(cfg.ControlCenter.ListenAddress, a)
 	server.SetContext(ctx)
+	if *headless && *devToken != "" {
+		server.SetDevelopmentToken(*devToken)
+	}
 	defer server.CancelRun()
-	studio := desktop.New(desktop.Options{Title: cfg.App.Name + " · Pipeline Studio", Visible: cfg.ControlCenter.AutoOpen && !*hidden, Stealth: cfg.Overlay.Stealth, Handler: server.Handler(), ConfigPath: *configPath, Quit: cancel})
+	studio := desktop.New(desktop.Options{Title: cfg.App.Name + " · Pipeline Studio", Visible: cfg.ControlCenter.AutoOpen && !*hidden, Stealth: cfg.Overlay.Stealth, Handler: server.DesktopHandler(), ConfigPath: *configPath, Quit: cancel, HotkeyEditor: func(active bool) {
+		if server.HotkeyEditor != nil {
+			server.HotkeyEditor(active)
+		}
+	}})
 	var ov platform.Overlay
-	ov, err = platform.NewOverlay(cfg.Overlay, platform.Callbacks{
-		Capture: func() ([]byte, error) { return server.Capture() },
-		Analyze: func(image []byte) {
-			if _, e := server.StartImage(image); e != nil && ov != nil {
-				ov.SetMeta(e.Error())
-			}
-		},
-		Control: studio.Show,
-		Cancel:  server.CancelRun,
-		Quit:    cancel,
-	})
-	if err != nil {
-		log.Printf("overlay: %v", err)
+	if !*headless {
+		ov, err = platform.NewOverlay(cfg.Overlay, platform.Callbacks{
+			Capture: func() ([]byte, error) { return server.Capture() },
+			Analyze: func(image []byte) {
+				if _, e := server.StartImage(image); e != nil && ov != nil {
+					ov.SetMeta(e.Error())
+				}
+			},
+			Control: studio.Show,
+			Cancel:  server.ClearRun,
+			Geometry: func(next domain.OverlayConfig) {
+				if err := a.SaveGeometry(next); err != nil {
+					log.Printf("geometry save: %v", err)
+				}
+			},
+			Request: func() error { _, err := server.StartScreen(); return err },
+			Quit:    cancel,
+		})
+		if err != nil {
+			log.Printf("overlay: %v", err)
+		}
 	}
 	server.Capture = func() ([]byte, error) {
 		if *headless {
@@ -61,7 +77,31 @@ func main() {
 		return studio.Capture(platform.CaptureScreen)
 	}
 	if ov != nil {
-		a.OnConfigChanged(func(next domain.Config) { _ = ov.Apply(next.Overlay); studio.SetStealth(next.Overlay.Stealth) })
+		a.BeforeConfigSave(func(next domain.Config) (func(), error) {
+			old := a.GetConfig().Overlay
+			if err := ov.Apply(next.Overlay); err != nil {
+				return nil, err
+			}
+			return func() {
+				if err := ov.Apply(old); err != nil {
+					log.Printf("overlay rollback: %v", err)
+				}
+			}, nil
+		})
+		a.OnConfigChanged(func(next domain.Config) { studio.SetStealth(next.Overlay.Stealth) })
+		if editor, ok := ov.(interface{ SetHotkeyEditor(bool) }); ok {
+			server.HotkeyEditor = editor.SetHotkeyEditor
+		}
+		server.Diagnostics = func() any {
+			result := map[string]any{"vpn": a.VPNStatus(), "catalog": a.CatalogStatus()}
+			if d, ok := ov.(interface{ Diagnostics() any }); ok {
+				result["overlay"] = d.Diagnostics()
+			}
+			if d, ok := studio.(interface{ Diagnostics() any }); ok {
+				result["studio"] = d.Diagnostics()
+			}
+			return result
+		}
 		go func() {
 			if e := ov.Run(ctx); e != nil {
 				log.Printf("overlay: %v", e)
@@ -70,7 +110,7 @@ func main() {
 		go followJob(ctx, server, ov)
 	}
 	if *headless {
-		fmt.Printf("Development UI: http://%s/\nConfig: %s\n", cfg.ControlCenter.ListenAddress, *configPath)
+		fmt.Printf("Development UI: http://%s/#token=%s\nConfig: %s\n", cfg.ControlCenter.ListenAddress, server.DevelopmentToken(), *configPath)
 		go func() {
 			if e := server.ListenAndServe(); e != nil && e != http.ErrServerClosed {
 				log.Print(e)
@@ -103,6 +143,14 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 			return
 		case <-ticker.C:
 			job := s.CurrentJob()
+			if job.Cleared {
+				ov.Clear()
+				ov.Hide()
+				lastID = job.ID
+				lastText = ""
+				lastMeta = ""
+				continue
+			}
 			if job.ID == "" {
 				continue
 			}
@@ -115,6 +163,9 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 				ov.Show()
 			}
 			text := job.Text
+			if job.Running && job.Phase == "preparing" {
+				text = "Захватываю экран…"
+			}
 			meta := "TRYING"
 			if job.Error != "" {
 				text = "Ошибка запроса\n" + job.Error
@@ -131,7 +182,7 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 			if !job.Running && job.Trace.Winner != nil {
 				meta = job.Trace.Winner.ProviderID + " · " + job.Trace.Winner.ModelID
 			}
-			if text != "" && text != lastText {
+			if text != lastText {
 				ov.SetText(text)
 				lastText = text
 			}

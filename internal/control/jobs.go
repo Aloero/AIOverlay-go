@@ -19,6 +19,9 @@ type liveBackend interface {
 }
 
 type Job struct {
+	Cleared    bool                  `json:"cleared"`
+	Phase      string                `json:"phase"`
+	Benchmark  *BenchmarkReport      `json:"benchmark,omitempty"`
 	ID         string                `json:"id"`
 	Running    bool                  `json:"running"`
 	Text       string                `json:"text"`
@@ -32,13 +35,18 @@ type JobManager struct {
 	mu     sync.Mutex
 	job    Job
 	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func (j *JobManager) Snapshot() Job {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	copy := j.job
-	copy.Trace.Events = append([]domain.TraceEvent(nil), j.job.Trace.Events...)
+	copy.Trace = domain.CloneTrace(j.job.Trace)
+	if j.job.Benchmark != nil {
+		b := CloneBenchmarkReport(*j.job.Benchmark)
+		copy.Benchmark = &b
+	}
 	if copy.Running {
 		copy.DurationMS = time.Since(copy.Started).Milliseconds()
 	}
@@ -51,7 +59,32 @@ func (j *JobManager) Cancel() {
 		j.cancel()
 	}
 }
+
+// StartPrepared registers the entire operation before capture. Cancelling the
+// operation while GDI finishes discards the frame before any provider call.
 func (j *JobManager) Start(parent context.Context, b liveBackend, pipeline string, input engine.Input) (string, error) {
+	return j.StartPrepared(parent, b, pipeline, func(context.Context) (engine.Input, error) { return input, nil })
+}
+func (j *JobManager) StartPrepared(parent context.Context, b liveBackend, pipeline string, prepare func(context.Context) (engine.Input, error)) (string, error) {
+	return j.startTask(parent, pipeline, func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		if ctx.Err() != nil {
+			return engine.Result{}, nil, ctx.Err()
+		}
+		input, err := prepare(ctx)
+		if err != nil {
+			return engine.Result{}, nil, err
+		}
+		if ctx.Err() != nil {
+			return engine.Result{}, nil, ctx.Err()
+		}
+		j.mu.Lock()
+		j.job.Phase = "running"
+		j.mu.Unlock()
+		result, err := b.Run(ctx, pipeline, input, opt)
+		return result, nil, err
+	})
+}
+func (j *JobManager) startTask(parent context.Context, pipeline string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
 	j.mu.Lock()
 	if j.job.Running {
 		j.mu.Unlock()
@@ -59,32 +92,82 @@ func (j *JobManager) Start(parent context.Context, b liveBackend, pipeline strin
 	}
 	ctx, cancel := context.WithCancel(parent)
 	id := fmt.Sprintf("run-%d", time.Now().UnixNano())
-	j.job = Job{ID: id, Running: true, Started: time.Now(), Trace: domain.ExecutionTrace{PipelineID: pipeline, Events: []domain.TraceEvent{}}}
+	done := make(chan struct{})
+	j.job = Job{ID: id, Running: true, Phase: "preparing", Started: time.Now(), Trace: domain.ExecutionTrace{PipelineID: pipeline, Events: []domain.TraceEvent{}}}
 	j.cancel = cancel
+	j.done = done
 	j.mu.Unlock()
 	go func() {
 		defer cancel()
-		result, err := b.Run(ctx, pipeline, input, engine.RunOptions{
-			OnDelta: func(delta string) { j.mu.Lock(); j.job.Text += delta; j.mu.Unlock() },
-			OnReset: func() { j.mu.Lock(); j.job.Text = ""; j.mu.Unlock() },
+		defer close(done)
+		opt := engine.RunOptions{
+			OnDelta: func(delta string) {
+				j.mu.Lock()
+				defer j.mu.Unlock()
+				if j.job.ID == id && !j.job.Cleared {
+					j.job.Text += delta
+				}
+			},
+			OnReset: func() {
+				j.mu.Lock()
+				defer j.mu.Unlock()
+				if j.job.ID == id {
+					j.job.Text = ""
+				}
+			},
 			OnTrace: func(ev domain.TraceEvent) {
 				j.mu.Lock()
-				j.job.Trace.Events = append(j.job.Trace.Events, ev)
-				j.mu.Unlock()
+				defer j.mu.Unlock()
+				if j.job.ID == id {
+					j.job.Trace.Events = append(j.job.Trace.Events, domain.CloneTraceEvent(ev))
+				}
 			},
-		})
+		}
+		result, report, err := run(ctx, opt)
 		j.mu.Lock()
 		defer j.mu.Unlock()
+		if j.job.ID != id {
+			return
+		}
 		j.job.Running = false
-		j.job.Trace = result.Trace
+		j.job.Phase = "finished"
+		j.job.Trace = domain.CloneTrace(result.Trace)
 		j.job.DurationMS = time.Since(j.job.Started).Milliseconds()
-		if err != nil {
-			j.job.Error = err.Error()
-		} else {
-			j.job.Text = result.Text
+		j.job.Benchmark = report
+		if !j.job.Cleared {
+			if err != nil {
+				j.job.Error = err.Error()
+			} else {
+				j.job.Text = result.Text
+			}
 		}
 	}()
 	return id, nil
+}
+func (j *JobManager) Clear() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.cancel != nil {
+		j.cancel()
+	}
+	j.job.Cleared = true
+	j.job.Text = ""
+	j.job.Error = ""
+}
+func (j *JobManager) Wait(ctx context.Context, id string) (Job, error) {
+	j.mu.Lock()
+	done := j.done
+	current := j.job.ID
+	j.mu.Unlock()
+	if current != id {
+		return Job{}, fmt.Errorf("run no longer current")
+	}
+	select {
+	case <-done:
+		return j.Snapshot(), nil
+	case <-ctx.Done():
+		return Job{}, ctx.Err()
+	}
 }
 
 func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
@@ -110,28 +193,25 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "live execution unsupported", 501)
 			return
 		}
-		input := engine.Input{Text: req.Text}
-		var err error
-		switch req.Source {
-		case "synthetic":
-			input.ImageJPEG, err = benchmark.ImageJPEG()
-		case "screen":
-			if s.Capture == nil {
-				err = fmt.Errorf("screen capture is available only on Windows")
-			} else {
-				input.ImageJPEG, err = s.Capture()
+		id, err := s.jobs.StartPrepared(s.ctx, b, req.PipelineID, func(ctx context.Context) (engine.Input, error) {
+			input := engine.Input{Text: req.Text}
+			var err error
+			switch req.Source {
+			case "synthetic":
+				input.ImageJPEG, err = benchmark.ImageJPEG()
+			case "screen":
+				if s.Capture == nil {
+					err = fmt.Errorf("screen capture requires Windows")
+				} else {
+					input.ImageJPEG, err = s.Capture()
+				}
+			default:
+				if req.Image != "" {
+					input.ImageJPEG, err = base64.StdEncoding.DecodeString(req.Image)
+				}
 			}
-		default:
-			if req.Image != "" {
-				input.ImageJPEG, err = base64.StdEncoding.DecodeString(req.Image)
-			}
-		}
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		// parent is the application lifetime, not an HTTP request that ends at 202.
-		id, err := s.jobs.Start(s.ctx, b, req.PipelineID, input)
+			return input, err
+		})
 		if err != nil {
 			http.Error(w, err.Error(), 409)
 			return
@@ -171,3 +251,18 @@ func (s *Server) StartImage(image []byte) (string, error) {
 	return s.jobs.Start(s.ctx, b, "", engine.Input{ImageJPEG: image})
 }
 func (s *Server) CurrentJob() Job { return s.jobs.Snapshot() }
+
+func (s *Server) StartScreen() (string, error) {
+	b, ok := s.backend.(liveBackend)
+	if !ok {
+		return "", fmt.Errorf("live execution unavailable")
+	}
+	return s.jobs.StartPrepared(s.ctx, b, "", func(ctx context.Context) (engine.Input, error) {
+		if s.Capture == nil {
+			return engine.Input{}, fmt.Errorf("capture unavailable")
+		}
+		image, err := s.Capture()
+		return engine.Input{ImageJPEG: image}, err
+	})
+}
+func (s *Server) ClearRun() { s.jobs.Clear() }

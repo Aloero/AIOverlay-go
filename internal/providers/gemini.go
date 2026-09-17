@@ -52,7 +52,10 @@ func (p *Gemini) stream(ctx context.Context, r Request, key string, events chan<
 	b, _ := json.Marshal(payload)
 	base := strings.TrimRight(p.cfg.BaseURL, "/")
 	endpoint := base + "/models/" + url.PathEscape(r.ModelID) + ":streamGenerateContent?alt=sse"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(b))
+	if err != nil {
+		return &RequestError{Outcome: domain.OutcomeValidationFailed, Message: "Invalid Gemini endpoint URL"}
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("x-goog-api-key", key)
@@ -68,7 +71,7 @@ func (p *Gemini) stream(ctx context.Context, r Request, key string, events chan<
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return &RequestError{Outcome: "network_error", Message: err.Error(), Retryable: true}
+		return networkError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -130,7 +133,7 @@ func (p *Gemini) stream(ctx context.Context, r Request, key string, events chan<
 		}
 	}
 	if sc.Err() != nil {
-		return &RequestError{Outcome: "network_error", Message: sc.Err().Error(), Retryable: true}
+		return networkError(sc.Err())
 	}
 	return &RequestError{Outcome: "invalid_response", Message: "stream ended without completion"}
 }

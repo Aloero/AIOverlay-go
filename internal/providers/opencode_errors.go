@@ -20,6 +20,7 @@ func openCodeError(raw json.RawMessage) *RequestError {
 	}
 	if e.Data.StatusCode != 0 {
 		result := HTTPError(e.Data.StatusCode, "OpenCode provider request failed")
+		result.Message = "OpenCode provider request failed"
 		if e.Data.Code == "region_restricted" || e.Data.Code == "unsupported_country_region_territory" {
 			result.Outcome = domain.OutcomeRegionRestricted
 		}

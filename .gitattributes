@@ -1,3 +1,13 @@
 runtime/opencode/*.exe filter=lfs diff=lfs merge=lfs -text
 runtime/sing-box/*.exe filter=lfs diff=lfs merge=lfs -text
 runtime/sing-box/*.dll filter=lfs diff=lfs merge=lfs -text
+*.go text eol=lf
+*.js text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+.githooks/* text eol=lf
+# Preserve the upstream redistribution notice byte-for-byte.
+third_party/go-webview2/webviewloader/sdk/LICENSE.txt whitespace=-blank-at-eol

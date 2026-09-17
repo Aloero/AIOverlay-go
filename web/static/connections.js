@@ -57,7 +57,7 @@ function renderProviders() {
 }
 
 function providerDialog(connection, onDone) {
- const p=copy(connection);p.credential_pool.keys||=[];
+ const p=copy(connection);p.credential_pool.keys||=[];let committed=JSON.stringify(p);
  const via=p.kind==='embedded_opencode',cp=catalogProviderID(p);
  modal(p.label,`<div class="connection-identity">${tag(via?'Via OpenCode':'Direct')}<code>${esc(cp)}</code></div>
  <div class="connection-form"><section><h3>API-ключи</h3><div id="providerKeys"></div><div class="field"><label for="bulkKeys">Добавить ключи</label><textarea id="bulkKeys" class="secret-entry" rows="3" spellcheck="false" autocomplete="off" placeholder="Вставьте один или несколько ключей" data-help="Один ключ на строку; буквальная последовательность \\n тоже поддерживается. Повторы не добавляются. После добавления секрет скрыт."></textarea></div><button class="button" id="addKeys">Добавить</button><p class="secret-notice">Ключи хранятся в config.json в открытом виде.</p>${via&&cp==='opencode'?'<p class="note">Для доступных Free-моделей OpenCode ключ не нужен. Платным моделям нужен ключ OpenCode.</p>':''}</section>
@@ -85,17 +85,33 @@ function providerDialog(connection, onDone) {
   $('#bulkKeys').value='';keys();return count;
  }
  $('#addKeys').onclick=()=>{const count=addKeys();notify(count?'Добавлено ключей: '+count:'Новых ключей нет.');};
- $('#providerDone').onclick=guarded(async()=>{
-  addKeys();const button=$('#providerDone');button.disabled=true;
-  if(savePromise)await savePromise;
-  try {
-   await api('/api/providers/config','POST',p);
-   const index=state.config.providers.findIndex(v=>v.id===p.id);
-   if(index<0)state.config.providers.push(p);else state.config.providers[index]=p;
-   closeModal();if(onDone)await onDone(p);else renderPage();
-   notify('Подключение сохранено.');
-  }finally{if(button.isConnected)button.disabled=false;}
- });
+ const draft={
+  saving:null,
+  isDirty:()=>JSON.stringify(p)!==committed||!!$('#bulkKeys')?.value.trim(),
+  discard:()=>{committed=JSON.stringify(p);if($('#bulkKeys'))$('#bulkKeys').value='';},
+  save:async()=>{
+   if(draft.saving)return draft.saving;
+   addKeys();const button=$('#providerDone');button.disabled=true;
+   // Capture values before yielding. Payload mutation cannot change an in-flight request.
+   const snapshot=copy(p),revision=JSON.stringify(snapshot);
+   const prior=savePromise;
+   draft.saving=(async()=>{
+    if(prior)await prior;
+    await api('/api/providers/config','POST',snapshot);
+    const index=state.config.providers.findIndex(v=>v.id===snapshot.id);
+    if(index<0)state.config.providers.push(snapshot);else state.config.providers[index]=snapshot;
+    configRevision++; // a concurrent graph save cannot mark a stale provider snapshot current.
+    committed=revision;
+    if(draft.isDirty()){notify('Подключение сохранено. Более новые правки остаются в диалоге.');return;}
+    if(dialogDraft===draft)dialogDraft=null;
+    await closeModal(true);if(onDone)await onDone(snapshot);else renderPage();
+    notify('Подключение сохранено.');
+   })();
+   try{return await draft.saving;}finally{draft.saving=null;if(button.isConnected)button.disabled=false;}
+  }
+ };
+ dialogDraft=draft;
+ $('#providerDone').onclick=guarded(draft.save);
  keys();$('#bulkKeys').focus();
 }
 

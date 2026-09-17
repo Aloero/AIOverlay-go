@@ -29,3 +29,8 @@ desktop.ini
 *.local.yml
 .env
 .env.*
+
+# Portable runtime state is private. Commit only examples/config.example.json.
+/config.json
+/BUILD.json
+/MANIFEST.sha256

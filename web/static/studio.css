@@ -134,3 +134,11 @@
 .vpn-scope b { color: var(--text); font-weight: 500; }
 .vpn-editor { min-height: 180px; height: 220px; }
 .vpn-status { color: var(--muted); font-size: 11px; }
+
+.unsaved-dialog {width:min(440px,94vw)}
+.choice-body {padding:18px}
+.diagnostics-line {margin:8px 0;font-size:12px;color:var(--muted);white-space:pre-wrap}
+.benchmark-panel {margin-bottom:16px}
+#benchmarkRuns {width:62px;padding:5px}
+.answer-preview {white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;font:12px/1.6 Consolas,monospace}
+@media(max-width:900px){.benchmark-panel .section-line {align-items:flex-start;flex-wrap:wrap}}

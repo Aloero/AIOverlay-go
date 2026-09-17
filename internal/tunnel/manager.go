@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -15,18 +17,23 @@ import (
 	"sync"
 	"time"
 
+	"aioverlay/internal/childprocess"
 	"aioverlay/internal/domain"
 )
 
 type Manager struct {
-	mu      sync.Mutex
-	cfg     domain.VPNConfig
-	runtime *singBoxRuntime
-	closed  bool
+	mu          sync.Mutex
+	cfg         domain.VPNConfig
+	runtime     *singBoxRuntime
+	closed      bool
+	starting    chan struct{}
+	startCancel context.CancelFunc
+	lastError   string
 }
 
 type singBoxRuntime struct {
 	cmd        *exec.Cmd
+	process    *childprocess.Process
 	configPath string
 	proxyURL   string
 }
@@ -41,26 +48,65 @@ func (m *Manager) ProxyURL(ctx context.Context) (string, error) {
 	if m == nil || !m.cfg.Enabled {
 		return "", nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return "", fmt.Errorf("AI VPN is closed")
-	}
-	if m.runtime != nil && m.runtime.alive() && proxyListening(m.runtime.proxyURL) {
-		return m.runtime.proxyURL, nil
-	}
-	if m.runtime != nil {
-		m.runtime.stop()
+	for {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return "", fmt.Errorf("AI VPN is closed")
+		}
+		if m.starting != nil {
+			done := m.starting
+			m.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-done:
+			}
+			continue
+		}
+		if r := m.runtime; r != nil && r.alive() {
+			raw := r.proxyURL
+			m.mu.Unlock()
+			return raw, nil
+		}
+		old := m.runtime
 		m.runtime = nil
+		done := make(chan struct{})
+		m.starting = done
+		startCtx, cancel := context.WithCancel(ctx)
+		m.startCancel = cancel
+		m.mu.Unlock()
+		if old != nil {
+			old.stop()
+		}
+		r, err := startSingBox(startCtx, m.cfg)
+		cancel()
+		m.mu.Lock()
+		if m.closed && err == nil {
+			err = fmt.Errorf("AI VPN closed during startup")
+		}
+		if err == nil {
+			m.runtime = r
+			m.lastError = ""
+		} else {
+			m.lastError = err.Error()
+		}
+		m.starting = nil
+		m.startCancel = nil
+		close(done)
+		m.mu.Unlock()
+		if err != nil {
+			if r != nil {
+				r.stop()
+			}
+			return "", err
+		}
+		return r.proxyURL, nil
 	}
-	r, err := startSingBox(ctx, m.cfg)
-	if err != nil {
-		return "", err
-	}
-	m.runtime = r
-	return r.proxyURL, nil
 }
-
 func (m *Manager) Close() {
 	if m == nil {
 		return
@@ -69,10 +115,25 @@ func (m *Manager) Close() {
 	m.closed = true
 	r := m.runtime
 	m.runtime = nil
+	cancel, done := m.startCancel, m.starting
 	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 	if r != nil {
 		r.stop()
 	}
+}
+func (m *Manager) Status() map[string]any {
+	if m == nil {
+		return map[string]any{"enabled": false}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return map[string]any{"enabled": m.cfg.Enabled, "running": m.runtime != nil && m.runtime.alive(), "starting": m.starting != nil, "error": m.lastError, "scope": "AI provider traffic only; not an OS egress sandbox", "outer_ip": "IPv4"}
 }
 
 func startSingBox(ctx context.Context, cfg domain.VPNConfig) (*singBoxRuntime, error) {
@@ -91,8 +152,15 @@ func startSingBox(ctx context.Context, cfg domain.VPNConfig) (*singBoxRuntime, e
 	if err != nil {
 		return nil, fmt.Errorf("reserve AI VPN port: %w", err)
 	}
-	username := "aioverlay-" + randomToken(8)
-	password := randomToken(24)
+	u, err := randomToken(8)
+	if err != nil {
+		return nil, err
+	}
+	username := "aioverlay-" + u
+	password, err := randomToken(24)
+	if err != nil {
+		return nil, err
+	}
 	generated, err := BuildConfig(string(cfg.Config), port, username, password)
 	if err != nil {
 		return nil, err
@@ -114,17 +182,16 @@ func startSingBox(ctx context.Context, cfg domain.VPNConfig) (*singBoxRuntime, e
 	configureHiddenChild(cmd)
 	cmd.Dir = filepath.Dir(bin)
 	cmd.Env = minimalProcessEnv()
-	if err := cmd.Start(); err != nil {
+	proc, err := childprocess.Start(cmd)
+	if err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("start embedded sing-box: %w", err)
 	}
 	proxy := (&url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", port), User: url.UserPassword(username, password)}).String()
-	r := &singBoxRuntime{cmd: cmd, configPath: configPath, proxyURL: proxy}
+	r := &singBoxRuntime{cmd: cmd, process: proc, configPath: configPath, proxyURL: proxy}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		conn, dialErr := (&net.Dialer{Timeout: 120 * time.Millisecond}).DialContext(ctx, "tcp4", fmt.Sprintf("127.0.0.1:%d", port))
-		if dialErr == nil {
-			_ = conn.Close()
+		if proxyAuthenticated(ctx, proxy) && r.alive() {
 			return r, nil
 		}
 		if !r.alive() {
@@ -156,33 +223,54 @@ func checkConfig(ctx context.Context, bin, path string) error {
 }
 
 func (r *singBoxRuntime) alive() bool {
-	return r != nil && r.cmd != nil && r.cmd.Process != nil && r.cmd.ProcessState == nil
+	return r != nil && r.process.Alive()
 }
 func (r *singBoxRuntime) stop() {
 	if r == nil {
 		return
 	}
-	if r.cmd != nil && r.cmd.Process != nil {
-		_ = r.cmd.Process.Kill()
-		_, _ = r.cmd.Process.Wait()
-	}
+	r.process.Stop()
 	if r.configPath != "" {
-		_ = os.RemoveAll(filepath.Dir(r.configPath))
+		if err := os.RemoveAll(filepath.Dir(r.configPath)); err != nil {
+			log.Printf("VPN temporary config cleanup failed: %v", err)
+		}
 	}
 	r.cmd = nil
 }
 
-func proxyListening(raw string) bool {
+// Verify the private SOCKS5 username/password handshake. Merely finding any
+// listener on the released port is not proof that our proxy started.
+func proxyAuthenticated(ctx context.Context, raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	if err != nil || u.User == nil {
 		return false
 	}
-	conn, err := net.DialTimeout("tcp4", u.Host, 80*time.Millisecond)
+	username := u.User.Username()
+	password, ok := u.User.Password()
+	if !ok || len(username) > 255 || len(password) > 255 {
+		return false
+	}
+	conn, err := (&net.Dialer{Timeout: 120 * time.Millisecond}).DialContext(ctx, "tcp4", u.Host)
 	if err != nil {
 		return false
 	}
-	_ = conn.Close()
-	return true
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, err = conn.Write([]byte{5, 1, 2}); err != nil {
+		return false
+	}
+	reply := make([]byte, 2)
+	if _, err = io.ReadFull(conn, reply); err != nil || reply[0] != 5 || reply[1] != 2 {
+		return false
+	}
+	auth := append([]byte{1, byte(len(username))}, []byte(username)...)
+	auth = append(auth, byte(len(password)))
+	auth = append(auth, []byte(password)...)
+	if _, err = conn.Write(auth); err != nil {
+		return false
+	}
+	_, err = io.ReadFull(conn, reply)
+	return err == nil && reply[0] == 1 && reply[1] == 0
 }
 
 func reserveLoopbackPort() (int, error) {
@@ -194,18 +282,18 @@ func reserveLoopbackPort() (int, error) {
 	_ = ln.Close()
 	return port, nil
 }
-func randomToken(n int) string {
+func randomToken(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		return "", fmt.Errorf("OS random source unavailable for private VPN credentials")
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 func findSingBoxBinary() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("AIOVERLAY_SINGBOX_BIN")); override != "" {
 		if st, err := os.Stat(override); err == nil && !st.IsDir() {
-			return override, nil
+			return filepath.Abs(override)
 		}
 		return "", fmt.Errorf("AIOVERLAY_SINGBOX_BIN does not point to a file")
 	}
@@ -216,7 +304,7 @@ func findSingBoxBinary() (string, error) {
 	candidates = append(candidates, filepath.Join("runtime", "sing-box", "sing-box.exe"))
 	for _, p := range candidates {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
+			return filepath.Abs(p)
 		}
 	}
 	return "", fmt.Errorf("embedded sing-box runtime not found")

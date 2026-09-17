@@ -20,7 +20,7 @@ const dom=new JSDOM(html,{url:'https://desktop.invalid/',runScripts:'dangerously
     let data;
     if(r.path==='/desktop/close')data={};
     else if(r.path==='/api/capture')data={image_base64:'dGVzdA==',bytes:4,duration_ms:12,method:'Fixture capture (not Windows)'};
-    else {const res=await fetch(base+r.path,{method:r.method,headers:{'Content-Type':'application/json'},body:r.body===null||r.body===undefined?undefined:JSON.stringify(r.body)});if(!res.ok)throw Error(await res.text());data=await res.json()}
+    else {const res=await fetch(base+r.path,{method:r.method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.TEST_TOKEN},body:r.body===null||r.body===undefined?undefined:JSON.stringify(r.body)});if(!res.ok)throw Error(await res.text());data=await res.json()}
     w.__studioReply(r.id,{ok:true,data});
    }catch(e){w.__studioReply(r.id,{ok:false,error:e.message})}
   })();return Promise.resolve();
@@ -64,7 +64,7 @@ function ok(c,m){assert.ok(c,m);checks++}
   click('[data-page="settings"]');ok(!!$('#hotkey_analyze'),'hotkeys in embedded settings');
   ok(!!$('#vpnEnabled')&&!!$('#vpnConfig'),'AI VPN settings present');
   ok(!$('#buildExe')&&!$('#buildProduct')&&!$('#buildIcon'),'build profile is not runtime-editable');
-  $('#vpnConfig').value='{"type":"vless","server":"vpn.example","server_port":443,"uuid":"fixture"}';$('#vpnConfig').dispatchEvent(new w.Event('input',{bubbles:true}));click('#vpnCheck');await wait(()=>$('#vpnStatus').textContent.includes('принят sing-box'),'VPN config validation');checks++;
+  $('#vpnConfig').value='{"type":"vless","server":"vpn.example","server_port":443,"uuid":"fixture"}';$('#vpnConfig').dispatchEvent(new w.Event('input',{bubbles:true}));click('#vpnCheck');await wait(()=>$('#vpnStatus').textContent.includes('принят'),'VPN config validation');checks++;
   const savesBeforeClose=calls.filter(c=>c.path==='/api/config'&&c.method==='PUT').length;
   change('#fontSize',15);ok($('#saveState').classList.contains('dirty'),'close test creates unsaved draft');
   click('#closeStudio');await wait(()=>calls.some(c=>c.path==='/desktop/close'),'close unload bridge');

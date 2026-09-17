@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = 1
+const ConfigVersion = 2
 
 type ProviderKind string
 
@@ -66,195 +66,220 @@ const (
 )
 
 type Config struct {
-	Version          int              `json:"version"`
-	App              AppConfig        `json:"app"`
-	Providers        []ProviderConfig `json:"providers"`
-	Pipelines        []Pipeline       `json:"pipelines"`
-	ActivePipelineID string           `json:"active_pipeline_id"`
-	Overlay          OverlayConfig    `json:"overlay"`
-	ControlCenter    ControlConfig    `json:"control_center"`
-	VPN              VPNConfig        `json:"vpn,omitempty"`
-	Build            BuildProfile     `json:"build"`
+	RuntimeStatistics *RuntimeStatistics         `json:"runtime_statistics,omitempty"`
+	Extra             map[string]json.RawMessage `json:"-"`
+	Version           int                        `json:"version"`
+	App               AppConfig                  `json:"app"`
+	Providers         []ProviderConfig           `json:"providers"`
+	Pipelines         []Pipeline                 `json:"pipelines"`
+	ActivePipelineID  string                     `json:"active_pipeline_id"`
+	Overlay           OverlayConfig              `json:"overlay"`
+	ControlCenter     ControlConfig              `json:"control_center"`
+	VPN               VPNConfig                  `json:"vpn,omitempty"`
+	Build             BuildProfile               `json:"build"`
 }
 
 type AppConfig struct {
-	Name                string `json:"name"`
-	SecretStorage       string `json:"secret_storage"`
-	PersistRuntimeStats bool   `json:"persist_runtime_stats"`
-	CatalogRefreshHours int    `json:"catalog_refresh_hours"`
+	Extra               map[string]json.RawMessage `json:"-"`
+	Name                string                     `json:"name"`
+	SecretStorage       string                     `json:"secret_storage"`
+	PersistRuntimeStats bool                       `json:"persist_runtime_stats"`
+	CatalogRefreshHours int                        `json:"catalog_refresh_hours"`
 }
 
 type ProviderConfig struct {
-	CatalogProviderID  string            `json:"catalog_provider_id,omitempty"`
-	ID                 string            `json:"id"`
-	Label              string            `json:"label"`
-	Kind               ProviderKind      `json:"kind"`
-	Enabled            bool              `json:"enabled"`
-	BaseURL            string            `json:"base_url,omitempty"`
-	ModelsURL          string            `json:"models_url,omitempty"`
-	OpenCodeProviderID string            `json:"opencode_provider_id,omitempty"`
-	CredentialEnv      []string          `json:"credential_env,omitempty"`
-	Headers            map[string]string `json:"headers,omitempty"`
-	CredentialPool     CredentialPool    `json:"credential_pool"`
-	RequestDefaults    RequestDefaults   `json:"request_defaults"`
+	Extra              map[string]json.RawMessage `json:"-"`
+	CatalogProviderID  string                     `json:"catalog_provider_id,omitempty"`
+	ID                 string                     `json:"id"`
+	Label              string                     `json:"label"`
+	Kind               ProviderKind               `json:"kind"`
+	Enabled            bool                       `json:"enabled"`
+	BaseURL            string                     `json:"base_url,omitempty"`
+	ModelsURL          string                     `json:"models_url,omitempty"`
+	OpenCodeProviderID string                     `json:"opencode_provider_id,omitempty"`
+	CredentialEnv      []string                   `json:"credential_env,omitempty"`
+	Headers            map[string]string          `json:"headers,omitempty"`
+	CredentialPool     CredentialPool             `json:"credential_pool"`
+	RequestDefaults    RequestDefaults            `json:"request_defaults"`
 }
 
 type RequestDefaults struct {
-	ConnectTimeoutMS    int `json:"connect_timeout_ms"`
-	FirstTokenTimeoutMS int `json:"first_token_timeout_ms"`
-	ResponseTimeoutMS   int `json:"response_timeout_ms"`
-	StreamIdleTimeoutMS int `json:"stream_idle_timeout_ms"`
-	MaxOutputTokens     int `json:"max_output_tokens"`
+	Extra               map[string]json.RawMessage `json:"-"`
+	ConnectTimeoutMS    int                        `json:"connect_timeout_ms"`
+	FirstTokenTimeoutMS int                        `json:"first_token_timeout_ms"`
+	ResponseTimeoutMS   int                        `json:"response_timeout_ms"`
+	StreamIdleTimeoutMS int                        `json:"stream_idle_timeout_ms"`
+	MaxOutputTokens     int                        `json:"max_output_tokens"`
 }
 
 type CredentialPool struct {
-	Policy             CredentialPolicy `json:"policy"`
-	Keys               []Credential     `json:"keys"`
-	MaxKeysPerRequest  int              `json:"max_keys_per_request"`
-	RateLimitCooldownS int              `json:"rate_limit_cooldown_s"`
+	Extra              map[string]json.RawMessage `json:"-"`
+	Policy             CredentialPolicy           `json:"policy"`
+	Keys               []Credential               `json:"keys"`
+	MaxKeysPerRequest  int                        `json:"max_keys_per_request"`
+	RateLimitCooldownS int                        `json:"rate_limit_cooldown_s"`
 }
 
 type Credential struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Secret   string `json:"secret"`
-	Enabled  bool   `json:"enabled"`
-	Priority int    `json:"priority"`
+	Extra    map[string]json.RawMessage `json:"-"`
+	ID       string                     `json:"id"`
+	Label    string                     `json:"label"`
+	Secret   string                     `json:"secret"`
+	Enabled  bool                       `json:"enabled"`
+	Priority int                        `json:"priority"`
 }
 
 type Pipeline struct {
-	ID           string          `json:"id"`
-	Name         string          `json:"name"`
-	Description  string          `json:"description,omitempty"`
-	Enabled      bool            `json:"enabled"`
-	EntryNodeID  string          `json:"entry_node_id"`
-	OutputNodeID string          `json:"output_node_id"`
-	Budget       ExecutionBudget `json:"budget"`
-	Nodes        []Node          `json:"nodes"`
-	Edges        []Edge          `json:"edges"`
+	Extra        map[string]json.RawMessage `json:"-"`
+	ID           string                     `json:"id"`
+	Name         string                     `json:"name"`
+	Description  string                     `json:"description,omitempty"`
+	Enabled      bool                       `json:"enabled"`
+	EntryNodeID  string                     `json:"entry_node_id"`
+	OutputNodeID string                     `json:"output_node_id"`
+	Budget       ExecutionBudget            `json:"budget"`
+	Nodes        []Node                     `json:"nodes"`
+	Edges        []Edge                     `json:"edges"`
 }
 
 type ExecutionBudget struct {
-	MaxWallTimeMS       int `json:"max_wall_time_ms"`
-	MaxModelCalls       int `json:"max_model_calls"`
-	MaxParallelCalls    int `json:"max_parallel_calls"`
-	MaxProviders        int `json:"max_providers"`
-	MaxKeysPerProvider  int `json:"max_keys_per_provider"`
-	ConnectTimeoutMS    int `json:"connect_timeout_ms"`
-	FirstTokenTimeoutMS int `json:"first_token_timeout_ms"`
-	ResponseTimeoutMS   int `json:"response_timeout_ms"`
-	StreamIdleTimeoutMS int `json:"stream_idle_timeout_ms"`
+	Extra               map[string]json.RawMessage `json:"-"`
+	MaxWallTimeMS       int                        `json:"max_wall_time_ms"`
+	MaxModelCalls       int                        `json:"max_model_calls"`
+	MaxParallelCalls    int                        `json:"max_parallel_calls"`
+	MaxProviders        int                        `json:"max_providers"`
+	MaxKeysPerProvider  int                        `json:"max_keys_per_provider"`
+	ConnectTimeoutMS    int                        `json:"connect_timeout_ms"`
+	FirstTokenTimeoutMS int                        `json:"first_token_timeout_ms"`
+	ResponseTimeoutMS   int                        `json:"response_timeout_ms"`
+	StreamIdleTimeoutMS int                        `json:"stream_idle_timeout_ms"`
 }
 
 type Position struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
+	Extra map[string]json.RawMessage `json:"-"`
+	X     float64                    `json:"x"`
+	Y     float64                    `json:"y"`
 }
 
 type Node struct {
-	ID        string           `json:"id"`
-	Type      NodeType         `json:"type"`
-	Name      string           `json:"name"`
-	Position  Position         `json:"position"`
-	ModelPool *ModelPoolConfig `json:"model_pool,omitempty"`
-	Validator *ValidatorConfig `json:"validator,omitempty"`
+	Extra     map[string]json.RawMessage `json:"-"`
+	ID        string                     `json:"id"`
+	Type      NodeType                   `json:"type"`
+	Name      string                     `json:"name"`
+	Position  Position                   `json:"position"`
+	ModelPool *ModelPoolConfig           `json:"model_pool,omitempty"`
+	Validator *ValidatorConfig           `json:"validator,omitempty"`
 }
 
 // CatalogSelection is an explicit model source, independent of dispatch policy.
 type CatalogSelection struct {
-	Mode                string   `json:"mode"`
-	ProviderIDs         []string `json:"provider_ids,omitempty"`
-	FreeOnly            bool     `json:"free_only"`
-	Modality            string   `json:"modality"`
-	DefaultQualityScore float64  `json:"default_quality_score"`
+	Extra               map[string]json.RawMessage `json:"-"`
+	Mode                string                     `json:"mode"`
+	ProviderIDs         []string                   `json:"provider_ids,omitempty"`
+	FreeOnly            bool                       `json:"free_only"`
+	Modality            string                     `json:"modality"`
+	DefaultQualityScore float64                    `json:"default_quality_score"`
 }
 
 type ModelPoolConfig struct {
-	Selection          *CatalogSelection `json:"selection,omitempty"`
-	Policy             PoolPolicy        `json:"policy"`
-	Models             []ModelSlot       `json:"models"`
-	VisionPreprocessor *ModelPoolConfig  `json:"vision_preprocessor,omitempty"`
-	Prompt             PromptConfig      `json:"prompt"`
-	QualityFloor       float64           `json:"quality_floor"`
-	MaxParallel        int               `json:"max_parallel"`
-	MaxCalls           int               `json:"max_calls"`
-	HedgeDelayMS       int               `json:"hedge_delay_ms"`
-	RoundRobinCursor   int               `json:"round_robin_cursor"`
+	Extra              map[string]json.RawMessage `json:"-"`
+	Selection          *CatalogSelection          `json:"selection,omitempty"`
+	Policy             PoolPolicy                 `json:"policy"`
+	Models             []ModelSlot                `json:"models"`
+	VisionPreprocessor *ModelPoolConfig           `json:"vision_preprocessor,omitempty"`
+	Prompt             PromptConfig               `json:"prompt"`
+	QualityFloor       float64                    `json:"quality_floor"`
+	MaxParallel        int                        `json:"max_parallel"`
+	MaxCalls           int                        `json:"max_calls"`
+	HedgeDelayMS       int                        `json:"hedge_delay_ms"`
+	RoundRobinCursor   int                        `json:"round_robin_cursor"`
 }
 
 type ModelSlot struct {
-	ID                  string  `json:"id"`
-	ProviderID          string  `json:"provider_id"`
-	ModelID             string  `json:"model_id"`
-	Enabled             bool    `json:"enabled"`
-	Priority            int     `json:"priority"`
-	Weight              float64 `json:"weight"`
-	QualityScore        float64 `json:"quality_score"`
-	TimeoutMS           int     `json:"timeout_ms"`
-	FirstTokenTimeoutMS int     `json:"first_token_timeout_ms"`
-	MaxAttempts         int     `json:"max_attempts"`
+	Extra               map[string]json.RawMessage `json:"-"`
+	ID                  string                     `json:"id"`
+	ProviderID          string                     `json:"provider_id"`
+	ModelID             string                     `json:"model_id"`
+	Enabled             bool                       `json:"enabled"`
+	Priority            int                        `json:"priority"`
+	Weight              float64                    `json:"weight"`
+	QualityScore        float64                    `json:"quality_score"`
+	TimeoutMS           int                        `json:"timeout_ms"`
+	FirstTokenTimeoutMS int                        `json:"first_token_timeout_ms"`
+	MaxAttempts         int                        `json:"max_attempts"`
 }
 
 type PromptConfig struct {
-	System   string `json:"system"`
-	User     string `json:"user"`
-	Template string `json:"template,omitempty"`
+	Extra    map[string]json.RawMessage `json:"-"`
+	System   string                     `json:"system"`
+	User     string                     `json:"user"`
+	Template string                     `json:"template,omitempty"`
 }
 
 type ValidatorConfig struct {
-	Kind      string `json:"kind"`
-	Pattern   string `json:"pattern,omitempty"`
-	MinLength int    `json:"min_length,omitempty"`
-	MaxLength int    `json:"max_length,omitempty"`
+	Extra     map[string]json.RawMessage `json:"-"`
+	Kind      string                     `json:"kind"`
+	Pattern   string                     `json:"pattern,omitempty"`
+	MinLength int                        `json:"min_length,omitempty"`
+	MaxLength int                        `json:"max_length,omitempty"`
 }
 
 type Edge struct {
-	ID        string    `json:"id"`
-	From      string    `json:"from"`
-	To        string    `json:"to"`
-	On        []Outcome `json:"on"`
-	Priority  int       `json:"priority"`
-	DelayMS   int       `json:"delay_ms,omitempty"`
-	MaxVisits int       `json:"max_visits"`
+	Extra     map[string]json.RawMessage `json:"-"`
+	ID        string                     `json:"id"`
+	From      string                     `json:"from"`
+	To        string                     `json:"to"`
+	On        []Outcome                  `json:"on"`
+	Priority  int                        `json:"priority"`
+	DelayMS   int                        `json:"delay_ms,omitempty"`
+	MaxVisits int                        `json:"max_visits"`
 }
 
 type OverlayConfig struct {
-	Opacity      float64           `json:"opacity"`
-	Width        int               `json:"width"`
-	Height       int               `json:"height"`
-	FontSize     int               `json:"font_size"`
-	Stealth      bool              `json:"stealth"`
-	ClickThrough bool              `json:"click_through"`
-	StationaryMS int               `json:"stationary_cursor_ms"`
-	Hotkeys      map[string]string `json:"hotkeys"`
+	X            int                        `json:"x,omitempty"`
+	Y            int                        `json:"y,omitempty"`
+	Positioned   bool                       `json:"positioned,omitempty"`
+	Extra        map[string]json.RawMessage `json:"-"`
+	Opacity      float64                    `json:"opacity"`
+	Width        int                        `json:"width"`
+	Height       int                        `json:"height"`
+	FontSize     int                        `json:"font_size"`
+	Stealth      bool                       `json:"stealth"`
+	ClickThrough bool                       `json:"click_through"`
+	StationaryMS int                        `json:"stationary_cursor_ms"`
+	Hotkeys      map[string]string          `json:"hotkeys"`
 }
 
 type CanvasLayout struct {
-	PanX float64 `json:"pan_x"`
-	PanY float64 `json:"pan_y"`
-	Zoom float64 `json:"zoom"`
+	Extra map[string]json.RawMessage `json:"-"`
+	PanX  float64                    `json:"pan_x"`
+	PanY  float64                    `json:"pan_y"`
+	Zoom  float64                    `json:"zoom"`
 }
 
 type ControlConfig struct {
-	Layout        map[string]CanvasLayout `json:"layout,omitempty"`
-	ListenAddress string                  `json:"listen_address"`
-	AutoOpen      bool                    `json:"auto_open"`
-	Theme         string                  `json:"theme"`
+	Extra         map[string]json.RawMessage `json:"-"`
+	Layout        map[string]CanvasLayout    `json:"layout,omitempty"`
+	ListenAddress string                     `json:"listen_address"`
+	AutoOpen      bool                       `json:"auto_open"`
+	Theme         string                     `json:"theme"`
 }
 
 type VPNConfig struct {
-	Enabled bool            `json:"enabled"`
-	Engine  string          `json:"engine,omitempty"`
-	Config  json.RawMessage `json:"config,omitempty"`
+	Extra   map[string]json.RawMessage `json:"-"`
+	Enabled bool                       `json:"enabled"`
+	Engine  string                     `json:"engine,omitempty"`
+	Config  json.RawMessage            `json:"config,omitempty"`
 }
 
 type BuildProfile struct {
-	ExecutableName  string `json:"executable_name"`
-	ProductName     string `json:"product_name"`
-	FileDescription string `json:"file_description"`
-	Company         string `json:"company"`
-	Version         string `json:"version"`
-	IconPath        string `json:"icon_path"`
+	Extra           map[string]json.RawMessage `json:"-"`
+	ExecutableName  string                     `json:"executable_name"`
+	ProductName     string                     `json:"product_name"`
+	FileDescription string                     `json:"file_description"`
+	Company         string                     `json:"company"`
+	Version         string                     `json:"version"`
+	IconPath        string                     `json:"icon_path"`
 }
 
 type ProviderMeta struct {

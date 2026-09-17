@@ -140,7 +140,7 @@ func PlanPool(cfg domain.Config, cat *catalog.Service, pool domain.ModelPoolConf
 }
 
 func (r *runner) planPool(n domain.Node, pool domain.ModelPoolConfig, input nodeValue) []domain.ModelSlot {
-	plan := PlanPool(r.engine.cfg, r.engine.catalog, pool, len(input.image) > 0)
+	plan := PlanPool(r.engine.cfg, r.engine.catalog, pool, len(input.image) > 0 && !input.hasOutput)
 	r.emit(domain.TraceEvent{Kind: "pool_plan", NodeID: n.ID, Message: fmt.Sprintf("source=%s; candidates=%d; policy=%s; parallel<=%d; calls<=%d; hedge=%dms", plan.Mode, len(plan.Candidates), pool.Policy, min(max(1, pool.MaxParallel), cap(r.sem)), pool.MaxCalls, pool.HedgeDelayMS)})
 	reasons := make([]string, 0, len(plan.Skipped))
 	for reason := range plan.Skipped {

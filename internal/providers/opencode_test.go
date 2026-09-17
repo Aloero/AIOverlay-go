@@ -20,7 +20,7 @@ func TestHTTPErrorNormalization(t *testing.T) {
 		status int
 		msg    string
 		want   string
-	}{{401, "no", "auth_failed"}, {429, "slow", "rate_limited"}, {403, "not available in your country", "region_restricted"}, {404, "model", "model_unavailable"}, {503, "down", "provider_unavailable"}}
+	}{{401, "no", "auth_failed"}, {429, "slow", "rate_limited"}, {403, `{"error":{"code":"unsupported_country_region_territory"}}`, "region_restricted"}, {404, "model", "model_unavailable"}, {503, "down", "provider_unavailable"}}
 	for _, c := range cases {
 		if got := string(HTTPError(c.status, c.msg).Outcome); got != c.want {
 			t.Fatalf("%d got %s want %s", c.status, got, c.want)
@@ -43,5 +43,13 @@ func TestOpenCodeRuntimeKeyChangesWithTunnelEndpoint(t *testing.T) {
 	b := openCodeRuntimeKey("same-key", "http://127.0.0.1:10002")
 	if a == b {
 		t.Fatal("OpenCode runtime must not survive an AI VPN endpoint change")
+	}
+}
+
+func TestOpenCodeReceivesOutputTokenBudget(t *testing.T) {
+	s := &openCodeServer{maxOutputTokens: 123}
+	env := strings.Join(s.environment(nil), "\n")
+	if !strings.Contains(env, "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=123") {
+		t.Fatal("token budget was not forwarded")
 	}
 }

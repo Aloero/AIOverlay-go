@@ -5,12 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"aioverlay/internal/benchmark"
 	"aioverlay/internal/catalog"
 	"aioverlay/internal/config"
 	"aioverlay/internal/control"
@@ -22,16 +23,19 @@ import (
 )
 
 type App struct {
-	operation       sync.RWMutex
-	mu              sync.RWMutex
-	store           *config.Store
-	cfg             domain.Config
-	catalog         *catalog.Service
-	registry        *providers.Registry
-	tunnel          *tunnel.Manager
-	engine          *engine.Engine
-	traces          *tracestore.Store
-	onConfigChanged func(domain.Config)
+	operation         sync.RWMutex
+	mu                sync.RWMutex
+	store             *config.Store
+	cfg               domain.Config
+	catalog           *catalog.Service
+	registry          *providers.Registry
+	tunnel            *tunnel.Manager
+	engine            *engine.Engine
+	traces            *tracestore.Store
+	onConfigChanged   func(domain.Config)
+	beforeConfigSave  func(domain.Config) (func(), error)
+	maintenanceCancel context.CancelFunc
+	maintenanceDone   chan struct{}
 }
 
 func New(configPath, catalogPath string) (*App, error) {
@@ -51,7 +55,18 @@ func New(configPath, catalogPath string) (*App, error) {
 		tun.Close()
 		return nil, err
 	}
-	return &App{store: store, cfg: cfg, catalog: cat, registry: reg, tunnel: tun, engine: engine.New(cfg, reg, cat, traces), traces: traces}, nil
+	eng := engine.New(cfg, reg, cat, traces)
+	if cfg.App.PersistRuntimeStats {
+		eng.ImportStatistics(cfg.RuntimeStatistics)
+	}
+	a := &App{store: store, cfg: cfg, catalog: cat, registry: reg, tunnel: tun, engine: eng, traces: traces}
+	a.startMaintenance()
+	return a, nil
+}
+func (a *App) BeforeConfigSave(fn func(domain.Config) (func(), error)) {
+	a.mu.Lock()
+	a.beforeConfigSave = fn
+	a.mu.Unlock()
 }
 func (a *App) OnConfigChanged(fn func(domain.Config)) {
 	a.mu.Lock()
@@ -59,10 +74,20 @@ func (a *App) OnConfigChanged(fn func(domain.Config)) {
 	a.mu.Unlock()
 }
 func (a *App) Close() {
+	if a.maintenanceCancel != nil {
+		a.maintenanceCancel()
+		<-a.maintenanceDone
+	}
 	a.operation.Lock()
 	defer a.operation.Unlock()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cfg.App.PersistRuntimeStats {
+		a.cfg.RuntimeStatistics = a.engine.ExportStatistics()
+		if err := a.store.Save(a.cfg); err != nil {
+			log.Printf("runtime statistics save failed: %v", err)
+		}
+	}
 	if a.registry != nil {
 		a.registry.Close()
 	}
@@ -85,43 +110,73 @@ func (a *App) SaveConfig(cfg domain.Config) error {
 
 // Caller owns the operation write lock.
 func (a *App) saveConfigLocked(cfg domain.Config) error {
+	if err := config.Migrate(&cfg); err != nil {
+		return err
+	}
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
-	if err := tunnel.Validate(context.Background(), cfg.VPN); err != nil {
+	a.mu.RLock()
+	previous := a.cfg
+	reg, tun, eng := a.registry, a.tunnel, a.engine
+	prepare, callback := a.beforeConfigSave, a.onConfigChanged
+	a.mu.RUnlock()
+	networkChanged := !sameConnections(previous.Providers, cfg.Providers) || !reflect.DeepEqual(previous.VPN, cfg.VPN)
+	var err error
+	if networkChanged {
+		if err = tunnel.Validate(context.Background(), cfg.VPN); err != nil {
+			return err
+		}
+		tun = tunnel.New(cfg.VPN)
+		reg, err = providers.NewRegistry(cfg, tun)
+		if err != nil {
+			tun.Close()
+			return err
+		}
+	}
+	cleanupNew := func() {
+		if networkChanged {
+			reg.Close()
+			tun.Close()
+		}
+	}
+	var undo func()
+	if prepare != nil {
+		undo, err = prepare(cfg)
+		if err != nil {
+			cleanupNew()
+			return err
+		}
+	}
+	if cfg.App.PersistRuntimeStats {
+		cfg.RuntimeStatistics = eng.ExportStatistics()
+	}
+	if err = a.store.Save(cfg); err != nil {
+		if undo != nil {
+			undo()
+		}
+		cleanupNew()
 		return err
 	}
-	tun := tunnel.New(cfg.VPN)
-	reg, err := providers.NewRegistry(cfg, tun)
-	if err != nil {
-		tun.Close()
-		return err
-	}
-	if err := a.store.Save(cfg); err != nil {
-		reg.Close()
-		tun.Close()
-		return err
-	}
+	// Engine keeps policy cursors, health and stats, changing only the immutable
+	// configuration view between runs. UI-only saves keep the transports too.
+	eng.Reconfigure(cfg, reg)
 	a.mu.Lock()
-	old := a.registry
-	oldTunnel := a.tunnel
+	oldReg, oldTun := a.registry, a.tunnel
 	a.cfg = cfg
 	a.registry = reg
 	a.tunnel = tun
-	a.engine = engine.New(cfg, reg, a.catalog, a.traces)
-	callback := a.onConfigChanged
 	a.mu.Unlock()
-	if old != nil {
-		old.Close()
-	}
-	if oldTunnel != nil {
-		oldTunnel.Close()
+	if networkChanged {
+		oldReg.Close()
+		oldTun.Close()
 	}
 	if callback != nil {
 		callback(cloneConfig(cfg))
 	}
 	return nil
 }
+
 func (a *App) Catalog(q control.CatalogQuery) (control.CatalogPage, error) {
 	a.mu.RLock()
 	cfg := cloneConfig(a.cfg)
@@ -181,7 +236,9 @@ func (a *App) Catalog(q control.CatalogQuery) (control.CatalogPage, error) {
 	}
 	return control.CatalogPage{Items: out[off:end], Total: total, Offset: off, Limit: limit}, nil
 }
-func (a *App) RefreshCatalog() error { return a.catalog.Refresh() }
+func (a *App) RefreshCatalog() error                           { return a.catalog.Refresh() }
+func (a *App) RefreshCatalogContext(ctx context.Context) error { return a.catalog.RefreshContext(ctx) }
+func (a *App) CatalogStatus() any                              { return a.catalog.Status() }
 func (a *App) RunTest(ctx context.Context, req control.TestRequest) (engine.Result, error) {
 	var image []byte
 	var err error
@@ -210,46 +267,6 @@ func (a *App) Run(ctx context.Context, pipelineID string, input engine.Input, op
 	a.mu.RUnlock()
 	return eng.Execute(ctx, pipelineID, input, opt)
 }
-func (a *App) RunBenchmark(ctx context.Context, req control.BenchmarkRequest) (control.BenchmarkReport, error) {
-	img, err := benchmark.ImageJPEG()
-	if err != nil {
-		return control.BenchmarkReport{}, err
-	}
-	runs := req.Runs
-	if runs <= 0 {
-		runs = 3
-	}
-	if runs > 10 {
-		runs = 10
-	}
-	report := control.BenchmarkReport{Total: runs}
-	durations := make([]int64, 0, runs)
-	for i := 0; i < runs; i++ {
-		start := time.Now()
-		res, runErr := a.Run(ctx, req.PipelineID, engine.Input{ImageJPEG: img}, engine.RunOptions{})
-		d := time.Since(start).Milliseconds()
-		row := control.BenchmarkRun{Run: i + 1, DurationMS: d, Text: res.Text, Winner: res.Trace.Winner}
-		if runErr == nil {
-			lower := strings.ToLower(res.Text)
-			row.Correct = strings.Contains(lower, "q4") && strings.Contains(lower, "210")
-			if row.Correct {
-				report.Correct++
-			}
-		} else {
-			row.Text = runErr.Error()
-		}
-		report.Runs = append(report.Runs, row)
-		durations = append(durations, d)
-		if ctx.Err() != nil {
-			break
-		}
-	}
-	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	if len(durations) > 0 {
-		report.MedianMS = durations[len(durations)/2]
-	}
-	return report, nil
-}
 
 func (a *App) Traces() []domain.ExecutionTrace { return a.traces.List() }
 func (a *App) ConfigPath() string              { return a.store.Path }
@@ -264,3 +281,31 @@ func cloneConfig(in domain.Config) domain.Config { // JSON clone avoids callers 
 // Isolated wrappers keep the rest of the package easy to test/migrate.
 var jsonMarshal = func(v any) ([]byte, error) { return json.Marshal(v) }
 var jsonUnmarshal = func(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+func (a *App) startMaintenance() {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.maintenanceCancel = cancel
+	a.maintenanceDone = make(chan struct{})
+	go func() {
+		defer close(a.maintenanceDone)
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		last := time.Now()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.mu.RLock()
+				hours := a.cfg.App.CatalogRefreshHours
+				a.mu.RUnlock()
+				if hours > 0 && time.Since(last) >= time.Duration(hours)*time.Hour {
+					last = time.Now()
+					if err := a.catalog.RefreshContext(ctx); err != nil && ctx.Err() == nil {
+						log.Printf("catalog refresh: %v", err)
+					}
+				}
+			}
+		}
+	}()
+}

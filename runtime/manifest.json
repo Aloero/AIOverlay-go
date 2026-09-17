@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "path": "runtime/opencode/opencode.exe",
+      "sha256": "0242a0dc705af67c90882b456a36b619883c1c786aad8fe071a1bc64e5d1d440",
+      "license": "runtime/opencode/LICENSE"
+    },
+    {
+      "path": "runtime/sing-box/sing-box.exe",
+      "sha256": "b838de45bd0b2e6ddbed1977e4745622f7dffab3b293807ff4c6b1b640fed909",
+      "license": "runtime/sing-box/LICENSE"
+    },
+    {
+      "path": "runtime/sing-box/libcronet.dll",
+      "sha256": "3217c6260fbca5f16072e0b79735742f40109a63bb0ff88fd6b96dd6b54a2928",
+      "license": "runtime/sing-box/LICENSE"
+    }
+  ]
+}

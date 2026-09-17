@@ -71,7 +71,7 @@ func TestProviderSaveDoesNotReplacePipelines(t *testing.T) {
 }
 func TestStudioPlanningAPIsNeverRunModels(t *testing.T) {
 	a := studioTestApp(t)
-	handler := control.New("127.0.0.1:0", a).Handler()
+	handler := control.New("127.0.0.1:0", a).DesktopHandler()
 	request := func(method, path string, body any) *httptest.ResponseRecorder {
 		t.Helper()
 		b, _ := json.Marshal(body)

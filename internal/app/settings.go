@@ -57,3 +57,23 @@ func (a *App) SaveProvider(p domain.ProviderConfig) error {
 	}
 	return a.saveConfigLocked(cfg)
 }
+
+// Geometry is independent of scheduler/provider state. Called asynchronously after
+// WM_EXITSIZEMOVE so the owning Win32 thread never waits for an active AI request.
+func (a *App) SaveGeometry(next domain.OverlayConfig) error {
+	a.operation.Lock()
+	defer a.operation.Unlock()
+	cfg := a.GetConfig()
+	cfg.Overlay.X = next.X
+	cfg.Overlay.Y = next.Y
+	cfg.Overlay.Width = next.Width
+	cfg.Overlay.Height = next.Height
+	cfg.Overlay.Positioned = next.Positioned
+	if err := a.store.Save(cfg); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.cfg = cfg
+	a.mu.Unlock()
+	return nil
+}

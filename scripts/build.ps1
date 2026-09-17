@@ -1,5 +1,5 @@
 param(
-  [string]$ConfigPath = "config.json",
+  [string]$ConfigPath = "examples/config.example.json",
   [string]$Arch = "amd64"
 )
 $ErrorActionPreference = "Stop"
@@ -7,6 +7,8 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 if ($Arch -ne "amd64") { throw "This distribution includes x64 OpenCode and sing-box runtimes; use -Arch amd64." }
 if (!(Test-Path $ConfigPath)) { throw "Config not found: $ConfigPath" }
+go run ./cmd/preflight --config $ConfigPath --runtimes
+if ($LASTEXITCODE -ne 0) { throw "Release preflight failed" }
 $ToolDir = Join-Path $Root ".build-tools"
 New-Item -ItemType Directory -Force $ToolDir | Out-Null
 $Winres = Join-Path $ToolDir "go-winres.exe"
@@ -32,7 +34,7 @@ New-Item -ItemType Directory -Force "dist/runtime/opencode" | Out-Null
 New-Item -ItemType Directory -Force "dist/runtime/catalog" | Out-Null
 New-Item -ItemType Directory -Force "dist/runtime/sing-box" | Out-Null
 $env:GOOS = "windows"; $env:GOARCH = $Arch; $env:CGO_ENABLED = "0"
-go build -trimpath -ldflags "-s -w -H=windowsgui" -o (Join-Path "dist" $ExeName) ./cmd/aioverlay
+go build -buildvcs=false -trimpath -ldflags "-s -w -H=windowsgui" -o (Join-Path "dist" $ExeName) ./cmd/aioverlay
 if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 Copy-Item $ConfigPath "dist/config.json" -Force
 Copy-Item "scripts/Install-WebView2.ps1" "dist/Install-WebView2.ps1" -Force
@@ -48,3 +50,8 @@ Copy-Item "runtime/sing-box/VERSION.txt" "dist/runtime/sing-box/VERSION.txt" -Fo
 Copy-Item "runtime/catalog/models-dev-api.json" "dist/runtime/catalog/models-dev-api.json" -Force
 Copy-Item "runtime/catalog/opencode-enabled.json" "dist/runtime/catalog/opencode-enabled.json" -Force
 Write-Host "Built dist/$ExeName"
+
+Copy-Item "runtime/manifest.json" "dist/runtime/manifest.json" -Force
+foreach ($Doc in @("ARCHITECTURE.md", "AUDIT_FIXES.md", "SECURITY.md")) { if (Test-Path $Doc) { Copy-Item $Doc "dist/" -Force } }
+
+if (Test-Path "runtime/sing-box/GPL-3.0.txt") { Copy-Item "runtime/sing-box/GPL-3.0.txt" "dist/runtime/sing-box/" -Force }

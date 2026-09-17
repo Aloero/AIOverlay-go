@@ -1,10 +1,10 @@
-# AIOverlay-go 0.2.5
+# AIOverlay-go 0.2.6
 
 Windows 10/11 x64: нативный AI-оверлей и встроенная Pipeline Studio на WebView2. Python, pip и Node для запуска не нужны. Обычный запуск не открывает браузер и не поднимает HTTP-интерфейс Studio.
 
 ## Запуск и обновление
 
-Распакуйте `AIOverlay-go_Windows.zip` в новую папку и запустите `AIOverlay.exe`. Рядом должны оставаться `runtime` и `config.json`. Для переноса настроек сначала закройте обе версии, затем скопируйте прежний `config.json` рядом с новым EXE. Конфигурации 0.2.2 поддерживаются; существующие списки моделей и политики не меняются автоматически.
+Распакуйте `AIOverlay-go_Windows.zip` в новую папку и запустите `AIOverlay.exe`. Рядом должны оставаться `runtime` и `config.json`. Для переноса настроек сначала закройте обе версии, затем скопируйте прежний `config.json` рядом с новым EXE. Конфигурации schema 1 (включая 0.2.2–0.2.5) мигрируются в schema 2. Списки моделей, transport, ключи и включение VPN сохраняются. Неизвестные поля сохраняются на всех уровнях, будущая неподдерживаемая schema отклоняется без изменения файла. Перед обновлением сохраните резервную копию config.json: старый EXE не читает schema 2.
 
 При отсутствии WebView2 Runtime приложение показывает native-сообщение. Запустите `Install-WebView2.ps1` вручную: он скачивает официальный установщик Microsoft и проверяет Authenticode-подпись. Browser fallback отсутствует.
 
@@ -72,9 +72,9 @@ Capture path: `GetDC → CreateCompatibleDC → CreateDIBSection → SelectObjec
 
 В общий `config.json` добавлена секция `vpn`. Если секции нет либо `vpn.enabled=false`, sing-box не запускается и сетевой путь остаётся обычным. Если `vpn.enabled=true`, AIOverlay лениво запускает bundled `runtime/sing-box/sing-box.exe` и направляет через него native provider adapters и сетевые запросы Embedded OpenCode. Ошибка запуска tunnel является fail-closed: приложение не переключается скрытно обратно на direct.
 
-Studio → «Приложение» содержит только runtime-настройки AI VPN. Вставляется один sing-box outbound JSON, например VLESS, Hysteria2, TUIC, Trojan, Shadowsocks или VMess. Можно вставить и полный sing-box JSON, если в нём ровно один tunnel outbound: пользовательские `inbounds`, TUN, route и `set_system_proxy` намеренно игнорируются. AIOverlay сам генерирует authenticated `mixed` inbound на `127.0.0.1` со случайным портом и случайными credentials. Windows system proxy не меняется, TUN-интерфейс не создаётся, LAN listener отсутствует. Поэтому tunnel не маршрутизирует трафик других приложений.
+Studio → «Приложение» содержит только runtime-настройки AI VPN. Вставляется один sing-box outbound JSON, например VLESS, Hysteria2, TUIC, Trojan, Shadowsocks или VMess. Можно вставить и полный sing-box JSON, если в нём ровно один tunnel outbound: пользовательские `inbounds`, TUN, route и `set_system_proxy` намеренно игнорируются. DNS, необходимый выбранному outbound, сохраняется. Исходящее соединение с VPN endpoint использует IPv4; IPv6 literal в адресе сервера отклоняется. Многозвенные detour-профили требуют отдельного явного преобразования и не импортируются как будто они поддержаны. AIOverlay сам генерирует authenticated `mixed` inbound на `127.0.0.1` со случайным портом и случайными credentials. Windows system proxy не меняется, TUN-интерфейс не создаётся, LAN listener отсутствует. Поэтому tunnel не маршрутизирует трафик других приложений.
 
-VPN-конфиг может содержать UUID, пароли и другие секреты. Он хранится в том же переносимом `config.json`; файл следует считать секретным. Кнопка «Проверить конфиг» выполняет структурную проверку, а на Windows также `sing-box check`. Сам sing-box запускается только при первом AI-запросе после включения.
+VPN-конфиг может содержать UUID, пароли и другие секреты. Он хранится в том же переносимом `config.json`; файл следует считать секретным. Кнопка «Проверить конфиг» выполняет структурную проверку, а на Windows также `sing-box check`. Рабочий sing-box запускается только при первом AI-запросе после включения; «Проверить конфиг» создаёт отдельный короткий процесс check, без AI-запроса.
 
 Bundled runtime: sing-box 1.14.1 из официального Windows amd64 release; исходный release archive сверяется по SHA-256 при подготовке дистрибутива. Лицензия находится в `runtime/sing-box/LICENSE`.
 
@@ -86,7 +86,7 @@ Bundled runtime: sing-box 1.14.1 из официального Windows amd64 rel
 
 ## Сборка и build profile
 
-Поля `build` в `config.json` являются входом сборки, а не runtime-настройкой. В Studio они больше не редактируются. Перед `scripts/build.ps1` или `scripts/build.sh` задайте `executable_name`, `product_name`, `file_description`, `company`, `version` и `icon_path` в build config. `cmd/buildmeta` до компиляции генерирует PE resources и `internal/buildinfo/generated.go`; поэтому уже собранный EXE не меняет имя, версию, иконку или AppUserModelID от последующего редактирования runtime JSON.
+Поля `build` в выбранном pre-build JSON являются входом сборки, а не runtime-настройкой. По умолчанию build scripts читают версионируемый безопасный `examples/config.example.json`, а не локальный runtime config. В Studio они больше не редактируются. Перед `scripts/build.ps1` или `scripts/build.sh` задайте `executable_name`, `product_name`, `file_description`, `company`, `version` и `icon_path` в build config. `cmd/buildmeta` до компиляции генерирует PE resources и `internal/buildinfo/generated.go`; поэтому уже собранный EXE не меняет имя, версию, иконку или AppUserModelID от последующего редактирования runtime JSON.
 
 ## Сборка и проверки
 
@@ -97,3 +97,58 @@ Go: версия указана в `go.mod`. Windows x64: `scripts/build.ps1`; L
 Production assets полностью встроены в EXE. `--headless` существует только для разработки; не открывайте его за пределами loopback.
 
 Точные результаты и границы проверки: `VERIFICATION.md`. Состав архивов: `MANIFEST.sha256`, хэши ZIP: `releases/SHA256SUMS.txt` в рабочем дереве.
+
+
+## Исправления аудита в 0.2.6
+
+Подробная карта: `AUDIT_FIXES.md`. Исправлены 26 пунктов review baseline `261f569`: STA и синхронное закрытие WebView2, единая отмена capture/inference, независимые данные этапов, ключевой бюджет, проверка завершения child processes, hotkey rollback, строгая validation, сохранение диалоговых черновиков, изоляция bridge sessions, DNS/IPv4 политика, redaction и immutable trace. `GetDIBits` не возвращался, scheduler не заменялся цепочкой provider-specific условий.
+
+Studio создаётся на отдельном STA thread с явными `CoInitializeEx`/`CoUninitialize`. Закрытие происходит на том же потоке: WebView2 controller Close, освобождение COM references, уничтожение HWND, завершение message loop, очистка профиля. Для этого используется небольшой локальный MIT fork прежней Go-обёртки (`third_party/go-webview2/PATCHES.md`), не fork браузера. Реальный размер освобождаемой памяти зависит от Windows/WebView2 и требует измерения на вашем ПК.
+
+При закрытии Studio основной валидный черновик сохраняется. Новые правки, появившиеся во время сохранения, оставляют Studio открытой. Для незавершённого диалога провайдера доступны «Сохранить / Не сохранять / Отмена». Alt-подсказки остаются. Пока редактируется hotkey, старые actions временно не исполняются; lease восстанавливает регистрацию после потери редактора.
+
+`Приложение → Диагностика` показывает отдельно requested и применённую Windows защиту, ошибки регистрации hotkeys и состояние VPN. Применённый display affinity не доказывает невидимость в любом OBS capture path. На старых Windows 10 до build 19041 используется ограниченный monitor-only режим, и это видно в диагностике.
+
+Полный SaveConfig больше не сбрасывает прогретые engine/provider runtimes при изменении шрифта, раскладки, label или dispatch policy. Изменение настоящих параметров подключения пересоздаёт нужный набор сетевых адаптеров, но сохраняет engine и независимую статистику. Ghost hotkey меняет текущий сеанс; значение Ghost при следующем запуске задаётся отдельно в конфиге. Перемещение/resize overlay сохраняет геометрию.
+
+### Prompts, выполнение и trace
+
+`{{input.text}}` — исходный текст запроса, `{{previous.output}}` — результат предыдущего этапа, `{{vision.text}}` — извлечённый визуальный текст. Подстановка выполняется за один проход: template-подобный текст внутри входа не подставляется повторно. «Предпросмотр итогового prompt» использует тот же engine renderer без запроса модели.
+
+Исходный screenshot остаётся в контексте run для fallback после Validator. Изображение не прикладывается к известной text-only модели после извлечения текста. Наличие текста/изображения для произвольной неизвестной каталогу модели требует корректной настройки пользователя.
+
+Эффективные лимиты выводятся в событие `effective_limits`: slot override, затем pipeline, затем provider defaults, затем безопасные defaults. OpenCode получает лимит output tokens через поддерживаемую bundled-версией настройку `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX`; его runtime cache учитывает этот лимит. Буферизованный bridge по-прежнему не выдаёт выдуманные TTFT/TPS.
+
+После отмены engine дожидается закрытия stream/error channels. Для некорректного стороннего адаптера ожидание cleanup ограничено 1500 мс и появляется `worker_cleanup_timeout`; успешное завершение cooperative transport проверяется regression-тестом. Это не доказательство мгновенной остановки inference на сервере провайдера. Защитный предел одного текстового ответа — 16 MiB.
+
+### Synthetic benchmark
+
+В разделе «Запуски» выберите 1–10 повторов (по умолчанию 3). Batch фиксирует pipeline/config на время сравнения, показывает выполненные и запрошенные повторы, winner, verdict, latency, медиану, success rate, доступные TTFT/TPS. Отмена относится ко всему batch. Правильность фиксированной fixture проверяется только для однозначного ответа Q4 / 210 или JSON `{"quarter":"Q4","profit":210}`. Неоднозначная свободная формулировка помечается «Проверить вручную», а не автоматически считается правильной по двум подстрокам. Pipeline автоматически не меняется.
+
+### Git и сборка релизов
+
+Рабочий `config.json` секретный и не отслеживается Git. Безопасный шаблон — `examples/config.example.json`. В source/release ZIP под именем `config.json` всегда кладётся выбранный проверенный шаблон. API keys, VPN profiles и private runtime statistics нельзя переносить в release template. Preflight отказывает при обнаружении этих данных и при LFS pointer вместо настоящего EXE/DLL.
+
+После clone выполните `git lfs install --local`, `git lfs pull`, затем `git config --local core.hooksPath .githooks`. Локальные hooks сохраняют LFS pre-push/post-checkout integration; pre-commit проверяет staged JSON, а не только working copy. Hooks являются страховкой, не заменой review и не неизбежной защитой от намеренного `--no-verify`.
+
+На Windows установите Go нужной версии и Node только для разработки/тестов. Для полной проверки Studio: `cd tests/ui`, `npm ci`, `npx playwright install chromium`, затем вернитесь в корень проекта. На Linux браузеру нужны системные библиотеки и fontconfig; они не входят в приложение.
+
+Полная воспроизводимая сборка обоих ZIP:
+
+```sh
+go run ./cmd/release --race
+```
+
+Команда выполняет safe-template/runtime preflight, генерацию PE resources, clean build, Go tests/vet/Windows vet, critical-repeat ×20, race (нужен C toolchain), JS syntax, DOM/Chromium, извлечение PE resources, manifests, ZIP CRC и clean extraction. Из распакованного Source ZIP заново запускаются tests/vet и Windows build с проверкой SHA-256 EXE. Перед релизом требуется clean Git tree; `--allow-dirty` предусмотрен только для локального кандидата. `--ui=false` или отсутствие `--race` явно отражаются в `RELEASE.json` и не выдаются за выполненные проверки.
+
+Отдельная сборка EXE: `scripts/build.ps1` или `scripts/build.sh`. Оба скрипта по умолчанию используют безопасный шаблон. Параметры build profile укажите в нём **до** запуска сборки. Итоговые archives: `releases/AIOverlay-go_Source.zip`, `releases/AIOverlay-go_Windows.zip`; контрольные суммы — `releases/SHA256SUMS.txt`.
+
+## Development HTTP mode
+
+Только `--headless` создаёт HTTP listener, только на loopback IP. При запуске он выводит локальный URL с новым токеном в fragment. Для API нужен `Authorization: Bearer <token>`, Host/Origin проверяются, записи принимают `application/json`. Не публикуйте этот URL/токен. Native Studio использует отдельный in-process handler и не включает listener. В Windows headless mode overlay и global hotkeys не создаются.
+
+## Границы VPN и внешних процессов
+
+Приложение не меняет Windows proxy, routing table и TUN и не делает proxy общедоступным на LAN. OpenCode получает только приватный loopback proxy и ключ текущего провайдера. Это userspace routing, **не OS network sandbox**: настройка HTTP_PROXY не является доказательством запрета любого egress произвольного SDK. Packet capture реального Windows OpenCode/VPN требуется отдельно. При ошибке нашего VPN adapter запрос не переводится на Direct автоматически.
+
+Child runtimes используют единственный Wait, наблюдаемое завершение и безопасную повторную инициализацию. На Windows дочерний процесс сначала suspended, затем включается в Job Object с kill-on-close и только после этого продолжается. Наличие процессов sing-box/OpenCode/WebView2 в Details Task Manager не скрывается. Изоляция child lifetime не гарантирует отсутствие дисковых записей OpenCode. Исходный screenshot нашего capture по-прежнему кодируется в RAM.

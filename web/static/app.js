@@ -98,7 +98,7 @@ function modal(title, html, eyebrow = 'PIPELINE STUDIO') {
  $('#dialogTitle').textContent = title; $('#dialogEyebrow').textContent = eyebrow; $('#dialogBody').innerHTML = html;
  if (!$('#dialog').open) $('#dialog').showModal();
 }
-function closeModal() {$('#dialog').close();}
+
 
 function ensureRuntimeDefaults(c) {
  c.vpn ||= {enabled:false,engine:'sing-box',config:''};
@@ -119,8 +119,8 @@ function vpnConfigValue(text) {
 
 async function boot() {
  $$('[data-icon]').forEach(e => e.innerHTML = icon(e.dataset.icon));
- $('#closeDialog').onclick = closeModal;
- $('#dialog').addEventListener('click', e => {if (e.target === $('#dialog')) closeModal();});
+ $('#closeDialog').onclick = guarded(()=>closeModal());
+ $('#dialog').addEventListener('click', e => {if (e.target === $('#dialog')) guarded(()=>closeModal())();});
  $$('[data-page]').forEach(b => b.onclick = () => {state.page = b.dataset.page; renderPage();});
  $('#newPipeline').onclick = newPipelineDialog;
  $('#saveConfig').onclick = guarded(saveConfig);
@@ -132,28 +132,23 @@ async function boot() {
  document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {e.preventDefault();if($('#dialog').open&&$('#providerDone'))$('#providerDone').click();else guarded(saveConfig)();}
  });
- window.addEventListener('beforeunload', e => {if (state.dirty) {e.preventDefault();e.returnValue = '';}});
+ window.addEventListener('beforeunload', e => {if (state.dirty||dialogDraft?.isDirty()) {e.preventDefault();e.returnValue = '';}});
  try {
-  state.config = ensureRuntimeDefaults(await api('/api/config')); state.pipeline = state.config.active_pipeline_id;
+  state.config = normalizeConfig(await api('/api/config')); state.pipeline = state.config.active_pipeline_id;
   $('#hostMode').textContent = native() ? 'Встроенное окно' : 'Режим разработки';
   $('#footerMode').textContent = native() ? 'WebView2 · без HTTP-сервера' : 'HTTP · разработка';
-  installContextHelp(); renderPage(); hydrateMetadata(); pollJob();
+  installContextHelp(); installHotkeyEditing(); renderPage(); hydrateMetadata(); pollJob();
  } catch (e) {$('#page').innerHTML = `<div class="empty-state"><h3>Не удалось открыть конфигурацию</h3><p>${esc(e.message)}</p><p>Проверьте config.json рядом с приложением.</p></div>`;}
 }
 
-async function closeStudio() {
- if (!native()) {notify('Внешний браузер используется только в режиме разработки.');return;}
- if (state.dirty) await saveConfig();
- await api('/desktop/close', 'POST');
-}
-window.__studioNativeClose = () => guarded(closeStudio)();
 
 async function saveConfig() {
  if (!state.config) return;
+ if(dialogDraft?.saving)await dialogDraft.saving;
  if(savePromise){await savePromise;if(state.dirty)return saveConfig();return;}
  const button=$('#saveConfig'),revision=configRevision,snapshot=copy(state.config);button.disabled=true;
  savePromise=(async()=>{
-  await api('/api/config','PUT',snapshot);
+  const reply=await api('/api/config','PUT',snapshot);if(reply.version)state.config.version=reply.version;
   if(configRevision===revision)saved();
   notify(configRevision===revision?'Сохранено.':'Сохранено. Более новые изменения остаются в черновике.');
  })();
@@ -173,7 +168,7 @@ async function importConfig(e) {
  if (file.size > 8*1024*1024) throw new Error('Конфигурация больше 8 МБ.');
  const value = JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
  if (!confirm('Заменить текущую конфигурацию, включая провайдеров и ключи?')) return;
- await api('/api/config/import', 'POST', value); state.config = ensureRuntimeDefaults(await api('/api/config')); state.pipeline = state.config.active_pipeline_id; state.node = null; saved(); renderPage(); hydrateMetadata(); notify('Конфигурация импортирована.');
+ await api('/api/config/import', 'POST', value); state.config = normalizeConfig(await api('/api/config')); state.pipeline = state.config.active_pipeline_id; state.node = null; saved(); renderPage(); hydrateMetadata(); notify('Конфигурация импортирована.');
 }
 function renderPage() {
  if (!state.config) return;
@@ -286,11 +281,14 @@ function renderSlots(root,pool,isVision) {
 }
 function renderPrompts(n) {
  const pool=n.model_pool;const hasVision=!!pool.vision_preprocessor;
- $('#inspectorBody').innerHTML=(hasVision?selectField('Этап','promptStage',{solver:'LLM / решение',vision:'VLM / извлечение'},'solver'):'')+`<div class="field"><label for="systemPrompt">System prompt</label><textarea id="systemPrompt" rows="7"></textarea></div><div class="field"><label for="userPrompt">User prompt</label><textarea id="userPrompt" rows="10"></textarea></div><div class="help"><span class="mono">{{vision.text}}</span><br><span class="mono">{{previous.output}}</span><br><span class="mono">{{input.text}}</span><br>Переменные содержат текст предыдущего этапа. Изображение прикладывается отдельно. У OpenCode system prompt дополняет инструкции его runtime.</div>`;
+ $('#inspectorBody').innerHTML=(hasVision?selectField('Этап','promptStage',{solver:'LLM / решение',vision:'VLM / извлечение'},'solver'):'')+`<div class="field"><label for="systemPrompt">System prompt</label><textarea id="systemPrompt" rows="7"></textarea></div><div class="field"><label for="userPrompt">User prompt</label><textarea id="userPrompt" rows="10"></textarea></div><div class="help"><span class="mono">{{vision.text}}</span><br><span class="mono">{{previous.output}}</span><br><span class="mono">{{input.text}}</span><br>input.text — исходный текст; previous.output — результат предыдущего этапа; vision.text — извлечённый текст. Изображение прикладывается отдельно. У OpenCode system prompt дополняет инструкции его runtime.</div>`;
  let target=pool.prompt;
  function load(){target=hasVision&&$('#promptStage').value==='vision'?pool.vision_preprocessor.prompt:pool.prompt;$('#systemPrompt').value=target.system||'';$('#userPrompt').value=target.user||'';}
  if(hasVision)$('#promptStage').onchange=load;
  $('#systemPrompt').oninput=e=>{target.system=e.target.value;dirty();};$('#userPrompt').oninput=e=>{target.user=e.target.value;dirty();};load();
+ const preview=document.createElement('button');preview.className='button';preview.id='promptPreview';preview.textContent='Предпросмотр итогового prompt';$('#inspectorBody').append(preview);
+ preview.onclick=guarded(()=>previewFinalPrompt(copy(target)));
+
 }
 function renderBudgetInspector() {
  const b=pipe().budget,pool=selectedNode()?.model_pool;
@@ -387,15 +385,23 @@ async function runImage(e) {
   const ratio=Math.min(1,1800/Math.max(img.naturalWidth,img.naturalHeight)),c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.naturalWidth*ratio));c.height=Math.max(1,Math.round(img.naturalHeight*ratio));c.getContext('2d').drawImage(img,0,0,c.width,c.height);await startRun('file',c.toDataURL('image/jpeg',.88).split(',')[1]);
  }finally{URL.revokeObjectURL(url);}
 }
+let pollFailure=false;
 async function pollJob() {
- try{state.job=await api('/api/job');updateOutput();if(state.page==='runs')renderLiveRun();}catch(_){/* keep editing when a status poll fails */}
- setTimeout(pollJob,state.job?.running?250:1100);
+ try{
+  state.job=await api('/api/job');
+  if(pollFailure){pollFailure=false;$('#errorBanner').classList.add('hidden');}
+  updateOutput();if(state.page==='runs'){renderLiveRun();renderBenchmarkResult();}
+ }catch(error){
+  if(!pollFailure){pollFailure=true;const e=$('#errorBanner');e.textContent='Нет связи с core: '+(error.message||error);e.classList.remove('hidden');}
+ }
+ setTimeout(pollJob,state.job?.running?250:1500);
 }
 function updateOutput() {
  const j=state.job;
  if($('#stopRun'))$('#stopRun').classList.toggle('hidden',!j?.running);
  renderAttemptState();
  if(!j?.id)return;
+ if(j.cleared){if($('#outputText'))$('#outputText').textContent='';if($('#outputMeta'))$('#outputMeta').textContent='';$('#appStatus').textContent='Готов к работе';return;}
  $('#appStatus').innerHTML=`<i style="background:${j.error?'var(--red)':j.running?'var(--accent)':'var(--green)'}"></i>${j.running?'Выполнение · '+(j.duration_ms/1000).toFixed(1)+' с':j.error?'Запрос завершился с ошибкой':'Готов · '+(j.duration_ms/1000).toFixed(2)+' с'}`;
  if(!$('#outputText'))return;
  const text=j.error ? (j.text?j.text+'\n\n':'')+'Ошибка: '+j.error : j.text;
@@ -405,14 +411,8 @@ function updateOutput() {
  const attempts=(j.trace?.events||[]).filter(e=>e.attempt);const latest=attempts.at(-1);const who=j.trace?.winner||latest?.attempt;
  $('#outputMeta').textContent=who ? (j.running?'trying · ':'')+who.provider_id+' / '+shortModel(who.model_id) : '';
 }
-function renderRuns() {
- $('#page').innerHTML=`<div class="page-head"><div><p class="eyebrow">OBSERVABILITY</p><h1>Запуски и диагностика</h1><p>Смотрите фактические попытки. Запросы резерва, ключи и тайминги не скрыты.</p></div><div class="head-actions"><button class="button" id="syntheticRun">${icon('play')}Синтетический тест</button><button class="button danger" id="stopTraceRun">Стоп</button></div></div><div class="scroll-page"><div id="liveRun"></div><div class="section-line"><h4>ПРЕДЫДУЩИЕ ЗАПУСКИ</h4><button class="button small subtle" id="refreshHistory">Обновить</button></div><div id="history"></div></div>`;
- $('#syntheticRun').onclick=guarded(()=>startRun('synthetic'));
- $('#stopTraceRun').onclick=guarded(stopRun);
- $('#refreshHistory').onclick=guarded(loadHistory);
- renderLiveRun();guarded(loadHistory)();
-}
-const traceEventNames={pool_plan:'План этапа',candidates_skipped:'Пропущено при отборе',candidate_start:'Кандидат',hedge_start:'Старт резерва',attempt_start:'START',first_token:'FIRST TOKEN',attempt_end:'Завершение попытки',candidate_end:'Результат кандидата',budget_exhausted:'Бюджет исчерпан',winner:'WINNER',buffered:'Полный ответ',http_status:'HTTP',edge:'Переход'};
+
+const traceEventNames={pool_plan:'План этапа',candidates_skipped:'Пропущено при отборе',candidate_start:'Кандидат',hedge_start:'Старт резерва',attempt_start:'START',first_token:'FIRST TOKEN',attempt_end:'Завершение попытки',candidate_end:'Результат кандидата',budget_exhausted:'Бюджет исчерпан',winner:'WINNER',buffered:'Полный ответ',http_status:'HTTP',transition:'Переход',effective_limits:'Лимиты попытки',worker_cleanup_timeout:'Нет подтверждения отмены',edge:'Переход'};
 function traceTable(events) {
  return `<div class="table-wrap"><table class="trace-table"><thead><tr><th>+ С</th><th>ЭТАП / МОДЕЛЬ</th><th>ТРАНСПОРТ / КЛЮЧ</th><th>СОБЫТИЕ</th><th>ИСХОД / HTTP</th><th>TTFT</th><th>ВРЕМЯ</th><th>ТОКЕНЫ / TPS</th></tr></thead><tbody>${events.map(e=>`<tr><td class="mono">${(e.at_ms/1000).toFixed(2)}</td><td><small>${esc(e.node_id||'')}</small><span class="mono">${esc(e.attempt?.model_id||'')}</span></td><td><small>${esc(e.attempt?.transport||'')}${e.attempt?.provider_id?' · '+esc(e.attempt.provider_id):''}</small>${esc(e.attempt?.credential_alias||e.attempt?.credential_id||'')}</td><td>${esc(traceEventNames[e.kind]||e.kind)}${e.message?`<details class="trace-detail"><summary>Подробности</summary><div>${esc(e.message)}</div></details>`:''}</td><td>${esc(outcomeNames[e.outcome]||e.outcome||'')}${e.http_status?' · '+e.http_status:''}</td><td class="mono">${e.ttft_ms?(e.ttft_ms/1000).toFixed(2)+'s':'—'}</td><td class="mono">${e.duration_ms?(e.duration_ms/1000).toFixed(2)+'s':'—'}</td><td class="mono">${e.output_tokens||'—'} / ${e.tps?Number(e.tps).toFixed(1):'—'}</td></tr>`).join('')}</tbody></table></div>`;
 }
@@ -424,21 +424,4 @@ function renderLiveRun(){
 }
 async function loadHistory(){const traces=await api('/api/traces');if(!$('#history'))return;$('#history').innerHTML=(traces||[]).slice(0,20).map(t=>`<details class="card" style="margin-bottom:8px;padding:12px"><summary class="mono">${esc(t.pipeline_id)} · ${esc(new Date(t.started_at).toLocaleTimeString())} · ${esc(shortModel(t.winner?.model_id||'без ответа'))}</summary><div style="margin-top:10px">${traceTable(t.events||[])}</div></details>`).join('')||'<p class="note">История текущего сеанса пока пуста.</p>';}
 
-function renderSettings(){
- const c=state.config,o=c.overlay,v=c.vpn||(c.vpn={enabled:false,engine:'sing-box',config:''});
- v.engine='sing-box';
- $('#page').innerHTML=`<div class="page-head"><div><p class="eyebrow">РАБОЧЕЕ ОКРУЖЕНИЕ</p><h1>Приложение</h1></div></div><div class="scroll-page"><div class="grid-2 settings-layout">
- <section class="card"><h3>Оверлей</h3><p class="card-sub">Размер меняйте за край или угол окна в режиме редактирования.</p><div class="field"><label for="opacity">Прозрачность <span id="opacityValue">${Math.round(o.opacity*100)}%</span></label><input id="opacity" type="range" min="15" max="100" value="${Math.round(o.opacity*100)}"></div>${field('Размер шрифта','fontSize',o.font_size,'number')}<label class="switch"><input type="checkbox" id="ghost" ${o.click_through?'checked':''}>Ghost Mode: клики проходят сквозь окно</label><label class="switch"><input type="checkbox" id="stealth" ${o.stealth?'checked':''}>Исключать из поддерживаемого захвата</label><div class="help">Исключение зависит от Windows и метода захвата OBS. Проверьте свою запись. Оно не гарантирует невидимость при любом способе захвата.</div><button class="button" id="settingsCapture">${icon('screen')}Проверить захват</button></section>
- <section class="card"><h3>Горячие клавиши</h3><p class="card-sub">Комбинация с Ctrl, Alt, Shift или Win. Изменения применяются после сохранения.</p><div class="settings-keys">${[['analyze','Анализ экрана'],['ghost','Ghost Mode'],['clear','Очистить / отменить'],['control','Открыть Studio']].map(([key,label])=>field(label,'hotkey_'+key,o.hotkeys[key]||'')).join('')}</div><label class="switch"><input type="checkbox" id="stationary" ${o.stationary_cursor_ms>0?'checked':''}>Анализ после 10 секунд неподвижного курсора</label><label class="switch"><input type="checkbox" id="autoOpen" ${c.control_center.auto_open?'checked':''}>Открывать встроенную Studio при запуске</label><div class="help">Закрытие Studio выгружает WebView2; оверлей продолжает работать. Чтобы вернуть окно, используйте горячую клавишу Studio.</div></section>
- <section class="card span-2 vpn-card"><div class="vpn-head"><div><h3>AI VPN</h3><p class="card-sub">Изолированный tunnel только для запросов к AI providers. Системный VPN, TUN и Windows proxy не включаются.</p></div><label class="switch"><input type="checkbox" id="vpnEnabled" ${v.enabled?'checked':''}>Включён</label></div><div class="vpn-scope"><span>ENGINE <b>sing-box 1.14.1</b></span><span>LISTEN <b>127.0.0.1 · случайный порт · auth</b></span><span>SCOPE <b>AI requests only</b></span></div><div class="field"><label for="vpnConfig">Конфигурация tunnel</label><textarea id="vpnConfig" class="code-editor vpn-editor" rows="12" spellcheck="false" placeholder='{"type":"vless","server":"vpn.example","server_port":443,"uuid":"…","tls":{"enabled":true}}'>${esc(vpnConfigText(v.config))}</textarea><small>Вставьте один sing-box outbound JSON (VLESS, Hysteria2, TUIC, Trojan, Shadowsocks, VMess и т. д.) или полный sing-box JSON ровно с одним tunnel outbound. Inbounds, TUN, route и set_system_proxy из вставленного конфига намеренно не используются.</small></div><div class="actions-row"><button class="button" id="vpnCheck">Проверить конфиг</button><span class="vpn-status" id="vpnStatus">${v.enabled?'Будет применён ко всем AI-запросам после сохранения.':'Выключен: AI-запросы идут обычным сетевым путём.'}</span></div><div class="help warning">VPN-конфиг может содержать UUID, пароли и ключи. Он хранится в общем переносимом config.json — обращайтесь с ним как с секретным файлом.</div></section>
- </div></div>`;
- $('#opacity').oninput=e=>{o.opacity=Number(e.target.value)/100;$('#opacityValue').textContent=e.target.value+'%';dirty();};bindValue('fontSize',o,'font_size',true);
- for(const [id,key]of [['ghost','click_through'],['stealth','stealth']])$('#'+id).onchange=e=>{o[key]=e.target.checked;dirty();};
- for(const key of ['analyze','ghost','clear','control'])bindValue('hotkey_'+key,o.hotkeys,key);
- $('#stationary').onchange=e=>{o.stationary_cursor_ms=e.target.checked?10000:0;dirty();};$('#autoOpen').onchange=e=>{c.control_center.auto_open=e.target.checked;dirty();};
- $('#vpnEnabled').onchange=e=>{v.enabled=e.target.checked;dirty();$('#vpnStatus').textContent=e.target.checked?'Будет применён ко всем AI-запросам после сохранения.':'Выключен: AI-запросы идут обычным сетевым путём.';};
- $('#vpnConfig').oninput=e=>{v.config=vpnConfigValue(e.target.value);dirty();$('#vpnStatus').textContent='Есть непроверенные изменения.';};
- $('#vpnCheck').onclick=guarded(async()=>{const b=$('#vpnCheck'),status=$('#vpnStatus');b.disabled=true;status.textContent='Проверка…';try{const candidate={enabled:true,engine:'sing-box',config:vpnConfigValue($('#vpnConfig').value)};await api('/api/vpn/check','POST',candidate);status.textContent='Конфиг принят sing-box. Сохраните, чтобы применить.';}catch(e){status.textContent='Ошибка: '+e.message;throw e;}finally{if(b.isConnected)b.disabled=false;}});
- $('#settingsCapture').onclick=guarded(previewCapture);
-}
 window.addEventListener('DOMContentLoaded',boot);

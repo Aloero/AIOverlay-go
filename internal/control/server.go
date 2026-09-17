@@ -1,6 +1,8 @@
 package control
 
 import (
+	"aioverlay/internal/config"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -40,6 +42,9 @@ type BenchmarkRequest struct {
 	Runs       int    `json:"runs"`
 }
 type BenchmarkRun struct {
+	Verdict    string             `json:"verdict"`
+	TTFTMS     int64              `json:"ttft_ms"`
+	TPS        float64            `json:"tps"`
 	Run        int                `json:"run"`
 	DurationMS int64              `json:"duration_ms"`
 	Correct    bool               `json:"correct"`
@@ -47,10 +52,17 @@ type BenchmarkRun struct {
 	Winner     *domain.AttemptRef `json:"winner,omitempty"`
 }
 type BenchmarkReport struct {
-	Runs     []BenchmarkRun `json:"runs"`
-	MedianMS int64          `json:"median_ms"`
-	Correct  int            `json:"correct"`
-	Total    int            `json:"total"`
+	Requested   int            `json:"requested"`
+	PipelineID  string         `json:"pipeline_id"`
+	Successful  int            `json:"successful"`
+	Unverified  int            `json:"unverified"`
+	SuccessRate float64        `json:"success_rate"`
+	Cancelled   bool           `json:"cancelled"`
+	CheckMethod string         `json:"check_method"`
+	Runs        []BenchmarkRun `json:"runs"`
+	MedianMS    int64          `json:"median_ms"`
+	Correct     int            `json:"correct"`
+	Total       int            `json:"total"`
 }
 
 type TestRequest struct {
@@ -70,25 +82,43 @@ type Backend interface {
 }
 
 type Server struct {
-	ctx     context.Context
-	jobs    JobManager
-	Capture func() ([]byte, error)
-	backend Backend
-	http    *http.Server
+	ctx          context.Context
+	jobs         JobManager
+	Capture      func() ([]byte, error)
+	backend      Backend
+	http         *http.Server
+	core         http.Handler
+	token        string
+	HotkeyEditor func(bool)
+	Diagnostics  func() any
 }
 
 func New(addr string, b Backend) *Server {
 	s := &Server{backend: b, ctx: context.Background()}
 	mux := http.NewServeMux()
 	s.routes(mux)
-	s.http = &http.Server{Addr: addr, Handler: securityHeaders(mux), ReadHeaderTimeout: 5 * time.Second}
+	s.core = securityHeaders(mux)
+	s.token = newDevelopmentToken()
+	s.http = &http.Server{Addr: addr, Handler: s.secureHTTP(s.core), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	return s
 }
-func (s *Server) SetContext(ctx context.Context)     { s.ctx = ctx }
-func (s *Server) Handler() http.Handler              { return s.http.Handler }
-func (s *Server) CancelRun()                         { s.jobs.Cancel() }
-func (s *Server) Addr() string                       { return s.http.Addr }
-func (s *Server) ListenAndServe() error              { return s.http.ListenAndServe() }
+func (s *Server) SetContext(ctx context.Context) { s.ctx = ctx }
+func (s *Server) Handler() http.Handler          { return s.http.Handler }
+func (s *Server) DesktopHandler() http.Handler   { return s.core }
+func (s *Server) DevelopmentToken() string       { return s.token }
+func (s *Server) SetDevelopmentToken(token string) {
+	if len(token) >= 32 {
+		s.token = token
+	}
+}
+func (s *Server) CancelRun()   { s.jobs.Cancel() }
+func (s *Server) Addr() string { return s.http.Addr }
+func (s *Server) ListenAndServe() error {
+	if err := validateListenAddress(s.http.Addr); err != nil {
+		return err
+	}
+	return s.http.ListenAndServe()
+}
 func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ctx) }
 
 func (s *Server) routes(mux *http.ServeMux) {
@@ -111,7 +141,20 @@ func (s *Server) routes(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(data)
 	})
+	mux.HandleFunc("/api/prompts/preview", s.handlePromptPreview)
 	mux.HandleFunc("/api/job", s.handleJob)
+	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(405)
+			return
+		}
+		if s.Diagnostics != nil {
+			writeJSON(w, s.Diagnostics())
+		} else {
+			writeJSON(w, map[string]any{})
+		}
+	})
+	mux.HandleFunc("/api/hotkeys/editor", s.handleHotkeyEditor)
 	mux.HandleFunc("/api/capture", s.handleCapture)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/config/export", s.handleExport)
@@ -139,7 +182,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true})
+		writeJSON(w, map[string]any{"ok": true, "version": s.backend.GetConfig().Version})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -184,7 +227,13 @@ func (s *Server) handleCatalogRefresh(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(405)
 		return
 	}
-	if err := s.backend.RefreshCatalog(); err != nil {
+	var err error
+	if b, ok := s.backend.(interface{ RefreshCatalogContext(context.Context) error }); ok {
+		err = b.RefreshCatalogContext(r.Context())
+	} else {
+		err = s.backend.RefreshCatalog()
+	}
+	if err != nil {
 		http.Error(w, err.Error(), 502)
 		return
 	}
@@ -209,15 +258,32 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
-	res, err := s.backend.RunTest(ctx, req)
-	if err != nil {
-		http.Error(w, err.Error(), 502)
+	b, ok := s.backend.(liveBackend)
+	if !ok {
+		http.Error(w, "live execution unavailable", 501)
 		return
 	}
-	writeJSON(w, res)
+	input := engine.Input{Text: req.Text}
+	if req.ImageBase64 != "" {
+		input.ImageJPEG, _ = base64.StdEncoding.DecodeString(req.ImageBase64)
+	}
+	id, err := s.jobs.Start(r.Context(), b, req.PipelineID, input)
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	job, err := s.jobs.Wait(r.Context(), id)
+	if err != nil {
+		http.Error(w, "run cancelled", 408)
+		return
+	}
+	if job.Error != "" {
+		http.Error(w, job.Error, 502)
+		return
+	}
+	writeJSON(w, engine.Result{Text: job.Text, Trace: job.Trace})
 }
+
 func (s *Server) handleBenchmark(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -234,14 +300,14 @@ func (s *Server) handleBenchmark(w http.ResponseWriter, r *http.Request) {
 	if req.Runs > 10 {
 		req.Runs = 10
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	defer cancel()
-	report, err := s.backend.RunBenchmark(ctx, req)
+	id, err := s.jobs.startTask(s.ctx, req.PipelineID, func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		return s.runBenchmark(ctx, req, opt)
+	})
 	if err != nil {
-		http.Error(w, err.Error(), 502)
+		http.Error(w, err.Error(), 409)
 		return
 	}
-	writeJSON(w, report)
+	writeJSON(w, map[string]string{"id": id})
 }
 
 func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
@@ -250,17 +316,24 @@ func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 func boolQ(s string) bool { return s == "1" || strings.EqualFold(s, "true") }
 func decodeJSON(r *http.Request, v any, max int64) error {
 	defer r.Body.Close()
-	d := json.NewDecoder(io.LimitReader(r.Body, max))
-	d.DisallowUnknownFields()
-	if err := d.Decode(v); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, max+1))
+	if err != nil {
+		return fmt.Errorf("could not read JSON request")
+	}
+	if int64(len(raw)) > max {
+		return fmt.Errorf("JSON request exceeds size limit")
+	}
+	if err := config.CheckJSON(raw); err != nil {
 		return err
 	}
-	var extra any
-	if err := d.Decode(&extra); err != io.EOF {
-		return fmt.Errorf("unexpected trailing JSON")
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(v); err != nil {
+		return fmt.Errorf("invalid JSON request fields")
 	}
 	return nil
 }
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
