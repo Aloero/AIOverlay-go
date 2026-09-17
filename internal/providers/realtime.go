@@ -102,6 +102,10 @@ type RealtimeSessionCleaner interface {
 	Clean(context.Context) error
 }
 
+type RealtimeReconnector interface {
+	Reconnect(context.Context) error
+}
+
 type RealtimeSessionFactory interface {
 	OpenRealtime(context.Context, RealtimeOpenRequest) (RealtimeSession, error)
 }
@@ -156,5 +160,69 @@ func openRealtime(ctx context.Context, adapter Provider, request RealtimeOpenReq
 	if !ok {
 		return nil, fmt.Errorf("realtime adapter contract is invalid: session factory is missing")
 	}
-	return factory.OpenRealtime(ctx, request)
+	session, err := factory.OpenRealtime(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRealtimeSessionContract(session, capabilities); err != nil {
+		_ = session.Close()
+		return nil, err
+	}
+	return session, nil
+}
+
+func validateRealtimeSessionContract(session RealtimeSession, advertised RealtimeCapabilities) error {
+	if session == nil {
+		return fmt.Errorf("realtime adapter returned a nil session")
+	}
+	sessionCapabilities := normalizeRealtimeCapabilities(session.Capabilities())
+	for _, operation := range realtimeOperations {
+		if advertised.Supports(operation) && !sessionCapabilities.Supports(operation) {
+			return fmt.Errorf("realtime session does not preserve advertised capability %s", operation)
+		}
+	}
+	checks := []struct {
+		operation RealtimeOperation
+		supported bool
+	}{
+		{RealtimeAppendAudio, implementsRealtimeAudioAppender(session)},
+		{RealtimeUpdateImage, implementsRealtimeImageUpdater(session)},
+		{RealtimeRequestResponse, implementsRealtimeResponseRequester(session)},
+		{RealtimeSemanticNoAction, implementsRealtimeResponseRequester(session)},
+		{RealtimeTextOutput, implementsRealtimeResponseRequester(session)},
+		{RealtimeInterrupt, implementsRealtimeInterrupter(session)},
+		{RealtimeCleanSession, implementsRealtimeCleaner(session)},
+		{RealtimeReconnect, implementsRealtimeReconnector(session)},
+	}
+	for _, check := range checks {
+		if advertised.Supports(check.operation) && !check.supported {
+			return fmt.Errorf("realtime session advertises %s without implementing its contract", check.operation)
+		}
+	}
+	return nil
+}
+
+func implementsRealtimeAudioAppender(session RealtimeSession) bool {
+	_, ok := session.(RealtimeAudioAppender)
+	return ok
+}
+func implementsRealtimeImageUpdater(session RealtimeSession) bool {
+	_, ok := session.(RealtimeImageUpdater)
+	return ok
+}
+func implementsRealtimeResponseRequester(session RealtimeSession) bool {
+	_, ok := session.(RealtimeResponseRequester)
+	return ok
+}
+func implementsRealtimeInterrupter(session RealtimeSession) bool {
+	_, ok := session.(RealtimeInterrupter)
+	return ok
+}
+func implementsRealtimeCleaner(session RealtimeSession) bool {
+	_, ok := session.(RealtimeSessionCleaner)
+	return ok
+}
+func implementsRealtimeReconnector(session RealtimeSession) bool {
+	_, ok := session.(RealtimeReconnector)
+	return ok
 }

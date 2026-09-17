@@ -38,6 +38,7 @@ type Event struct {
 	Type         EventType
 	Text         string
 	ModelID      string
+	Outcome      domain.Outcome
 	InputTokens  int
 	OutputTokens int
 }
