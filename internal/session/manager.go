@@ -73,6 +73,7 @@ type activeBackgroundTurn struct {
 }
 
 type sourceRuntime struct {
+	pipelineID    string
 	cfg           domain.EventSource
 	cancel        context.CancelFunc
 	done          chan struct{}
@@ -199,7 +200,8 @@ func (m *Manager) ApplyImported(cfg domain.Config) {
 
 func (m *Manager) apply(cfg domain.Config, clearRuntimeOverrides bool) {
 	m.mu.Lock()
-	if clearRuntimeOverrides {
+	pipelineChanged := activePipelineID(m.cfg) != activePipelineID(cfg)
+	if clearRuntimeOverrides || pipelineChanged {
 		m.sourceOverrides = map[string]bool{}
 	} else {
 		m.pruneSourceOverridesLocked(cfg)
@@ -346,7 +348,7 @@ func (m *Manager) reconcile() {
 	var resetRetry []string
 	for id, runtime := range m.sources {
 		next, wantedNow := wanted[id]
-		sameConfig := wantedNow && sameSource(runtime.cfg, next)
+		sameConfig := wantedNow && runtime.pipelineID == activePipelineID(cfg) && sameSource(runtime.cfg, next)
 		if sameConfig && !sourceFinished(runtime) {
 			continue
 		}
@@ -384,12 +386,13 @@ func (m *Manager) reconcile() {
 		}
 		ctx, cancel := context.WithCancel(root)
 		r := &sourceRuntime{
-			cfg:      src,
-			cancel:   cancel,
-			done:     make(chan struct{}),
-			turnDone: make(chan struct{}),
-			epoch:    m.sourceSeq.Add(1),
-			turns:    make(chan backgroundTurn, 1),
+			pipelineID: p.ID,
+			cfg:        src,
+			cancel:     cancel,
+			done:       make(chan struct{}),
+			turnDone:   make(chan struct{}),
+			epoch:      m.sourceSeq.Add(1),
+			turns:      make(chan backgroundTurn, 1),
 			status: SourceStatus{
 				ID: src.ID, Name: src.Name, Kind: string(src.Kind), Running: true,
 				TransportState: initialTransportState(src.Kind), SignalState: initialSignalState(src.Kind),

@@ -1014,3 +1014,94 @@ func TestNormalApplyPreservesStartNowOverride(t *testing.T) {
 		t.Fatal("ordinary config save unexpectedly cleared Start-now override")
 	}
 }
+
+func TestPipelineSwitchDoesNotReuseSameIDSourceRuntime(t *testing.T) {
+	cfg := managerConfig()
+	first := cfg.Pipelines[0]
+	second := first
+	second.ID = "p2"
+	second.Name = "second"
+	cfg.Pipelines = []domain.Pipeline{first, second}
+	cfg.ActivePipelineID = first.ID
+
+	manager := NewManager(nil)
+	started := make(chan string, 2)
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		manager.mu.RLock()
+		pipelineID := ""
+		if runtime := manager.sources["a"]; runtime != nil {
+			pipelineID = runtime.pipelineID
+		}
+		manager.mu.RUnlock()
+		started <- pipelineID
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+	select {
+	case pipelineID := <-started:
+		if pipelineID != "p" {
+			t.Fatalf("first runtime pipeline=%q", pipelineID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first pipeline source did not start")
+	}
+	firstRuntime := manager.source("a")
+	if firstRuntime == nil {
+		t.Fatal("first runtime missing")
+	}
+
+	cfg.ActivePipelineID = "p2"
+	manager.Apply(cfg)
+	select {
+	case pipelineID := <-started:
+		if pipelineID != "p2" {
+			t.Fatalf("second runtime pipeline=%q", pipelineID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second pipeline source did not start")
+	}
+	secondRuntime := manager.source("a")
+	if secondRuntime == nil || secondRuntime == firstRuntime || secondRuntime.pipelineID != "p2" || secondRuntime.epoch == firstRuntime.epoch {
+		t.Fatalf("source runtime was reused across pipelines: first=%p/%d second=%p/%d pipeline=%q", firstRuntime, firstRuntime.epoch, secondRuntime, secondRuntime.epoch, secondRuntime.pipelineID)
+	}
+}
+
+func TestPipelineSwitchClearsStartNowOverride(t *testing.T) {
+	cfg := managerConfig()
+	first := cfg.Pipelines[0]
+	first.Sources[0].AutoStart = false
+	second := first
+	second.ID = "p2"
+	second.Name = "second"
+	second.Sources = append([]domain.EventSource(nil), first.Sources...)
+	second.Sources[0].AutoStart = false
+	cfg.Pipelines = []domain.Pipeline{first, second}
+	cfg.ActivePipelineID = first.ID
+
+	manager := NewManager(nil)
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+	if err := manager.SetSourceRunning("a", true); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return manager.source("a") != nil }, "first pipeline source did not start")
+
+	cfg.ActivePipelineID = "p2"
+	manager.Apply(cfg)
+	waitUntil(t, func() bool { return manager.source("a") == nil }, "Start-now override leaked into second pipeline")
+	manager.mu.RLock()
+	_, exists := manager.sourceOverrides["a"]
+	manager.mu.RUnlock()
+	if exists {
+		t.Fatal("pipeline switch retained source runtime override")
+	}
+}
