@@ -697,6 +697,10 @@ func (m *Manager) enqueueBackgroundTurn(r *sourceRuntime, turn backgroundTurn) {
 }
 
 func (m *Manager) recordCoalescedTurn(runtime *sourceRuntime, turn backgroundTurn) {
+	m.recordDroppedTurn(runtime, turn, "automatic event coalesced to the newest context")
+}
+
+func (m *Manager) recordDroppedTurn(runtime *sourceRuntime, turn backgroundTurn, reason string) {
 	if turn.input.EventID != "" {
 		if turn.input.Audio != nil && turn.ctxCfg.ID != "" {
 			m.contexts.Append(turn.ctxCfg, turn.pipelineID, turn.generation, ContextEntry{Kind: "gap", Gap: true, At: turn.at, SourceID: runtime.cfg.ID})
@@ -705,12 +709,13 @@ func (m *Manager) recordCoalescedTurn(runtime *sourceRuntime, turn backgroundTur
 	}
 	runtime.mu.Lock()
 	runtime.status.Dropped++
-	runtime.status.LastError = "automatic event coalesced to the newest context"
+	runtime.status.LastError = reason
 	runtime.mu.Unlock()
 }
 
 func (m *Manager) runTurnQueue(ctx context.Context, pipelineID string, r *sourceRuntime) {
 	defer close(r.turnDone)
+	defer m.discardQueuedTurns(r)
 	for {
 		select {
 		case <-ctx.Done():
@@ -720,6 +725,7 @@ func (m *Manager) runTurnQueue(ctx context.Context, pipelineID string, r *source
 				return
 			}
 			if !m.sourceCurrent(r.cfg.ID, r.epoch) {
+				m.recordDroppedTurn(r, turn, "source stopped before queued event could run")
 				continue
 			}
 			m.mu.RLock()
@@ -728,6 +734,7 @@ func (m *Manager) runTurnQueue(ctx context.Context, pipelineID string, r *source
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
+				m.recordDroppedTurn(r, turn, "source stopped while event waited for a processing slot")
 				return
 			}
 			m.executeBackgroundTurn(ctx, pipelineID, r, turn)
@@ -736,7 +743,24 @@ func (m *Manager) runTurnQueue(ctx context.Context, pipelineID string, r *source
 	}
 }
 
+func (m *Manager) discardQueuedTurns(runtime *sourceRuntime) {
+	for {
+		select {
+		case turn, ok := <-runtime.turns:
+			if !ok {
+				return
+			}
+			m.recordDroppedTurn(runtime, turn, "source stopped before queued event could run")
+		default:
+			return
+		}
+	}
+}
+
 func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID string, r *sourceRuntime, turn backgroundTurn) {
+	if turn.input.Audio != nil {
+		defer m.finishPending(turn.input.EventID)
+	}
 	m.turnGate.RLock()
 	defer m.turnGate.RUnlock()
 	if !m.sourceCurrent(r.cfg.ID, r.epoch) {

@@ -370,3 +370,98 @@ func TestCoalescedScreenTurnDoesNotInventTranscriptGap(t *testing.T) {
 		t.Fatalf("screen coalescing was not counted: %+v", runtime.status)
 	}
 }
+
+func TestPauseRemovesAudioPendingWhileTurnWaitsForSlot(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].SessionBudget.MaxParallelCalls = 1
+	cfg.Pipelines[0].Sources[0].Audio.SegmentMS = 100
+	cfg.Pipelines[0].Sources[0].Audio.MinimumMS = 80
+	manager := NewManager(func(context.Context, string, engine.Input, engine.RunOptions) (engine.Result, error) {
+		t.Fatal("turn executed after source was paused")
+		return engine.Result{}, nil
+	})
+
+	allowEmit := make(chan struct{})
+	emitted := make(chan struct{})
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, emit func(paudio.Block)) error {
+		select {
+		case <-allowEmit:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		voice := make([]int16, 1600)
+		for i := range voice {
+			voice[i] = 12000
+		}
+		emit(paudio.Block{Samples: voice, Rate: 16000, At: time.Now()})
+		close(emitted)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() {
+		select {
+		case <-manager.turnSem:
+		default:
+		}
+		cancel()
+		manager.Close()
+	}()
+	manager.turnSem <- struct{}{}
+	close(allowEmit)
+	<-emitted
+	waitUntil(t, func() bool {
+		manager.pendingMu.Lock()
+		defer manager.pendingMu.Unlock()
+		return len(manager.pending) == 1
+	}, "audio segment never became pending")
+
+	manager.Pause(true)
+	waitUntil(t, func() bool {
+		manager.pendingMu.Lock()
+		defer manager.pendingMu.Unlock()
+		return len(manager.pending) == 0
+	}, "paused source left a dead pending transcript")
+
+	snapshot := manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+	if len(snapshot.Entries) != 1 || !snapshot.Entries[0].Gap {
+		t.Fatalf("paused pending audio loss was hidden: %+v", snapshot.Entries)
+	}
+}
+
+func TestRepeatedSourceStartStopLeavesNoPendingTurns(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].AutoStart = false
+	manager := NewManager(nil)
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+
+	for i := 0; i < 100; i++ {
+		if err := manager.SetSourceRunning("a", true); err != nil {
+			t.Fatal(err)
+		}
+		waitUntil(t, func() bool { return manager.source("a") != nil }, "source did not start")
+		if err := manager.SetSourceRunning("a", false); err != nil {
+			t.Fatal(err)
+		}
+		waitUntil(t, func() bool { return manager.source("a") == nil }, "source did not stop")
+	}
+
+	manager.pendingMu.Lock()
+	pending := len(manager.pending)
+	manager.pendingMu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending turns leaked across start/stop cycles: %d", pending)
+	}
+	if status := manager.Status()["sources"].([]SourceStatus); len(status) != 0 {
+		t.Fatalf("source runtimes leaked after stop: %+v", status)
+	}
+}
