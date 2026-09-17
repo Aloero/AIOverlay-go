@@ -66,6 +66,9 @@ func New(configPath, catalogPath string) (*App, error) {
 	a.sessions = session.NewManager(func(ctx context.Context, pipelineID string, input engine.Input, opt engine.RunOptions) (engine.Result, error) {
 		return a.Run(ctx, pipelineID, input, opt)
 	})
+	// Load session topology without starting any source. Desktop startup calls
+	// StartSessions explicitly after capture/privacy wiring is ready.
+	a.sessions.Apply(cfg)
 	a.startMaintenance()
 	return a, nil
 }

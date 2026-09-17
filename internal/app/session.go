@@ -5,6 +5,7 @@ import (
 	"aioverlay/internal/platform/audio"
 	"aioverlay/internal/session"
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -23,8 +24,11 @@ func (a *App) SetSessionPublisher(fn func(session.Publication)) {
 		a.sessions.SetPublisher(fn)
 	}
 }
-func (a *App) PrepareCommand(ctx context.Context, action string) (session.PreparedCommand, error) {
-	return a.sessions.PrepareCommand(ctx, action)
+func (a *App) PrepareCommand(ctx context.Context, action string, capture session.ScreenCapture) (session.PreparedCommand, error) {
+	if a.sessions == nil {
+		return session.PreparedCommand{}, fmt.Errorf("session runtime unavailable")
+	}
+	return a.sessions.PrepareCommandWithCapture(ctx, action, capture)
 }
 func (a *App) SetSourceRunning(id string, running bool) error {
 	if a.sessions == nil {
