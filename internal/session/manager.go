@@ -500,11 +500,9 @@ func (m *Manager) recordAudioGap(pipelineID string, r *sourceRuntime, at time.Ti
 	}
 }
 
-func (m *Manager) enqueueAudioSegment(pipelineID string, r *sourceRuntime, segments chan<- paudio.Segment, seg paudio.Segment) {
-	select {
-	case segments <- seg:
-	default:
-		m.recordAudioGap(pipelineID, r, seg.Ended, "audio queue overflow: transcript gap recorded")
+func (m *Manager) enqueueAudioSegment(pipelineID string, runtime *sourceRuntime, queue *audioSegmentQueue, segment paudio.Segment) {
+	if err := queue.TryPush(segment); err != nil {
+		m.recordAudioGap(pipelineID, runtime, segment.Ended, err.Error()+": transcript gap recorded")
 	}
 }
 
@@ -518,21 +516,22 @@ func (m *Manager) runAudio(ctx context.Context, pipelineID string, runtime *sour
 		return err
 	}
 
-	segments := make(chan paudio.Segment, queueCapacity)
+	queue := newAudioSegmentQueue(queueCapacity, maxQueuedAudioPCMBytes)
 	producerDone := make(chan error, 1)
 	go func() {
-		producerDone <- m.produceAudioSegments(ctx, pipelineID, runtime, capture, segments)
-		close(segments)
+		producerDone <- m.produceAudioSegments(ctx, pipelineID, runtime, capture, queue)
+		queue.Close()
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case segment, ok := <-segments:
+		case segment, ok := <-queue.items:
 			if !ok {
 				return captureResult(ctx, <-producerDone)
 			}
+			queue.Release(segment)
 			runtime.mu.Lock()
 			runtime.status.Segments++
 			runtime.status.LastEvent = segment.Ended.Format(time.RFC3339Nano)
@@ -562,14 +561,14 @@ func (m *Manager) audioRuntimeConfig(pipelineID string) (paudio.CaptureFunc, int
 	return capture, queueCapacity, nil
 }
 
-func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, runtime *sourceRuntime, capture paudio.CaptureFunc, segments chan<- paudio.Segment) error {
+func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, runtime *sourceRuntime, capture paudio.CaptureFunc, queue *audioSegmentQueue) error {
 	segmenter := paudio.Segmenter{Config: *runtime.cfg.Audio}
 	err := capture(ctx, *runtime.cfg.Audio, func(block paudio.Block) {
 		if block.Discontinuity || block.TimestampError {
 			m.recordAudioGap(pipelineID, runtime, block.At, "audio discontinuity: transcript context contains a gap")
 		}
 		for _, segment := range segmenter.Push(block) {
-			m.enqueueAudioSegment(pipelineID, runtime, segments, segment)
+			m.enqueueAudioSegment(pipelineID, runtime, queue, segment)
 		}
 		updateAudioStatus(runtime, block, segmenter.Level)
 	})
@@ -579,7 +578,7 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 
 	interruptedAt := time.Now()
 	if tail, ok := segmenter.Interrupt(); ok {
-		m.enqueueAudioSegment(pipelineID, runtime, segments, tail)
+		m.enqueueAudioSegment(pipelineID, runtime, queue, tail)
 		interruptedAt = tail.Ended
 	}
 	m.recordAudioGap(pipelineID, runtime, interruptedAt, "audio source interrupted: transcript context contains a gap")
