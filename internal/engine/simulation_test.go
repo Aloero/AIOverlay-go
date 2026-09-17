@@ -102,3 +102,103 @@ func TestSimulationSafetyCapIsExactAndRetainsConditionalError(t *testing.T) {
 		t.Fatalf("calls=%d error=%s (%v)", res.Calls, res.Error, err)
 	}
 }
+
+func mixedSimulationConfig() domain.Config {
+	cfg := config.Default()
+	provider := &cfg.Providers[0]
+	provider.CredentialPool.Keys = []domain.Credential{{ID: "simulation", Label: "Simulation", Secret: "synthetic", Enabled: true}}
+	model := func(id, task, result string) *domain.ModelPoolConfig {
+		return &domain.ModelPoolConfig{
+			Task: task, ResultName: result, Policy: domain.PoolPriority, MaxParallel: 1, MaxCalls: 1,
+			Prompt: domain.PromptConfig{User: "{{input.text}}"},
+			Models: []domain.ModelSlot{{ID: id, ProviderID: provider.ID, ModelID: id, Enabled: true, Priority: 100, QualityScore: 100, MaxAttempts: 1}},
+		}
+	}
+	pipeline := domain.Pipeline{
+		ID: "mixed", Name: "Mixed", Enabled: true, EntryNodeID: "audio", OutputNodeID: "output",
+		Budget: domain.ExecutionBudget{MaxWallTimeMS: 30000, MaxModelCalls: 8, MaxParallelCalls: 2, MaxProviders: 2, MaxKeysPerProvider: 1, ConnectTimeoutMS: 1000, FirstTokenTimeoutMS: 5000, ResponseTimeoutMS: 10000, StreamIdleTimeoutMS: 3000},
+		Commands: []domain.CommandConfig{
+			{ID: "manual", Action: "analyze", EntryNodeID: "decision", Intent: domain.IntentRespond, CaptureScreen: true},
+			{ID: "context", Action: "screen_context", EntryNodeID: "context", Intent: domain.IntentContext, CaptureScreen: true},
+		},
+		Sources: []domain.EventSource{{ID: "audio-source", Kind: domain.SourceAudio, Enabled: true, EntryNodeID: "audio", Intent: domain.IntentDecide, Audio: &domain.AudioSourceConfig{Mode: "system"}}},
+		Nodes: []domain.Node{
+			{ID: "audio", Type: domain.NodeAudio, Name: "Audio"},
+			{ID: "stt", Type: domain.NodeModelPool, Name: "STT", ModelPool: model("stt-model", "transcribe", "audio.text")},
+			{ID: "context", Type: domain.NodeContext, Name: "Context"},
+			{ID: "decision", Type: domain.NodeDecision, Name: "Decision", ModelPool: model("decision-model", "decision", "decision")},
+			{ID: "capture", Type: domain.NodeCapture, Name: "Capture"},
+			{ID: "answer", Type: domain.NodeModelPool, Name: "Answer", ModelPool: model("answer-model", "generate", "answer")},
+			{ID: "output", Type: domain.NodeOutput, Name: "Output"},
+		},
+		Edges: []domain.Edge{
+			{ID: "audio-stt", From: "audio", To: "stt", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+			{ID: "stt-context", From: "stt", To: "context", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+			{ID: "context-decision", From: "context", To: "decision", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+			{ID: "decision-answer", From: "decision", To: "answer", On: []domain.Outcome{domain.OutcomeRespond}, MaxVisits: 1},
+			{ID: "decision-capture", From: "decision", To: "capture", On: []domain.Outcome{domain.OutcomeNeedScreen}, MaxVisits: 1},
+			{ID: "capture-answer", From: "capture", To: "answer", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+			{ID: "answer-output", From: "answer", To: "output", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+		},
+	}
+	cfg.Pipelines = []domain.Pipeline{pipeline}
+	cfg.ActivePipelineID = pipeline.ID
+	return cfg
+}
+
+func TestSimulationAudioTriggerCanEndInNoAction(t *testing.T) {
+	cfg := mixedSimulationConfig()
+	report, err := Simulate(context.Background(), SimulationRequest{
+		Config: cfg, PipelineID: "mixed", TriggerID: "audio-source", ContextText: "previous turn",
+		Outcomes: []SimulationOutcome{
+			{NodeID: "stt", ModelID: "stt-model", Outcome: domain.OutcomeSuccess, DurationMS: 100, Text: "current question"},
+			{NodeID: "decision", ModelID: "decision-model", Outcome: domain.OutcomeSuccess, DurationMS: 100, Text: `{"action":"no_action"}`},
+		},
+	}, nil)
+	if err != nil || report.Error != "" || report.Calls != 2 || report.Trace.Outcome != domain.OutcomeNoAction || report.Text != "" {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+}
+
+func TestSimulationNeedScreenUsesSyntheticActionWithoutExtraModelCall(t *testing.T) {
+	cfg := mixedSimulationConfig()
+	report, err := Simulate(context.Background(), SimulationRequest{
+		Config: cfg, PipelineID: "mixed", TriggerID: "audio-source",
+		Outcomes: []SimulationOutcome{
+			{NodeID: "stt", ModelID: "stt-model", Outcome: domain.OutcomeSuccess, DurationMS: 100, Text: "look at this"},
+			{NodeID: "decision", ModelID: "decision-model", Outcome: domain.OutcomeSuccess, DurationMS: 100, Text: `{"action":"need_screen"}`},
+			{NodeID: "answer", ModelID: "answer-model", Outcome: domain.OutcomeSuccess, DurationMS: 100, Text: "answer"},
+		},
+	}, nil)
+	if err != nil || report.Error != "" || report.Calls != 3 || report.Text != "answer" {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+	captureEvents := 0
+	for _, event := range report.Trace.Events {
+		if event.Kind == "capture_start" && event.NodeID == "capture" {
+			captureEvents++
+		}
+	}
+	if captureEvents != 1 {
+		t.Fatalf("synthetic capture events=%d", captureEvents)
+	}
+}
+
+func TestSimulationManualRespondBypassesOnlyDecision(t *testing.T) {
+	cfg := mixedSimulationConfig()
+	report, err := Simulate(context.Background(), SimulationRequest{
+		Config: cfg, PipelineID: "mixed", TriggerID: "manual",
+		Outcomes: []SimulationOutcome{{NodeID: "answer", ModelID: "answer-model", Outcome: domain.OutcomeSuccess, DurationMS: 100, Text: "forced answer"}},
+	}, nil)
+	if err != nil || report.Error != "" || report.Calls != 1 || report.Text != "forced answer" {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+}
+
+func TestSimulationContextCommandStopsWithoutModelCall(t *testing.T) {
+	cfg := mixedSimulationConfig()
+	report, err := Simulate(context.Background(), SimulationRequest{Config: cfg, PipelineID: "mixed", TriggerID: "context"}, nil)
+	if err != nil || report.Error != "" || report.Calls != 0 || report.Trace.Outcome != domain.OutcomeContextOnly {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+}

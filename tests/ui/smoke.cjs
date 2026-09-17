@@ -38,6 +38,10 @@ function ok(c,m){assert.ok(c,m);checks++}
   await wait(()=>$('#solverModels'),'pipeline did not load');
   ok($('#appliedSummary').textContent.includes('Следующий снимок:'),'applied pipeline state is visible');
   ok(!errors.length,'boot has JS errors: '+errors.join(';'));
+  click('#simulatePipeline');await wait(()=>$('#simTrigger'),'simulation trigger selector');
+  ok($('#simTrigger').options.length>0,'simulation exposes configured command/source triggers');
+  ok($('#dialog').textContent.includes('БЕЗ AI'),'simulation remains explicitly local');
+  click('#closeDialog');
   const count=$('#solverModels').children.length;
   click('#solverModels [data-move="0,1"]');ok($('#solverModels').children.length===count,'reorder keeps models');
   click('[data-page="providers"]');await wait(()=>$('#savedConnections [data-edit-connection]'),'saved provider directory');

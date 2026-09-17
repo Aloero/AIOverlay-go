@@ -26,6 +26,8 @@ type SimulationOutcome struct {
 type SimulationRequest struct {
 	Config             domain.Config       `json:"config"`
 	PipelineID         string              `json:"pipeline_id"`
+	TriggerID          string              `json:"trigger_id,omitempty"`
+	ContextText        string              `json:"context_text,omitempty"`
 	Outcomes           []SimulationOutcome `json:"outcomes"`
 	InputText          string              `json:"input_text,omitempty"`
 	InitialCredentials []CredentialState   `json:"-"`
@@ -85,7 +87,13 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 	e.ImportStatistics(req.Config.RuntimeStatistics)
 	tr := domain.ExecutionTrace{ID: "simulation", PipelineID: p.ID, PipelineName: p.Name, Budget: p.Budget, Purpose: "simulation", StartedAt: time.Unix(0, 0)}
 	s := &simulator{ctx: ctx, req: req, until: map[string]int64{}, modelAttempts: map[string]int{}, report: SimulationReport{Simulated: true}}
-	s.r = newRunner(e, p, Input{Text: req.InputText, ImageJPEG: []byte{1}}, RunOptions{}, &tr)
+	input, value, nodeID, err := simulationInput(&p, req)
+	if err != nil {
+		return SimulationReport{}, err
+	}
+	tr.SourceID = input.SourceID
+	tr.Intent = input.Intent
+	s.r = newRunner(e, p, input, RunOptions{}, &tr)
 	tr.PipelineName = s.r.redact.text(tr.PipelineName)
 	tr.Budget.Extra = nil
 	for _, key := range req.InitialCredentials {
@@ -93,8 +101,6 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 			s.until[key.ProviderID+"/"+key.CredentialID] = until
 		}
 	}
-	value := nodeValue{image: []byte{1}, text: req.InputText}
-	nodeID := p.EntryNodeID
 	for {
 		if err := s.check(); err != nil {
 			s.report.Error = err.Error()
@@ -105,25 +111,22 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 			return SimulationReport{}, fmt.Errorf("unknown simulation node")
 		}
 		s.r.lastNode = n.ID
-		outcome := domain.OutcomeSuccess
-		out := value
-		var err error
-		switch n.Type {
-		case domain.NodeScreen:
-		case domain.NodeModelPool:
-			out, outcome, err = s.pool(n, value)
-		case domain.NodeValidator:
-			outcome, err = runValidator(n.Validator, value.text)
-		case domain.NodeOutput:
-			s.report.Text = value.text
+		step, stepErr := s.executeNode(n, value)
+		if stepErr != nil {
+			return SimulationReport{}, stepErr
+		}
+		out, outcome, err := step.value, step.outcome, step.err
+		if step.output {
+			s.r.lastOutcome = outcome
 			s.report.Trace = tr
 			s.finish()
 			return s.report, nil
-		default:
-			return SimulationReport{}, fmt.Errorf("unsupported simulation node")
 		}
 		s.r.lastOutcome = outcome
 		s.emit(domain.TraceEvent{Kind: "node_end", NodeID: n.ID, Outcome: outcome})
+		if step.terminal {
+			break
+		}
 		edge, ok := s.r.nextEdge(n.ID, outcome)
 		if !ok {
 			if err != nil {
@@ -145,6 +148,7 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 	s.finish()
 	return s.report, nil
 }
+
 func (s *simulator) finish() {
 	s.report.Calls = int(s.r.calls.Load())
 	s.report.ElapsedMS = s.now
@@ -160,6 +164,14 @@ func (s *simulator) finish() {
 		err = fmt.Errorf("%s", s.report.Error)
 	}
 	finishTrace(&s.report.Trace, err, context.Cause(s.ctx), s.r.lastNode, s.r.lastOutcome, s.r.redact)
+	if err == nil && s.r.waited {
+		if s.r.input.Intent == string(domain.IntentContext) {
+			s.report.Trace.Outcome = domain.OutcomeContextOnly
+		} else {
+			s.report.Trace.Outcome = domain.OutcomeNoAction
+		}
+		s.report.Trace.Winner = nil
+	}
 	s.report.Trace = domain.CloneTrace(s.report.Trace)
 }
 func simulationOutcome(o domain.Outcome) bool {
