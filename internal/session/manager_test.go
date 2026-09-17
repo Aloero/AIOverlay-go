@@ -904,3 +904,53 @@ func TestFixedAudioEndpointDoesNotAutoRestartAfterInvalidation(t *testing.T) {
 		t.Fatal("test context ended unexpectedly")
 	}
 }
+
+func TestPreparedManualRequestKeepsImmutablePinnedSnapshot(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Commands[0].ContextID = "c"
+	manager.cfg = cfg
+
+	contextCfg := pipeline.Contexts[0]
+	generation := manager.contexts.Generation(pipeline.ID, contextCfg.ID)
+	now := time.Now()
+	if !manager.contexts.UpsertTranscript(contextCfg, pipeline.ID, generation, ContextEntry{
+		ID: "before", Text: "before capture", At: now.Add(-time.Second), Revision: 1, Final: true,
+	}) {
+		t.Fatal("could not seed transcript context")
+	}
+	if !manager.contexts.SetScreen(contextCfg, pipeline.ID, generation, []byte("old-context-screen"), now.Add(-time.Second)) {
+		t.Fatal("could not seed screen context")
+	}
+
+	captureBuffer := []byte("manual-screen")
+	manager.capture = func(context.Context) ([]byte, error) { return captureBuffer, nil }
+	prepared, err := manager.PrepareCommand(context.Background(), "analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(prepared.Input.ImageJPEG) != "manual-screen" || prepared.Input.ContextText != "[transcript] before capture" {
+		t.Fatalf("unexpected prepared input: image=%q context=%q", prepared.Input.ImageJPEG, prepared.Input.ContextText)
+	}
+
+	captureBuffer[0] = 'X'
+	if !manager.contexts.SetScreen(contextCfg, pipeline.ID, generation, []byte("late-context-screen"), time.Now().Add(time.Second)) {
+		t.Fatal("late screen update was rejected unexpectedly")
+	}
+	if !manager.contexts.UpsertTranscript(contextCfg, pipeline.ID, generation, ContextEntry{
+		ID: "after", Text: "after capture", At: time.Now().Add(time.Second), Revision: 1, Final: true,
+	}) {
+		t.Fatal("late transcript update was rejected unexpectedly")
+	}
+	if _, err := manager.ClearContext("c"); err != nil {
+		t.Fatal(err)
+	}
+
+	if string(prepared.Input.ImageJPEG) != "manual-screen" {
+		t.Fatalf("late state mutated pinned manual screenshot: %q", prepared.Input.ImageJPEG)
+	}
+	if prepared.Input.ContextText != "[transcript] before capture" {
+		t.Fatalf("late state mutated immutable context snapshot: %q", prepared.Input.ContextText)
+	}
+}
