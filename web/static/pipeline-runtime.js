@@ -16,22 +16,73 @@ function runtimeNodeOptions(p,allowOutput=false){
 function contextOptions(p,none='Без истории'){const out={'':none};for(const c of p.contexts||[])if(c.enabled)out[c.id]=c.name||c.id;return out;}
 function sourceStatus(id){return (state.session?.sources||[]).find(s=>s.id===id);}
 function activeRuntimeSources(p){return (p.sources||[]).filter(s=>s.enabled);}
-function backgroundSummary(p){
- const rows=activeRuntimeSources(p);if(!rows.length)return 'Фон выключен';
- return rows.map(s=>`${sourceKindNames[s.kind]||s.kind}: ${s.intent==='context'?'обновляет контекст':s.intent==='decide'?'оценивает ситуацию':'может отвечать'}`).join(' · ');
-}
 function analyzeCommand(p){return (p.commands||[]).find(c=>c.action==='analyze');}
-function runtimeSummaryText(p){
- ensurePipelineRuntime(p);const cmd=analyzeCommand(p),ctx=(p.contexts||[]).find(c=>c.id===cmd?.context_id);
- const manual=`Снимок: ответить сейчас${ctx?' · контекст «'+(ctx.name||ctx.id)+'»':' · без истории'}`;
- return manual+'\n'+backgroundSummary(p);
+
+const behaviorCaptureNames={
+ screen:'Текущий экран',
+ system_audio:'Системный звук',
+ microphone:'Микрофон',
+ screen_periodic:'Периодический экран'
+};
+const behaviorContextRoles={
+ read:'читает выбранный context',
+ write:'обновляет локальный context',
+ read_write:'обновляет и читает локальный context'
+};
+
+function behaviorInputLabel(input){
+ if(!input?.known)return 'не определено';
+ if(!input.reachable)return 'этот stage недостижим для trigger';
+ const parts=[];
+ if(input.audio_required)parts.push('AUDIO');
+ if(input.image_required)parts.push('IMAGE');
+ if(input.text_available)parts.push('TEXT / CONTEXT');
+ return parts.length?parts.join(' + '):'без media input';
+}
+function behaviorRouteLabel(trigger){
+ const nodes=trigger.reachable||[];
+ return nodes.length?nodes.map(n=>n.name||n.id).join(' → '):'маршрут недоступен';
+}
+function behaviorAIStagesMarkup(trigger){
+ const stages=trigger.ai_stages||[];
+ if(!stages.length)return '<span class="behavior-local-only">AI-вызов этим событием не запускается</span>';
+ return stages.map(stage=>`<div class="behavior-ai-stage"><b>${esc(stage.name||stage.id)}</b><span>${esc(behaviorInputLabel(stage.input))}</span></div>`).join('');
+}
+function behaviorTriggerMarkup(trigger){
+ const context=trigger.context_name||trigger.context_id;
+ const contextText=context?`${behaviorContextRoles[trigger.context_role]||'использует context'} «${context}»`:'без local context';
+ const capture=behaviorCaptureNames[trigger.capture]||trigger.capture||'без нового capture';
+ const autostart=trigger.kind==='source'?`<li><b>AutoStart:</b> ${trigger.auto_start?'включён':'выключен'}</li>`:'';
+ return `<section class="behavior-card behavior-report-card"><h3>${esc(trigger.name||trigger.id)}</h3><ul><li><b>Захват:</b> ${esc(capture)}</li><li><b>Local context:</b> ${esc(contextText)}</li>${autostart}<li><b>Маршрут:</b> ${esc(behaviorRouteLabel(trigger))}</li></ul><div class="behavior-ai-stages"><strong>Что получает AI</strong>${behaviorAIStagesMarkup(trigger)}</div></section>`;
+}
+function behaviorContextMarkup(context){
+ const stored=[];
+ if(context.include_transcript)stored.push('transcript');
+ if(context.keep_latest_screen)stored.push('последний экран');
+ if(context.include_answers)stored.push('принятые ответы');
+ return `<section class="behavior-card behavior-report-card"><h3>${esc(context.name||context.id)}</h3><p>${esc(stored.length?'RAM-only: '+stored.join(', '):'RAM-only context без включённых типов данных')}</p><small>До ${context.max_age_s||0} с · ${context.max_entries||0} записей · ${context.max_chars||0} символов</small></section>`;
+}
+function behaviorBudgetMarkup(budget){
+ if(!budget)return '';
+ return `<section class="behavior-card behavior-report-card"><h3>Общий budget</h3><p>AI calls: до ${budget.calls_per_minute}/мин · одновременно ${budget.max_parallel_calls} · очередь ${budget.queue_capacity} · turn до ${budget.end_to_end_ms} мс.</p></section>`;
+}
+function behaviorReportMarkup(report){
+ const commands=(report.commands||[]).map(behaviorTriggerMarkup).join('');
+ const sources=(report.sources||[]).map(behaviorTriggerMarkup).join('');
+ const contexts=(report.contexts||[]).map(behaviorContextMarkup).join('');
+ const warnings=(report.warnings||[]).length?`<div class="error-banner behavior-warning">${(report.warnings||[]).map(esc).join('<br>')}</div>`:'';
+ return `<div class="behavior-report" data-behavior-report><p class="note">Capture, local context и AI dispatch здесь показаны отдельно. Это preview текущего графа; он ничего не захватывает и не отправляет провайдеру.</p><h3>Ручные команды</h3>${commands||'<div class="empty-run">Ручные команды не настроены.</div>'}<h3>Фоновые источники</h3>${sources||'<div class="empty-run">Фон выключен.</div>'}<h3>Локальные контексты</h3>${contexts||'<div class="empty-run">Локальная история не используется.</div>'}${behaviorBudgetMarkup(report.session_budget)}${warnings}</div>`;
+}
+async function showRuntimeBehavior(pipeline){
+ const report=await api('/api/pipeline/behavior','POST',{pipeline:copy(pipeline)});
+ modal('Поведение пайплайна',behaviorReportMarkup(report),'ИЗ ТЕКУЩЕГО ГРАФА · БЕЗ AI');
 }
 function renderRuntimeStrip(){
  const root=$('#runtimeStrip');if(!root)return;const p=ensurePipelineRuntime(pipe()),cmd=analyzeCommand(p),ctx=(p.contexts||[]).find(c=>c.id===cmd?.context_id),sources=activeRuntimeSources(p),paused=!!state.session?.paused;
  const running=(state.session?.sources||[]).filter(s=>s.running).length;
  root.innerHTML=`<div class="runtime-main"><button class="runtime-chip" id="editRuntimeManual"><span>РУЧНОЙ СНИМОК</span><b>Ответить сейчас${ctx?' · '+esc(ctx.name||ctx.id):' · без истории'}</b></button><button class="runtime-chip ${sources.length?'active':''}" id="editRuntimeBackground"><span>ФОН</span><b>${esc(sources.length?`${paused?'пауза · ':''}${running}/${sources.length} источников`:'выключен')}</b></button><button class="runtime-chip ${p.contexts?.length?'active':''}" id="editRuntimeContext"><span>КОНТЕКСТ</span><b>${esc(p.contexts?.length?p.contexts.map(c=>c.name||c.id).join(', '):'не используется')}</b></button></div><div class="runtime-actions"><button class="button small subtle" id="runtimeExplain">Что произойдёт?</button>${sources.length?`<button class="button small ${paused?'primary':'subtle'}" id="pauseBackground">${paused?'Возобновить фон':'Пауза фона'}</button>`:''}<button class="button small" id="openRuntimeEditor">Источники и контекст</button></div>`;
  for(const id of ['editRuntimeManual','editRuntimeBackground','editRuntimeContext'])$('#'+id).onclick=()=>openPipelineBehavior(id.replace(/^editRuntime/, '').toLowerCase());$('#openRuntimeEditor').onclick=()=>openPipelineBehavior('manual');
- $('#runtimeExplain').onclick=()=>modal('Поведение пайплайна',`<pre class="behavior-summary">${esc(runtimeSummaryText(p))}</pre><p class="note">Получение данных, обновление локального контекста и запуск модели — разные действия. Подробности определяются сохранёнными командами, источниками и графом.</p>`,'ИЗ СОХРАНЯЕМОГО ГРАФА');
+ $('#runtimeExplain').onclick=guarded(()=>showRuntimeBehavior(p));
  if($('#pauseBackground'))$('#pauseBackground').onclick=guarded(async()=>{const result=await api('/api/session/pause','POST',{paused:!paused});state.session={...(state.session||{}),paused:result.paused};await refreshSessionStatus(true);});
 }
 async function refreshSessionStatus(force=false){

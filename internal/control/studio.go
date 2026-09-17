@@ -34,6 +34,22 @@ func (s *Server) handleStudioState(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, b.StudioState())
 }
+
+func (s *Server) handlePipelineBehavior(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Pipeline domain.Pipeline `json:"pipeline"`
+	}
+	if err := decodeJSON(r, &req, 4<<20); err != nil || req.Pipeline.ID == "" {
+		http.Error(w, "invalid pipeline behavior request", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, engine.DescribePipelineBehavior(req.Pipeline))
+}
+
 func (s *Server) handleSimulation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		w.WriteHeader(405)

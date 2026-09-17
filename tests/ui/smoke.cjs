@@ -37,6 +37,10 @@ function ok(c,m){assert.ok(c,m);checks++}
  try{
   await wait(()=>$('#solverModels'),'pipeline did not load');
   ok($('#appliedSummary').textContent.includes('Следующий снимок:'),'applied pipeline state is visible');
+  click('#runtimeExplain');await wait(()=>w.document.querySelector('[data-behavior-report]'),'behavior report');
+  ok($('#dialog').textContent.includes('Текущий экран'),'behavior report separates capture');
+  ok($('#dialog').textContent.includes('Что получает AI'),'behavior report exposes AI inputs');
+  ok(calls.some(c=>c.path==='/api/pipeline/behavior'&&c.method==='POST'),'behavior report uses pure core route');click('#closeDialog');
   ok(!errors.length,'boot has JS errors: '+errors.join(';'));
   click('#simulatePipeline');await wait(()=>$('#simTrigger'),'simulation trigger selector');
   ok($('#simTrigger').options.length>0,'simulation exposes configured command/source triggers');
