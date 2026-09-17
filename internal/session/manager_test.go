@@ -241,8 +241,8 @@ func TestAudioCaptureFailureFlushesTailAndRecordsGap(t *testing.T) {
 	}
 	transcript := snapshot.Entries[0]
 	gap := snapshot.Entries[len(snapshot.Entries)-1]
-	if transcript.Text != "truncated phrase" || transcript.Final || !gap.Gap {
-		t.Fatalf("expected incomplete transcript followed by gap, got %+v", snapshot.Entries)
+	if transcript.Text != "truncated phrase" || !transcript.Final || !gap.Gap {
+		t.Fatalf("expected final STT revision followed by audio gap, got %+v", snapshot.Entries)
 	}
 }
 
@@ -625,5 +625,49 @@ func TestBackgroundCaptureNeverFallsBackToManualCapture(t *testing.T) {
 	}
 	if manualCalls.Load() != 0 {
 		t.Fatal("manual capture was invoked by background capture lookup")
+	}
+}
+
+func TestPartialTranscriptDoesNotFinishPendingUntilFinalRevision(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	contextCfg := cfg.Pipelines[0].Contexts[0]
+	generation := manager.contexts.Generation("p", contextCfg.ID)
+	runtime := &sourceRuntime{cfg: cfg.Pipelines[0].Sources[0]}
+	turn := backgroundTurn{
+		pipelineID: "p",
+		ctxCfg:     contextCfg,
+		generation: generation,
+		input: engine.Input{
+			EventID: "segment-1",
+			Audio:   &domain.AudioClip{SegmentID: "segment-1", StartedAt: time.Now().Add(-time.Second), EndedAt: time.Now()},
+		},
+		at: time.Now(),
+	}
+	manager.addPending(pendingSegment{pipelineID: "p", contextID: contextCfg.ID, eventID: "segment-1", generation: generation})
+	observe := manager.transcriptObserver("p", runtime, turn)
+
+	observe(engine.Observation{Kind: "audio.text", Text: "hel", SegmentID: "segment-1", Revision: 1, Final: false})
+	manager.pendingMu.Lock()
+	_, stillPending := manager.pending["segment-1"]
+	manager.pendingMu.Unlock()
+	if !stillPending {
+		t.Fatal("partial transcript released manual cutoff wait")
+	}
+	partial := manager.contexts.Snapshot(contextCfg, "p", time.Now().Add(time.Second))
+	if len(partial.Entries) != 1 || partial.Entries[0].Final || partial.Entries[0].Revision != 1 {
+		t.Fatalf("partial transcript state=%+v", partial.Entries)
+	}
+
+	observe(engine.Observation{Kind: "audio.text", Text: "hello", SegmentID: "segment-1", Revision: 2, Final: true})
+	manager.pendingMu.Lock()
+	_, stillPending = manager.pending["segment-1"]
+	manager.pendingMu.Unlock()
+	if stillPending {
+		t.Fatal("final transcript did not release manual cutoff wait")
+	}
+	final := manager.contexts.Snapshot(contextCfg, "p", time.Now().Add(time.Second))
+	if len(final.Entries) != 1 || !final.Entries[0].Final || final.Entries[0].Revision != 2 || final.Entries[0].Text != "hello" {
+		t.Fatalf("final transcript state=%+v", final.Entries)
 	}
 }

@@ -873,47 +873,8 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 	if !m.turnGenerationCurrent(turn) {
 		return
 	}
-	sttDone := atomic.Bool{}
-	observe := func(o engine.Observation) {
-		if o.Kind != "audio.text" || turn.ctxCfg.ID == "" {
-			return
-		}
-		var start, end time.Time
-		if turn.input.Audio != nil {
-			start, end = turn.input.Audio.StartedAt, turn.input.Audio.EndedAt
-		}
-		at := start
-		if at.IsZero() {
-			at = turn.at
-		}
-		final := true
-		if turn.input.Audio != nil {
-			final = turn.input.Audio.Final
-		}
-		entry := ContextEntry{
-			ID:       turn.input.EventID,
-			Text:     o.Text,
-			At:       at,
-			Start:    start,
-			End:      end,
-			SourceID: r.cfg.ID,
-			Revision: 1,
-			Final:    final,
-		}
-		if m.contexts.UpsertTranscript(turn.ctxCfg, pipelineID, turn.generation, entry) {
-			r.mu.Lock()
-			r.status.LastTranscript = o.Text
-			r.status.TranscriptLagMS = time.Since(turn.at).Milliseconds()
-			r.status.LastError = ""
-			r.mu.Unlock()
-		}
-		sttDone.Store(true)
-		m.finishPending(turn.input.EventID)
-	}
+	observe := m.transcriptObserver(pipelineID, r, turn)
 	res, err := exec(ctx, pipelineID, turn.input, engine.RunOptions{Purpose: "background", Capture: capture, OnObservation: observe})
-	if turn.input.Audio != nil && !sttDone.Load() {
-		m.finishPending(turn.input.EventID)
-	}
 	if !m.sourceCurrent(r.cfg.ID, r.epoch) || !m.turnGenerationCurrent(turn) {
 		return
 	}
@@ -933,6 +894,55 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 		if publisher != nil && m.sourceCurrent(r.cfg.ID, r.epoch) && m.turnGenerationCurrent(turn) {
 			publisher(Publication{ID: m.seq.Add(1), PipelineID: pipelineID, SourceID: r.cfg.ID, EventID: turn.input.EventID, Text: res.Text, TriggeredAt: turn.at, At: time.Now(), Automatic: true})
 		}
+	}
+}
+
+func (m *Manager) transcriptObserver(pipelineID string, runtime *sourceRuntime, turn backgroundTurn) func(engine.Observation) {
+	return func(observation engine.Observation) {
+		if observation.Kind != "audio.text" || turn.ctxCfg.ID == "" {
+			return
+		}
+		entry := transcriptEntry(runtime.cfg.ID, turn, observation)
+		if !m.contexts.UpsertTranscript(turn.ctxCfg, pipelineID, turn.generation, entry) {
+			return
+		}
+		runtime.mu.Lock()
+		runtime.status.LastTranscript = observation.Text
+		if entry.Final {
+			runtime.status.TranscriptLagMS = time.Since(turn.at).Milliseconds()
+		}
+		runtime.status.LastError = ""
+		runtime.mu.Unlock()
+		if entry.Final {
+			m.finishPending(turn.input.EventID)
+		}
+	}
+}
+
+func transcriptEntry(sourceID string, turn backgroundTurn, observation engine.Observation) ContextEntry {
+	start, end := time.Time{}, time.Time{}
+	if turn.input.Audio != nil {
+		start, end = turn.input.Audio.StartedAt, turn.input.Audio.EndedAt
+	}
+	at := start
+	if at.IsZero() {
+		at = turn.at
+	}
+	revision := observation.Revision
+	final := observation.Final
+	if revision == 0 {
+		// Compatibility for existing completed-observation callbacks. Explicit
+		// partial producers use a non-zero revision with Final=false.
+		revision = 1
+		final = true
+	}
+	id := observation.SegmentID
+	if id == "" {
+		id = turn.input.EventID
+	}
+	return ContextEntry{
+		ID: id, Text: observation.Text, At: at, Start: start, End: end,
+		SourceID: sourceID, Revision: revision, Final: final,
 	}
 }
 

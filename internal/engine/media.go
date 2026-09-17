@@ -9,8 +9,11 @@ import (
 )
 
 type Observation struct {
-	Kind string
-	Text string
+	Kind      string
+	Text      string
+	SegmentID string
+	Revision  uint64
+	Final     bool
 }
 type decision struct {
 	Action     string `json:"action"`
@@ -38,17 +41,29 @@ func parseDecision(text string) (decision, error) {
 	return d, fmt.Errorf("decision action must be no_action, respond or need_screen")
 }
 func (r *runner) observe(kind, text string) {
-	if text == "" {
+	r.observeValue(Observation{Kind: kind, Text: text})
+}
+
+func (r *runner) observeTranscript(text string) {
+	segmentID := r.input.EventID
+	if r.input.Audio != nil && r.input.Audio.SegmentID != "" {
+		segmentID = r.input.Audio.SegmentID
+	}
+	r.observeValue(Observation{Kind: "audio.text", Text: text, SegmentID: segmentID, Revision: 1, Final: true})
+}
+
+func (r *runner) observeValue(observation Observation) {
+	if observation.Text == "" {
 		return
 	}
-	text = r.redact.text(text)
-	o := Observation{Kind: kind, Text: clipText(text, 32000)}
+	observation.Text = clipText(r.redact.text(observation.Text), 32000)
+	observation.SegmentID = r.redact.text(observation.SegmentID)
 	if len(r.observations) < 100 {
-		r.observations = append(r.observations, o)
+		r.observations = append(r.observations, observation)
 	}
 	if r.opt.OnObservation != nil {
 		r.callbackMu.Lock()
-		r.opt.OnObservation(o)
+		r.opt.OnObservation(observation)
 		r.callbackMu.Unlock()
 	}
 }
@@ -76,7 +91,7 @@ func (r *runner) modelStage(ctx context.Context, n domain.Node, v nodeValue) (no
 		out.transcript = out.text
 		out.audio = nil
 		out.vision = v.vision
-		r.observe("audio.text", out.text)
+		r.observeTranscript(out.text)
 	}
 	if n.ModelPool.ResultName == "vision.text" {
 		out.vision = out.text
@@ -102,7 +117,7 @@ func (r *runner) decide(ctx context.Context, n domain.Node, v nodeValue) (nodeVa
 	}
 	if d.Transcript != "" {
 		v.transcript = d.Transcript
-		r.observe("audio.text", d.Transcript)
+		r.observeTranscript(d.Transcript)
 	}
 	o := domain.Outcome(d.Action)
 	if o == domain.OutcomeRespond {

@@ -256,3 +256,15 @@ func TestSelectedContextIsIncludedWithoutMagicTemplateVariable(t *testing.T) {
 		t.Fatalf("duplicate context: %q", user)
 	}
 }
+
+func TestTranscriptObservationCarriesFinalRevisionMetadata(t *testing.T) {
+	var observed Observation
+	runner := &runner{
+		input: Input{EventID: "event", Audio: &domain.AudioClip{SegmentID: "segment"}},
+		opt:   RunOptions{OnObservation: func(observation Observation) { observed = observation }},
+	}
+	runner.observeTranscript("hello")
+	if observed.Kind != "audio.text" || observed.Text != "hello" || observed.SegmentID != "segment" || observed.Revision != 1 || !observed.Final {
+		t.Fatalf("observation=%+v", observed)
+	}
+}
