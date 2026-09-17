@@ -2,6 +2,7 @@ package app
 
 import (
 	"aioverlay/internal/domain"
+	"aioverlay/internal/engine"
 	"aioverlay/internal/platform/audio"
 	"aioverlay/internal/session"
 	"context"
@@ -29,6 +30,12 @@ func (a *App) PrepareCommand(ctx context.Context, action string, capture session
 		return session.PreparedCommand{}, fmt.Errorf("session runtime unavailable")
 	}
 	return a.sessions.PrepareCommandWithCapture(ctx, action, capture)
+}
+func (a *App) RecordCommandResult(prepared session.PreparedCommand, result engine.Result) bool {
+	if a.sessions == nil {
+		return false
+	}
+	return a.sessions.RecordCommandResult(prepared, result)
 }
 func (a *App) SetSourceRunning(id string, running bool) error {
 	if a.sessions == nil {

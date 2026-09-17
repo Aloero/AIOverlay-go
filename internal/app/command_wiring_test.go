@@ -1,11 +1,13 @@
 package app
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"aioverlay/internal/control"
 	"aioverlay/internal/domain"
+	"aioverlay/internal/providers"
 )
 
 func TestServerScreenContextCommandUsesAppSessionRuntimeWithoutAI(t *testing.T) {
@@ -48,5 +50,63 @@ func TestServerScreenContextCommandUsesAppSessionRuntimeWithoutAI(t *testing.T) 
 	snapshot := a.sessions.Contexts().Snapshot(contextCfg, pipeline.ID, time.Now().Add(time.Second))
 	if string(snapshot.ImageJPEG) != "manual-context-frame" {
 		t.Fatalf("context-only command did not store screen: %q", snapshot.ImageJPEG)
+	}
+}
+
+type manualAnswerProvider struct{}
+
+func (*manualAnswerProvider) ID() string { return "opencode" }
+func (*manualAnswerProvider) Stream(_ context.Context, request providers.Request, _ string) (<-chan providers.Event, <-chan error) {
+	events := make(chan providers.Event, 2)
+	errors := make(chan error)
+	if len(request.ImageJPEG) == 0 {
+		close(events)
+		close(errors)
+		return events, errors
+	}
+	events <- providers.Event{Type: providers.EventDelta, Text: "stored manual answer", ModelID: request.ModelID}
+	events <- providers.Event{Type: providers.EventDone, ModelID: request.ModelID}
+	close(events)
+	close(errors)
+	return events, errors
+}
+
+func TestServerManualAnswerReturnsToSelectedContextWithoutAnotherTurn(t *testing.T) {
+	a := studioTestApp(t)
+	cfg := a.GetConfig()
+	pipeline := &cfg.Pipelines[0]
+	contextCfg := domain.ContextConfig{
+		ID: "answer-context", Name: "Answer context", Enabled: true,
+		MaxAgeS: 60, MaxEntries: 10, MaxChars: 2000,
+		IncludeTranscript: true, IncludeAnswers: true, KeepLatestScreen: true, ScreenMaxAgeS: 60,
+	}
+	pipeline.Contexts = append(pipeline.Contexts, contextCfg)
+	pipeline.Commands[0].ContextID = contextCfg.ID
+	if err := a.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a.registry.Set("opencode", &manualAnswerProvider{})
+
+	server := control.New("127.0.0.1:0", a)
+	server.Capture = func() ([]byte, error) { return []byte("manual-frame"), nil }
+	jobID, err := server.StartCommand("analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for server.CurrentJob().Running && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	job := server.CurrentJob()
+	if job.ID != jobID || job.Running || job.Error != "" || job.Text != "stored manual answer" {
+		t.Fatalf("manual job=%+v", job)
+	}
+
+	snapshot := a.sessions.Contexts().Snapshot(contextCfg, pipeline.ID, time.Now().Add(time.Second))
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Kind != "answer" || snapshot.Entries[0].Text != "stored manual answer" {
+		t.Fatalf("manual answer was not stored in selected context: %+v", snapshot.Entries)
+	}
+	if len(a.Traces()) != 1 {
+		t.Fatalf("storing assistant output triggered another AI turn: traces=%d", len(a.Traces()))
 	}
 }

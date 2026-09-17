@@ -28,10 +28,12 @@ type Publication struct {
 }
 
 type PreparedCommand struct {
-	PipelineID string
-	Command    domain.CommandConfig
-	Input      engine.Input
-	SkipRun    bool
+	PipelineID        string
+	Command           domain.CommandConfig
+	Input             engine.Input
+	Context           domain.ContextConfig
+	ContextGeneration uint64
+	SkipRun           bool
 }
 
 type SourceStatus struct {
@@ -1268,7 +1270,7 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 		}
 		if cmd.Intent == domain.IntentContext && len(img) > 0 {
 			m.contexts.SetScreen(ctxCfg, p.ID, gen, img, at)
-			return PreparedCommand{PipelineID: p.ID, Command: cmd, SkipRun: true}, nil
+			return PreparedCommand{PipelineID: p.ID, Command: cmd, Context: ctxCfg, ContextGeneration: gen, SkipRun: true}, nil
 		}
 		snap = m.contexts.Snapshot(ctxCfg, p.ID, at)
 	}
@@ -1277,8 +1279,28 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 		inputImage = snap.ImageJPEG
 	}
 	input := engine.Input{ImageJPEG: append([]byte(nil), inputImage...), ContextText: snap.Text, ContextIncomplete: incomplete, EntryNodeID: cmd.EntryNodeID, Intent: string(cmd.Intent), SourceID: cmd.ID, EventID: fmt.Sprintf("%s-%d", cmd.ID, m.eventSeq.Add(1))}
-	return PreparedCommand{PipelineID: p.ID, Command: cmd, Input: input}, nil
+	return PreparedCommand{PipelineID: p.ID, Command: cmd, Input: input, Context: ctxCfg, ContextGeneration: gen}, nil
 }
+
+// RecordCommandResult stores an accepted manual answer in the context snapshot
+// generation that was pinned before the request. It never schedules another turn.
+func (m *Manager) RecordCommandResult(prepared PreparedCommand, result engine.Result) bool {
+	if !result.Published || result.Text == "" || prepared.Context.ID == "" || !prepared.Context.IncludeAnswers {
+		return false
+	}
+	at := result.Trace.FinishedAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	id := result.Trace.ID
+	if id == "" {
+		id = prepared.Input.EventID + "-answer"
+	}
+	return m.contexts.Append(prepared.Context, prepared.PipelineID, prepared.ContextGeneration, ContextEntry{
+		ID: id, Kind: "answer", Text: result.Text, At: at, SourceID: "assistant",
+	})
+}
+
 func (m *Manager) ClearContext(contextID string) (uint64, error) {
 	m.mu.RLock()
 	cfg := m.cfg

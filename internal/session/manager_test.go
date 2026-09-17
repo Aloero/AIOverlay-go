@@ -1244,3 +1244,62 @@ func TestAudioCooldownUsesContextOnlyOrSkipsWhenNoContextExists(t *testing.T) {
 		t.Fatalf("audio cooldown reason=%q", suppression)
 	}
 }
+
+func TestManualAnswerUsesPinnedContextGeneration(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	cfg.Pipelines[0].Commands[0].ContextID = "c"
+	cfg.Pipelines[0].Contexts[0].IncludeAnswers = true
+	manager.cfg = cfg
+	manager.capture = func(context.Context) ([]byte, error) { return []byte("screen"), nil }
+
+	prepared, err := manager.PrepareCommand(context.Background(), "analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := engine.Result{
+		Published: true,
+		Text:      "manual answer",
+		Trace: domain.ExecutionTrace{
+			ID: "manual-trace", FinishedAt: time.Now(), Outcome: domain.OutcomeSuccess,
+		},
+	}
+	if !manager.RecordCommandResult(prepared, result) {
+		t.Fatal("accepted manual answer was not stored")
+	}
+	snapshot := manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Kind != "answer" || snapshot.Entries[0].Text != "manual answer" {
+		t.Fatalf("manual answer context=%+v", snapshot.Entries)
+	}
+
+	prepared, err = manager.PrepareCommand(context.Background(), "analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ClearContext("c"); err != nil {
+		t.Fatal(err)
+	}
+	if manager.RecordCommandResult(prepared, result) {
+		t.Fatal("late manual answer revived a cleared context generation")
+	}
+	snapshot = manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+	if len(snapshot.Entries) != 0 {
+		t.Fatalf("cleared context was revived: %+v", snapshot.Entries)
+	}
+}
+
+func TestManualAnswerIsNotStoredWhenContextDisallowsAnswers(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	cfg.Pipelines[0].Commands[0].ContextID = "c"
+	cfg.Pipelines[0].Contexts[0].IncludeAnswers = false
+	manager.cfg = cfg
+	manager.capture = func(context.Context) ([]byte, error) { return []byte("screen"), nil }
+	prepared, err := manager.PrepareCommand(context.Background(), "analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.RecordCommandResult(prepared, engine.Result{Published: true, Text: "answer"}) {
+		t.Fatal("manual answer ignored include_answers=false")
+	}
+}

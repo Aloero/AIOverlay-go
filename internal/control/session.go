@@ -15,6 +15,7 @@ import (
 
 type sessionBackend interface {
 	PrepareCommand(context.Context, string, session.ScreenCapture) (session.PreparedCommand, error)
+	RecordCommandResult(session.PreparedCommand, engine.Result) bool
 	PauseBackground(bool)
 	SetSourceRunning(string, bool) error
 	BackgroundPaused() bool
@@ -55,6 +56,9 @@ func (s *Server) StartCommand(action string) (string, error) {
 			return engine.Result{Trace: emptyCommandTrace(prepared.PipelineID, prepared.Command.ID)}, nil, nil
 		}
 		res, err := live.Run(ctx, prepared.PipelineID, prepared.Input, opt)
+		if err == nil {
+			b.RecordCommandResult(prepared, res)
+		}
 		return res, nil, err
 	})
 }
