@@ -240,11 +240,12 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	autoDisabled := disableImportedAutoStart(&cfg)
-	if err := s.saveConfiguration(cfg); err != nil {
+	runtimeOverridesCleared, err := s.importConfiguration(cfg)
+	if err != nil {
 		settingsError(w, err, 400)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "autostart_disabled": autoDisabled})
+	writeJSON(w, map[string]any{"ok": true, "autostart_disabled": autoDisabled, "runtime_overrides_cleared": runtimeOverridesCleared})
 }
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()

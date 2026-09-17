@@ -954,3 +954,63 @@ func TestPreparedManualRequestKeepsImmutablePinnedSnapshot(t *testing.T) {
 		t.Fatalf("late state mutated immutable context snapshot: %q", prepared.Input.ContextText)
 	}
 }
+
+func TestImportedConfigClearsStartNowOverrideEvenWhenSourceIDMatches(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].AutoStart = false
+	manager := NewManager(nil)
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+	if manager.source("a") != nil {
+		t.Fatal("non-autostart source started before explicit override")
+	}
+	if err := manager.SetSourceRunning("a", true); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return manager.source("a") != nil }, "explicit Start now did not start source")
+
+	imported := cfg
+	imported.Pipelines = append([]domain.Pipeline(nil), cfg.Pipelines...)
+	imported.Pipelines[0].Sources = append([]domain.EventSource(nil), cfg.Pipelines[0].Sources...)
+	imported.Pipelines[0].Sources[0].AutoStart = false
+	manager.ApplyImported(imported)
+
+	waitUntil(t, func() bool { return manager.source("a") == nil }, "import preserved running source override")
+	manager.mu.RLock()
+	_, overrideExists := manager.sourceOverrides["a"]
+	manager.mu.RUnlock()
+	if overrideExists {
+		t.Fatal("import left Start-now override behind")
+	}
+}
+
+func TestNormalApplyPreservesStartNowOverride(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].AutoStart = false
+	manager := NewManager(nil)
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+	if err := manager.SetSourceRunning("a", true); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return manager.source("a") != nil }, "source did not start")
+
+	edited := cfg
+	edited.Overlay.FontSize++
+	manager.Apply(edited)
+	if manager.source("a") == nil {
+		t.Fatal("ordinary config save unexpectedly cleared Start-now override")
+	}
+}

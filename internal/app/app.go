@@ -113,6 +113,17 @@ func (a *App) GetConfig() domain.Config {
 	return cloneConfig(a.cfg)
 }
 func (a *App) SaveConfig(cfg domain.Config) error {
+	return a.saveConfig(cfg, false)
+}
+
+// ImportConfig applies a portable config without inheriting Start-now source
+// overrides from the previously loaded config. This is separate from a normal
+// save because editing an existing source must not unexpectedly pause it.
+func (a *App) ImportConfig(cfg domain.Config) error {
+	return a.saveConfig(cfg, true)
+}
+
+func (a *App) saveConfig(cfg domain.Config, imported bool) error {
 	var thaw func()
 	if a.sessions != nil {
 		thaw = a.sessions.FreezeTurns()
@@ -122,11 +133,16 @@ func (a *App) SaveConfig(cfg domain.Config) error {
 		return fmt.Errorf("analysis is running; stop it before saving settings")
 	}
 	defer a.operation.Unlock()
-	return a.saveConfigLocked(cfg)
+	return a.saveConfigLockedWithSessionPolicy(cfg, imported)
 }
 
 // Caller owns the operation write lock.
 func (a *App) saveConfigLocked(cfg domain.Config) error {
+	return a.saveConfigLockedWithSessionPolicy(cfg, false)
+}
+
+// Caller owns the operation write lock.
+func (a *App) saveConfigLockedWithSessionPolicy(cfg domain.Config, imported bool) error {
 	if err := config.Migrate(&cfg); err != nil {
 		return err
 	}
@@ -192,7 +208,11 @@ func (a *App) saveConfigLocked(cfg domain.Config) error {
 		oldTun.Close()
 	}
 	if a.sessions != nil {
-		a.sessions.Apply(cfg)
+		if imported {
+			a.sessions.ApplyImported(cfg)
+		} else {
+			a.sessions.Apply(cfg)
+		}
 	}
 	if callback != nil {
 		callback(cloneConfig(cfg))

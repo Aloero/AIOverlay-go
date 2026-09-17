@@ -187,17 +187,22 @@ func (m *Manager) Close() {
 	m.stopAll()
 }
 func (m *Manager) Apply(cfg domain.Config) {
+	m.apply(cfg, false)
+}
+
+// ApplyImported treats imported background permissions as untrusted runtime
+// state. Saved topology is applied, but every Start-now override is cleared so
+// an import cannot keep or start capture merely by reusing a source ID.
+func (m *Manager) ApplyImported(cfg domain.Config) {
+	m.apply(cfg, true)
+}
+
+func (m *Manager) apply(cfg domain.Config, clearRuntimeOverrides bool) {
 	m.mu.Lock()
-	wantedIDs := map[string]bool{}
-	if p := activePipeline(cfg); p != nil {
-		for _, src := range p.Sources {
-			wantedIDs[src.ID] = true
-		}
-	}
-	for id := range m.sourceOverrides {
-		if !wantedIDs[id] {
-			delete(m.sourceOverrides, id)
-		}
+	if clearRuntimeOverrides {
+		m.sourceOverrides = map[string]bool{}
+	} else {
+		m.pruneSourceOverridesLocked(cfg)
 	}
 	m.cfg = cfg
 	m.configureBudgetLocked(cfg)
@@ -205,6 +210,20 @@ func (m *Manager) Apply(cfg domain.Config) {
 	m.mu.Unlock()
 	if started {
 		m.reconcile()
+	}
+}
+
+func (m *Manager) pruneSourceOverridesLocked(cfg domain.Config) {
+	wantedIDs := map[string]bool{}
+	if pipeline := activePipeline(cfg); pipeline != nil {
+		for _, source := range pipeline.Sources {
+			wantedIDs[source.ID] = true
+		}
+	}
+	for id := range m.sourceOverrides {
+		if !wantedIDs[id] {
+			delete(m.sourceOverrides, id)
+		}
 	}
 }
 func (m *Manager) configureBudgetLocked(cfg domain.Config) {
