@@ -157,14 +157,14 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	var lastID, lastText, lastMeta string
-	var lastAuto uint64
-	var manualFence time.Time
+	var presentation control.PresentationArbiter
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			job := s.CurrentJob()
+			presentation.ObserveJob(job)
 			manual := job.ID != "" && job.Purpose != "connection_test"
 			if manual && job.Cleared {
 				if job.ID != lastID || lastText != "" || lastMeta != "" {
@@ -174,13 +174,9 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 					lastText = ""
 					lastMeta = ""
 				}
-				if !job.Finished.IsZero() && job.Finished.After(manualFence) {
-					manualFence = job.Finished
-				}
 			} else if manual {
 				if job.ID != lastID {
 					lastID = job.ID
-					manualFence = job.Started
 					lastText = "Анализирую экран…"
 					lastMeta = "TRYING"
 					ov.SetText(lastText)
@@ -215,23 +211,15 @@ func followJob(ctx context.Context, s *control.Server, ov platform.Overlay) {
 					ov.SetMeta(meta)
 					lastMeta = meta
 				}
-				if !job.Running && !job.Finished.IsZero() && job.Finished.After(manualFence) {
-					manualFence = job.Finished
-				}
 			}
 
 			auto := s.BackgroundPublication()
-			if auto.ID > lastAuto {
-				lastAuto = auto.ID
-				// A background turn that was triggered before/during the newest manual
-				// command is stale for presentation, even if its network callback arrived later.
-				if !job.Running && auto.TriggeredAt.After(manualFence) && auto.Text != "" {
-					lastText = auto.Text
-					lastMeta = "AUTO · " + auto.SourceID
-					ov.SetText(lastText)
-					ov.SetMeta(lastMeta)
-					ov.Show()
-				}
+			if presentation.AcceptBackground(job, auto) {
+				lastText = auto.Text
+				lastMeta = "AUTO · " + auto.SourceID
+				ov.SetText(lastText)
+				ov.SetMeta(lastMeta)
+				ov.Show()
 			}
 		}
 	}

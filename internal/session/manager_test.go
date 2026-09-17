@@ -294,3 +294,28 @@ func waitUntil(t *testing.T, condition func() bool, failure string) {
 	}
 	t.Fatal(failure)
 }
+
+func TestBackgroundOutcomeDistinguishesNoActionAndResponse(t *testing.T) {
+	noAction := engine.Result{Trace: domain.ExecutionTrace{Outcome: domain.OutcomeNoAction}}
+	if got := backgroundOutcome(noAction); got != domain.OutcomeNoAction {
+		t.Fatalf("no_action became %q", got)
+	}
+
+	response := engine.Result{Published: true, Text: "answer", Trace: domain.ExecutionTrace{Outcome: domain.OutcomeSuccess}}
+	if got := backgroundOutcome(response); got != domain.OutcomeRespond {
+		t.Fatalf("published answer became %q", got)
+	}
+}
+
+func TestSourceOutcomeKeepsSemanticSilenceSeparateFromError(t *testing.T) {
+	runtime := &sourceRuntime{}
+	setSourceOutcome(runtime, domain.OutcomeNoAction, nil)
+	if runtime.status.LastOutcome != string(domain.OutcomeNoAction) || runtime.status.LastError != "" {
+		t.Fatalf("no_action status=%+v", runtime.status)
+	}
+
+	setSourceOutcome(runtime, domain.OutcomeRateLimited, fmt.Errorf("provider unavailable"))
+	if runtime.status.LastOutcome != string(domain.OutcomeRateLimited) || runtime.status.LastError != "provider unavailable" {
+		t.Fatalf("error status=%+v", runtime.status)
+	}
+}

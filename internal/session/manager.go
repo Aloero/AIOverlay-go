@@ -44,6 +44,7 @@ type SourceStatus struct {
 	Segments        uint64  `json:"segments,omitempty"`
 	Dropped         uint64  `json:"dropped,omitempty"`
 	LastError       string  `json:"last_error,omitempty"`
+	LastOutcome     string  `json:"last_outcome,omitempty"`
 	LastEvent       string  `json:"last_event,omitempty"`
 	LastTranscript  string  `json:"last_transcript,omitempty"`
 	TranscriptLagMS int64   `json:"transcript_lag_ms,omitempty"`
@@ -395,9 +396,7 @@ func (m *Manager) runSource(ctx context.Context, pipelineID string, r *sourceRun
 		err = fmt.Errorf("unsupported source kind %s", r.cfg.Kind)
 	}
 	if err != nil && ctx.Err() == nil {
-		r.mu.Lock()
-		r.status.LastError = err.Error()
-		r.mu.Unlock()
+		setSourceOutcome(r, domain.OutcomeAnyError, err)
 	}
 }
 func (m *Manager) recordAudioGap(pipelineID string, r *sourceRuntime, at time.Time, reason string) {
@@ -664,6 +663,7 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 				gen = m.contexts.Generation(pipelineID, ctxCfg.ID)
 				m.contexts.SetScreen(ctxCfg, pipelineID, gen, img, at)
 				if r.cfg.Intent == domain.IntentContext {
+					setSourceOutcome(r, domain.OutcomeContextOnly, nil)
 					continue
 				}
 			}
@@ -801,10 +801,11 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 	if turn.input.Audio != nil && !sttDone.Load() {
 		m.finishPending(turn.input.EventID)
 	}
-	if err != nil {
+	if !m.sourceCurrent(r.cfg.ID, r.epoch) {
 		return
 	}
-	if !m.sourceCurrent(r.cfg.ID, r.epoch) {
+	setSourceOutcome(r, backgroundOutcome(res), err)
+	if err != nil {
 		return
 	}
 	if res.Published && res.Text != "" {
@@ -820,6 +821,31 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 			publisher(Publication{ID: m.seq.Add(1), PipelineID: pipelineID, SourceID: r.cfg.ID, EventID: turn.input.EventID, Text: res.Text, TriggeredAt: turn.at, At: time.Now(), Automatic: true})
 		}
 	}
+}
+
+func backgroundOutcome(result engine.Result) domain.Outcome {
+	if result.Published && result.Text != "" {
+		return domain.OutcomeRespond
+	}
+	if result.Trace.Outcome != "" {
+		return result.Trace.Outcome
+	}
+	return domain.OutcomeSuccess
+}
+
+func setSourceOutcome(runtime *sourceRuntime, outcome domain.Outcome, err error) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if err != nil {
+		if outcome == "" || outcome == domain.OutcomeSuccess {
+			outcome = domain.OutcomeAnyError
+		}
+		runtime.status.LastOutcome = string(outcome)
+		runtime.status.LastError = err.Error()
+		return
+	}
+	runtime.status.LastOutcome = string(outcome)
+	runtime.status.LastError = ""
 }
 func (m *Manager) source(id string) *sourceRuntime {
 	m.mu.RLock()
