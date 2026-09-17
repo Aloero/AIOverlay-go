@@ -444,6 +444,7 @@ func finishSourceStatus(runtime *sourceRuntime, runErr, contextErr error) {
 
 	if runtime.cfg.Kind != domain.SourceAudio {
 		if runErr != nil && contextErr == nil {
+			runtime.status.LastOutcome = string(domain.OutcomeAnyError)
 			runtime.status.LastError = runErr.Error()
 		}
 		return
@@ -453,6 +454,7 @@ func finishSourceStatus(runtime *sourceRuntime, runErr, contextErr error) {
 		return
 	}
 	runtime.status.TransportState = "unavailable"
+	runtime.status.LastOutcome = string(domain.OutcomeAnyError)
 	if runErr != nil {
 		runtime.status.LastError = runErr.Error()
 	}
@@ -1139,8 +1141,8 @@ type AudioPreview struct {
 
 func (m *Manager) PreviewAudio(ctx context.Context, cfg domain.AudioSourceConfig, duration time.Duration) (AudioPreview, error) {
 	m.mu.RLock()
-	for _, r := range m.sources {
-		if r.cfg.Kind == domain.SourceAudio {
+	for _, runtime := range m.sources {
+		if runtime.cfg.Kind == domain.SourceAudio && !sourceFinished(runtime) {
 			m.mu.RUnlock()
 			return AudioPreview{}, fmt.Errorf("pause the running audio source before local preview")
 		}

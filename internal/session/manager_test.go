@@ -584,7 +584,29 @@ func TestAudioRuntimeStateDistinguishesStoppedAndUnavailable(t *testing.T) {
 
 	unavailable := &sourceRuntime{cfg: domain.EventSource{Kind: domain.SourceAudio}, status: SourceStatus{Running: true, TransportState: "alive"}}
 	finishSourceStatus(unavailable, fmt.Errorf("device invalidated"), nil)
-	if unavailable.status.Running || unavailable.status.TransportState != "unavailable" || unavailable.status.LastError != "device invalidated" {
+	if unavailable.status.Running || unavailable.status.TransportState != "unavailable" || unavailable.status.LastOutcome != string(domain.OutcomeAnyError) || unavailable.status.LastError != "device invalidated" {
 		t.Fatalf("unavailable state=%+v", unavailable.status)
+	}
+}
+
+func TestDeadAudioRuntimeDoesNotBlockLocalPreview(t *testing.T) {
+	manager := NewManager(nil)
+	done := make(chan struct{})
+	close(done)
+	manager.sources["dead"] = &sourceRuntime{
+		cfg:  domain.EventSource{ID: "dead", Kind: domain.SourceAudio},
+		done: done,
+	}
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, emit func(paudio.Block)) error {
+		emit(paudio.Block{Samples: make([]int16, 4000), Rate: 16000, At: time.Now()})
+		return ctx.Err()
+	})
+
+	preview, err := manager.PreviewAudio(context.Background(), domain.AudioSourceConfig{Mode: "system"}, 250*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.DurationMS != 250 || len(preview.PCM16) != 4000 {
+		t.Fatalf("preview=%+v samples=%d", preview, len(preview.PCM16))
 	}
 }
