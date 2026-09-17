@@ -268,3 +268,74 @@ func TestTranscriptObservationCarriesFinalRevisionMetadata(t *testing.T) {
 		t.Fatalf("observation=%+v", observed)
 	}
 }
+
+func decisionFallbackFixture(t *testing.T) (*Engine, domain.Config, *domain.Pipeline) {
+	t.Helper()
+	engine, cfg := testEngine(t, 2, &scriptedProvider{})
+	pipeline := &cfg.Pipelines[0]
+	base := *pipeline.Nodes[1].ModelPool
+	base.Policy = domain.PoolPriority
+	base.Order = domain.PoolPriority
+	base.Dispatch = domain.DispatchSequential
+	base.MaxParallel = 1
+	base.MaxCalls = 2
+	base.ResultName = "decision"
+	base.Prompt = domain.PromptConfig{User: "Decide"}
+	decision := domain.Node{ID: "decision-fallback", Type: domain.NodeDecision, Name: "Decision fallback", ModelPool: &base}
+	pipeline.Nodes = append(pipeline.Nodes, decision)
+	engine.Reconfigure(cfg, engine.registry)
+	return engine, cfg, pipeline
+}
+
+func TestDecisionInvalidStructuredResponseFallsBackToNextModel(t *testing.T) {
+	engine, _, pipeline := decisionFallbackFixture(t)
+	var calls atomic.Int32
+	engine.registry.Set("opencode", &scriptedProvider{run: func(_ context.Context, request providers.Request, _ string, events chan<- providers.Event) error {
+		calls.Add(1)
+		text := `{"action":"unsupported"}`
+		if request.ModelID == "1" {
+			text = `{"action":"no_action"}`
+		}
+		events <- providers.Event{Type: providers.EventDelta, Text: text, ModelID: request.ModelID}
+		return nil
+	}})
+
+	result, err := engine.Execute(context.Background(), pipeline.ID, Input{
+		EntryNodeID: "decision-fallback", Intent: string(domain.IntentDecide), Text: "hello",
+	}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Published || result.Trace.Outcome != domain.OutcomeNoAction || calls.Load() != 2 {
+		t.Fatalf("published=%v outcome=%s calls=%d", result.Published, result.Trace.Outcome, calls.Load())
+	}
+	invalidAttempts := 0
+	for _, event := range result.Trace.Events {
+		if event.Kind == "attempt_end" && event.Outcome == domain.OutcomeInvalidResponse {
+			invalidAttempts++
+		}
+	}
+	if invalidAttempts != 1 {
+		t.Fatalf("invalid decision attempts=%d", invalidAttempts)
+	}
+}
+
+func TestDecisionNoActionDoesNotTryFallbackModel(t *testing.T) {
+	engine, _, pipeline := decisionFallbackFixture(t)
+	var calls atomic.Int32
+	engine.registry.Set("opencode", &scriptedProvider{run: func(_ context.Context, request providers.Request, _ string, events chan<- providers.Event) error {
+		calls.Add(1)
+		events <- providers.Event{Type: providers.EventDelta, Text: `{"action":"no_action"}`, ModelID: request.ModelID}
+		return nil
+	}})
+
+	result, err := engine.Execute(context.Background(), pipeline.ID, Input{
+		EntryNodeID: "decision-fallback", Intent: string(domain.IntentDecide), Text: "hello",
+	}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Published || result.Trace.Outcome != domain.OutcomeNoAction || calls.Load() != 1 {
+		t.Fatalf("published=%v outcome=%s calls=%d", result.Published, result.Trace.Outcome, calls.Load())
+	}
+}
