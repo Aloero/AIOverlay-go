@@ -465,3 +465,93 @@ func TestRepeatedSourceStartStopLeavesNoPendingTurns(t *testing.T) {
 		t.Fatalf("source runtimes leaked after stop: %+v", status)
 	}
 }
+
+func TestClearContextCancelsOldBackgroundTurnAndAllowsNewGeneration(t *testing.T) {
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].Audio.SegmentMS = 100
+	cfg.Pipelines[0].Sources[0].Audio.MinimumMS = 80
+
+	firstStarted := make(chan struct{})
+	firstFinished := make(chan struct{})
+	secondFinished := make(chan struct{})
+	var calls atomic.Int32
+	manager := NewManager(func(ctx context.Context, _ string, input engine.Input, options engine.RunOptions) (engine.Result, error) {
+		switch calls.Add(1) {
+		case 1:
+			close(firstStarted)
+			<-ctx.Done()
+			if options.OnObservation != nil {
+				options.OnObservation(engine.Observation{Kind: "audio.text", Text: "late old transcript"})
+			}
+			close(firstFinished)
+			return engine.Result{Published: true, Text: "stale answer", Trace: domain.ExecutionTrace{Outcome: domain.OutcomeSuccess}}, nil
+		case 2:
+			if options.OnObservation != nil {
+				options.OnObservation(engine.Observation{Kind: "audio.text", Text: "new transcript"})
+			}
+			close(secondFinished)
+			return engine.Result{Trace: domain.ExecutionTrace{Outcome: domain.OutcomeContextOnly}}, nil
+		default:
+			return engine.Result{}, fmt.Errorf("unexpected background call")
+		}
+	})
+
+	emitSecond := make(chan struct{})
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, emit func(paudio.Block)) error {
+		voice := make([]int16, 1600)
+		for i := range voice {
+			voice[i] = 12000
+		}
+		start := time.Now()
+		emit(paudio.Block{Samples: voice, Rate: 16000, At: start})
+		select {
+		case <-emitSecond:
+			emit(paudio.Block{Samples: voice, Rate: 16000, At: start.Add(time.Second)})
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	published := make(chan Publication, 1)
+	manager.SetPublisher(func(publication Publication) { published <- publication })
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx, cfg)
+	defer func() { cancel(); manager.Close() }()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old generation background turn did not start")
+	}
+	generation, err := manager.ClearContext("c")
+	if err != nil || generation != 2 {
+		t.Fatalf("clear generation=%d err=%v", generation, err)
+	}
+	select {
+	case <-firstFinished:
+	case <-time.After(time.Second):
+		t.Fatal("clear did not cancel old generation turn")
+	}
+
+	close(emitSecond)
+	select {
+	case <-secondFinished:
+	case <-time.After(time.Second):
+		t.Fatal("new generation audio did not continue after clear")
+	}
+
+	snapshot := manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(2*time.Second))
+	if snapshot.Generation != generation || snapshot.Text != "[transcript/a] new transcript" || len(snapshot.Entries) != 1 {
+		t.Fatalf("cleared conversation was revived or new transcript lost: %+v", snapshot)
+	}
+	select {
+	case stale := <-published:
+		t.Fatalf("old generation published after clear: %+v", stale)
+	default:
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("background calls=%d", calls.Load())
+	}
+}

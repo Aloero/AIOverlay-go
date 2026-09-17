@@ -63,6 +63,13 @@ type backgroundTurn struct {
 	at         time.Time
 }
 
+type activeBackgroundTurn struct {
+	pipelineID string
+	contextID  string
+	generation uint64
+	cancel     context.CancelFunc
+}
+
 type sourceRuntime struct {
 	cfg           domain.EventSource
 	cancel        context.CancelFunc
@@ -100,10 +107,12 @@ type Manager struct {
 	pendingMu         sync.Mutex
 	pending           map[string]pendingSegment
 	pendingChanged    chan struct{}
+	activeTurnMu      sync.Mutex
+	activeTurns       map[string]activeBackgroundTurn
 }
 
 func NewManager(execute Executor) *Manager {
-	return &Manager{execute: execute, audioCapture: paudio.Capture, contexts: NewContextStore(), governor: NewGovernor(), sources: map[string]*sourceRuntime{}, sourceOverrides: map[string]bool{}, turnSem: make(chan struct{}, 3), pending: map[string]pendingSegment{}, pendingChanged: make(chan struct{})}
+	return &Manager{execute: execute, audioCapture: paudio.Capture, contexts: NewContextStore(), governor: NewGovernor(), sources: map[string]*sourceRuntime{}, sourceOverrides: map[string]bool{}, turnSem: make(chan struct{}, 3), pending: map[string]pendingSegment{}, pendingChanged: make(chan struct{}), activeTurns: map[string]activeBackgroundTurn{}}
 }
 func (m *Manager) Contexts() *ContextStore { return m.contexts }
 func (m *Manager) FreezeTurns() func()     { m.turnGate.Lock(); return m.turnGate.Unlock }
@@ -728,6 +737,10 @@ func (m *Manager) runTurnQueue(ctx context.Context, pipelineID string, r *source
 				m.recordDroppedTurn(r, turn, "source stopped before queued event could run")
 				continue
 			}
+			if !m.turnGenerationCurrent(turn) {
+				m.finishPending(turn.input.EventID)
+				continue
+			}
 			m.mu.RLock()
 			sem := m.turnSem
 			m.mu.RUnlock()
@@ -763,7 +776,7 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 	}
 	m.turnGate.RLock()
 	defer m.turnGate.RUnlock()
-	if !m.sourceCurrent(r.cfg.ID, r.epoch) {
+	if !m.sourceCurrent(r.cfg.ID, r.epoch) || !m.turnGenerationCurrent(turn) {
 		return
 	}
 	m.mu.RLock()
@@ -787,7 +800,14 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 		timeout = time.Duration(p.SessionBudget.EndToEndMS) * time.Millisecond
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
+	turnID := m.registerActiveTurn(turn, cancel)
+	defer func() {
+		m.unregisterActiveTurn(turnID)
+		cancel()
+	}()
+	if !m.turnGenerationCurrent(turn) {
+		return
+	}
 	sttDone := atomic.Bool{}
 	observe := func(o engine.Observation) {
 		if o.Kind != "audio.text" || turn.ctxCfg.ID == "" {
@@ -829,7 +849,7 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 	if turn.input.Audio != nil && !sttDone.Load() {
 		m.finishPending(turn.input.EventID)
 	}
-	if !m.sourceCurrent(r.cfg.ID, r.epoch) {
+	if !m.sourceCurrent(r.cfg.ID, r.epoch) || !m.turnGenerationCurrent(turn) {
 		return
 	}
 	setSourceOutcome(r, backgroundOutcome(res), err)
@@ -845,10 +865,68 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 		if turn.ctxCfg.ID != "" && turn.ctxCfg.IncludeAnswers {
 			m.contexts.Append(turn.ctxCfg, pipelineID, turn.generation, ContextEntry{ID: res.Trace.ID, Kind: "answer", Text: res.Text, At: time.Now(), SourceID: "assistant"})
 		}
-		if publisher != nil && m.sourceCurrent(r.cfg.ID, r.epoch) {
+		if publisher != nil && m.sourceCurrent(r.cfg.ID, r.epoch) && m.turnGenerationCurrent(turn) {
 			publisher(Publication{ID: m.seq.Add(1), PipelineID: pipelineID, SourceID: r.cfg.ID, EventID: turn.input.EventID, Text: res.Text, TriggeredAt: turn.at, At: time.Now(), Automatic: true})
 		}
 	}
+}
+
+func (m *Manager) turnGenerationCurrent(turn backgroundTurn) bool {
+	if turn.ctxCfg.ID == "" || turn.generation == 0 {
+		return true
+	}
+	return m.contexts.Generation(turn.pipelineID, turn.ctxCfg.ID) == turn.generation
+}
+
+func (m *Manager) registerActiveTurn(turn backgroundTurn, cancel context.CancelFunc) string {
+	id := turn.input.EventID
+	if id == "" {
+		id = fmt.Sprintf("background-turn-%d", m.eventSeq.Add(1))
+	}
+	m.activeTurnMu.Lock()
+	m.activeTurns[id] = activeBackgroundTurn{
+		pipelineID: turn.pipelineID, contextID: turn.ctxCfg.ID, generation: turn.generation, cancel: cancel,
+	}
+	m.activeTurnMu.Unlock()
+	return id
+}
+
+func (m *Manager) unregisterActiveTurn(id string) {
+	if id == "" {
+		return
+	}
+	m.activeTurnMu.Lock()
+	delete(m.activeTurns, id)
+	m.activeTurnMu.Unlock()
+}
+
+func (m *Manager) cancelContextTurns(pipelineID, contextID string, currentGeneration uint64) {
+	m.activeTurnMu.Lock()
+	var cancels []context.CancelFunc
+	for _, turn := range m.activeTurns {
+		if turn.pipelineID == pipelineID && turn.contextID == contextID && turn.generation != currentGeneration {
+			cancels = append(cancels, turn.cancel)
+		}
+	}
+	m.activeTurnMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+func (m *Manager) clearPendingBeforeGeneration(pipelineID, contextID string, currentGeneration uint64) {
+	m.pendingMu.Lock()
+	changed := false
+	for id, pending := range m.pending {
+		if pending.pipelineID == pipelineID && pending.contextID == contextID && pending.generation != currentGeneration {
+			delete(m.pending, id)
+			changed = true
+		}
+	}
+	if changed {
+		m.notifyPendingLocked()
+	}
+	m.pendingMu.Unlock()
 }
 
 func backgroundOutcome(result engine.Result) domain.Outcome {
@@ -956,7 +1034,10 @@ func (m *Manager) ClearContext(contextID string) (uint64, error) {
 	if !ok {
 		return 0, fmt.Errorf("context not found")
 	}
-	return m.contexts.Clear(p.ID, c.ID), nil
+	generation := m.contexts.Clear(p.ID, c.ID)
+	m.clearPendingBeforeGeneration(p.ID, c.ID, generation)
+	m.cancelContextTurns(p.ID, c.ID, generation)
+	return generation, nil
 }
 func (m *Manager) Status() map[string]any {
 	m.mu.RLock()
