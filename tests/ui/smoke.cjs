@@ -44,6 +44,9 @@ function ok(c,m){assert.ok(c,m);checks++}
   ok($('#dialog').textContent.includes('Что получает AI'),'behavior report exposes AI inputs');
   ok(calls.some(c=>c.path==='/api/pipeline/behavior'&&c.method==='POST'),'behavior report uses pure core route');click('#closeDialog');
   ok(!errors.length,'boot has JS errors: '+errors.join(';'));
+  const incompleteSummary=w.runSummaryMarkup({pipeline_id:'fixture',outcome:'success',events:[{kind:'context_incomplete',at_ms:0}],budget:{max_model_calls:8}},{});
+  ok(incompleteSummary.includes('Контекст неполный'),'manual transcript timeout is visible in run summary');
+  ok(w.traceTable([{kind:'context_incomplete',at_ms:0}]).includes('Контекст неполный'),'manual transcript timeout is named in full trace');
   click('#simulatePipeline');await wait(()=>$('#simTrigger'),'simulation trigger selector');
   ok($('#simTrigger').options.length>0,'simulation exposes configured command/source triggers');
   ok($('#dialog').textContent.includes('БЕЗ AI'),'simulation remains explicitly local');
