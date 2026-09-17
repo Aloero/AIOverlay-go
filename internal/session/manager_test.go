@@ -555,3 +555,36 @@ func TestClearContextCancelsOldBackgroundTurnAndAllowsNewGeneration(t *testing.T
 		t.Fatalf("background calls=%d", calls.Load())
 	}
 }
+
+func TestAudioRuntimeStateSeparatesNoPacketsSilentAndData(t *testing.T) {
+	runtime := &sourceRuntime{cfg: domain.EventSource{Kind: domain.SourceAudio}}
+
+	updateAudioStatus(runtime, paudio.Block{Rate: 16000}, 0)
+	if runtime.status.TransportState != "alive" || runtime.status.SignalState != "no_packets" {
+		t.Fatalf("no-packet state=%+v", runtime.status)
+	}
+
+	updateAudioStatus(runtime, paudio.Block{Samples: make([]int16, 160), Rate: 16000, Silent: true}, 0)
+	if runtime.status.TransportState != "alive" || runtime.status.SignalState != "silent" {
+		t.Fatalf("silent packet state=%+v", runtime.status)
+	}
+
+	updateAudioStatus(runtime, paudio.Block{Samples: []int16{1, 2, 3}, Rate: 16000}, 0.1)
+	if runtime.status.TransportState != "alive" || runtime.status.SignalState != "data" || runtime.status.Level != 0.1 {
+		t.Fatalf("data packet state=%+v", runtime.status)
+	}
+}
+
+func TestAudioRuntimeStateDistinguishesStoppedAndUnavailable(t *testing.T) {
+	stopped := &sourceRuntime{cfg: domain.EventSource{Kind: domain.SourceAudio}, status: SourceStatus{Running: true, TransportState: "alive"}}
+	finishSourceStatus(stopped, context.Canceled, context.Canceled)
+	if stopped.status.Running || stopped.status.TransportState != "stopped" || stopped.status.LastError != "" {
+		t.Fatalf("stopped state=%+v", stopped.status)
+	}
+
+	unavailable := &sourceRuntime{cfg: domain.EventSource{Kind: domain.SourceAudio}, status: SourceStatus{Running: true, TransportState: "alive"}}
+	finishSourceStatus(unavailable, fmt.Errorf("device invalidated"), nil)
+	if unavailable.status.Running || unavailable.status.TransportState != "unavailable" || unavailable.status.LastError != "device invalidated" {
+		t.Fatalf("unavailable state=%+v", unavailable.status)
+	}
+}

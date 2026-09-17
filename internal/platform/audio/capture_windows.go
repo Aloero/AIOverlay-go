@@ -284,6 +284,7 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 					Samples:        samples,
 					Rate:           f.Rate,
 					At:             captureClock.PacketStart(qpc, int(count), f.Rate, now, flags.TimestampError),
+					Silent:         flags.Silent,
 					Discontinuity:  flags.Discontinuity,
 					TimestampError: flags.TimestampError,
 				})

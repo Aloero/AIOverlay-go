@@ -45,6 +45,8 @@ type SourceStatus struct {
 	Dropped         uint64  `json:"dropped,omitempty"`
 	LastError       string  `json:"last_error,omitempty"`
 	LastOutcome     string  `json:"last_outcome,omitempty"`
+	TransportState  string  `json:"transport_state,omitempty"`
+	SignalState     string  `json:"signal_state,omitempty"`
 	LastEvent       string  `json:"last_event,omitempty"`
 	LastTranscript  string  `json:"last_transcript,omitempty"`
 	TranscriptLagMS int64   `json:"transcript_lag_ms,omitempty"`
@@ -112,7 +114,18 @@ type Manager struct {
 }
 
 func NewManager(execute Executor) *Manager {
-	return &Manager{execute: execute, audioCapture: paudio.Capture, contexts: NewContextStore(), governor: NewGovernor(), sources: map[string]*sourceRuntime{}, sourceOverrides: map[string]bool{}, turnSem: make(chan struct{}, 3), pending: map[string]pendingSegment{}, pendingChanged: make(chan struct{}), activeTurns: map[string]activeBackgroundTurn{}}
+	return &Manager{
+		execute:         execute,
+		audioCapture:    paudio.Capture,
+		contexts:        NewContextStore(),
+		governor:        NewGovernor(),
+		sources:         map[string]*sourceRuntime{},
+		sourceOverrides: map[string]bool{},
+		turnSem:         make(chan struct{}, 3),
+		pending:         map[string]pendingSegment{},
+		pendingChanged:  make(chan struct{}),
+		activeTurns:     map[string]activeBackgroundTurn{},
+	}
 }
 func (m *Manager) Contexts() *ContextStore { return m.contexts }
 func (m *Manager) FreezeTurns() func()     { m.turnGate.Lock(); return m.turnGate.Unlock }
@@ -336,7 +349,10 @@ func (m *Manager) reconcile() {
 			turnDone: make(chan struct{}),
 			epoch:    m.sourceSeq.Add(1),
 			turns:    make(chan backgroundTurn, 1),
-			status:   SourceStatus{ID: src.ID, Name: src.Name, Kind: string(src.Kind), Running: true},
+			status: SourceStatus{
+				ID: src.ID, Name: src.Name, Kind: string(src.Kind), Running: true,
+				TransportState: initialTransportState(src.Kind), SignalState: initialSignalState(src.Kind),
+			},
 		}
 		m.sources[id] = r
 		go m.runSource(ctx, p.ID, r)
@@ -391,23 +407,72 @@ func (m *Manager) stopAll() {
 	}
 }
 
-func (m *Manager) runSource(ctx context.Context, pipelineID string, r *sourceRuntime) {
-	defer close(r.done)
-	defer close(r.turns)
-	defer func() { r.mu.Lock(); r.status.Running = false; r.mu.Unlock() }()
+func (m *Manager) runSource(ctx context.Context, pipelineID string, runtime *sourceRuntime) {
+	defer close(runtime.done)
+	defer close(runtime.turns)
+
 	var err error
-	switch r.cfg.Kind {
+	switch runtime.cfg.Kind {
 	case domain.SourceAudio:
-		err = m.runAudio(ctx, pipelineID, r)
+		err = m.runAudio(ctx, pipelineID, runtime)
 	case domain.SourceScreenTimer:
-		err = m.runScreenTimer(ctx, pipelineID, r)
+		err = m.runScreenTimer(ctx, pipelineID, runtime)
 	default:
-		err = fmt.Errorf("unsupported source kind %s", r.cfg.Kind)
+		err = fmt.Errorf("unsupported source kind %s", runtime.cfg.Kind)
 	}
-	if err != nil && ctx.Err() == nil {
-		setSourceOutcome(r, domain.OutcomeAnyError, err)
+	finishSourceStatus(runtime, err, ctx.Err())
+}
+
+func initialTransportState(kind domain.SourceKind) string {
+	if kind == domain.SourceAudio {
+		return "starting"
+	}
+	return ""
+}
+
+func initialSignalState(kind domain.SourceKind) string {
+	if kind == domain.SourceAudio {
+		return "unknown"
+	}
+	return ""
+}
+
+func finishSourceStatus(runtime *sourceRuntime, runErr, contextErr error) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.status.Running = false
+
+	if runtime.cfg.Kind != domain.SourceAudio {
+		if runErr != nil && contextErr == nil {
+			runtime.status.LastError = runErr.Error()
+		}
+		return
+	}
+	if contextErr != nil {
+		runtime.status.TransportState = "stopped"
+		return
+	}
+	runtime.status.TransportState = "unavailable"
+	if runErr != nil {
+		runtime.status.LastError = runErr.Error()
 	}
 }
+
+func updateAudioStatus(runtime *sourceRuntime, block paudio.Block, level float64) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.status.TransportState = "alive"
+	runtime.status.Level = level
+	switch {
+	case len(block.Samples) == 0:
+		runtime.status.SignalState = "no_packets"
+	case block.Silent:
+		runtime.status.SignalState = "silent"
+	default:
+		runtime.status.SignalState = "data"
+	}
+}
+
 func (m *Manager) recordAudioGap(pipelineID string, r *sourceRuntime, at time.Time, reason string) {
 	if at.IsZero() {
 		at = time.Now()
@@ -498,9 +563,7 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 		for _, segment := range segmenter.Push(block) {
 			m.enqueueAudioSegment(pipelineID, runtime, segments, segment)
 		}
-		runtime.mu.Lock()
-		runtime.status.Level = segmenter.Level
-		runtime.mu.Unlock()
+		updateAudioStatus(runtime, block, segmenter.Level)
 	})
 	if ctx.Err() != nil {
 		return ctx.Err()

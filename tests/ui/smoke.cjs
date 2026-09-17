@@ -37,6 +37,8 @@ function ok(c,m){assert.ok(c,m);checks++}
  try{
   await wait(()=>$('#solverModels'),'pipeline did not load');
   ok($('#appliedSummary').textContent.includes('Следующий снимок:'),'applied pipeline state is visible');
+  ok(w.eval("runtimeAudioStateParts({transport_state:'alive',signal_state:'silent'}).join(' · ')").includes('transport жив'),'audio runtime transport state is explicit');
+  ok(w.eval("runtimeAudioStateParts({transport_state:'alive',signal_state:'silent'}).join(' · ')").includes('WASAPI: тишина'),'audio silent packet is distinct from no packets');
   click('#runtimeExplain');await wait(()=>w.document.querySelector('[data-behavior-report]'),'behavior report');
   ok($('#dialog').textContent.includes('Текущий экран'),'behavior report separates capture');
   ok($('#dialog').textContent.includes('Что получает AI'),'behavior report exposes AI inputs');

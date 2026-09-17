@@ -16,6 +16,7 @@ type Block struct {
 	Samples        []int16
 	Rate           int
 	At             time.Time
+	Silent         bool
 	Discontinuity  bool
 	TimestampError bool
 }
