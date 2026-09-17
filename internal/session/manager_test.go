@@ -1303,3 +1303,89 @@ func TestManualAnswerIsNotStoredWhenContextDisallowsAnswers(t *testing.T) {
 		t.Fatal("manual answer ignored include_answers=false")
 	}
 }
+
+func TestManualCutoffDoesNotMoveWhileScreenshotCaptureRuns(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	cfg.Pipelines[0].Commands[0].ContextID = "c"
+	cfg.Pipelines[0].Commands[0].WaitForTranscriptMS = 500
+	manager.cfg = cfg
+	generation := manager.contexts.Generation("p", "c")
+
+	captureStarted := make(chan struct{})
+	captureRelease := make(chan struct{})
+	capture := func(context.Context) ([]byte, error) {
+		close(captureStarted)
+		<-captureRelease
+		return []byte("manual-frame"), nil
+	}
+	result := make(chan PreparedCommand, 1)
+	errs := make(chan error, 1)
+	go func() {
+		prepared, err := manager.PrepareCommandWithCapture(context.Background(), "analyze", capture)
+		if err != nil {
+			errs <- err
+			return
+		}
+		result <- prepared
+	}()
+	<-captureStarted
+
+	postTriggerStart := time.Now()
+	manager.addPending(pendingSegment{
+		pipelineID: "p", contextID: "c", eventID: "after-trigger",
+		generation: generation, start: postTriggerStart, end: postTriggerStart.Add(time.Second),
+	})
+	close(captureRelease)
+	defer manager.finishPending("after-trigger")
+
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	case prepared := <-result:
+		if prepared.Input.ContextIncomplete {
+			t.Fatal("speech that started during screenshot capture moved the manual cutoff")
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("manual command waited for speech that started after the trigger")
+	}
+}
+
+func TestScreenContextUsesCaptureCompletionTimestamp(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Nodes = append(pipeline.Nodes, domain.Node{ID: "context-only-timestamp", Type: domain.NodeContext})
+	pipeline.Commands = append(pipeline.Commands, domain.CommandConfig{
+		ID: "context-timestamp", Action: "screen_context", EntryNodeID: "context-only-timestamp",
+		Intent: domain.IntentContext, ContextID: "c", CaptureScreen: true,
+	})
+	manager.cfg = cfg
+
+	captureStarted := make(chan struct{})
+	captureRelease := make(chan struct{})
+	capture := func(context.Context) ([]byte, error) {
+		close(captureStarted)
+		<-captureRelease
+		return []byte("context-frame"), nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.PrepareCommandWithCapture(context.Background(), "screen_context", capture)
+		done <- err
+	}()
+	<-captureStarted
+	releasedAt := time.Now()
+	close(captureRelease)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := manager.contexts.Snapshot(pipeline.Contexts[0], pipeline.ID, time.Now().Add(time.Second))
+	if string(snapshot.ImageJPEG) != "context-frame" {
+		t.Fatalf("stored context frame=%q", snapshot.ImageJPEG)
+	}
+	if snapshot.ImageAt.Before(releasedAt) {
+		t.Fatalf("screen context timestamp predates capture completion: image_at=%v released_at=%v", snapshot.ImageAt, releasedAt)
+	}
+}

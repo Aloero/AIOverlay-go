@@ -1243,7 +1243,8 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 	if !ok {
 		return PreparedCommand{}, fmt.Errorf("command %q is not configured in active pipeline", action)
 	}
-	at := time.Now()
+	triggeredAt := time.Now()
+	capturedAt := triggeredAt
 	var img []byte
 	var err error
 	if cmd.CaptureScreen {
@@ -1254,6 +1255,7 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 		if err != nil {
 			return PreparedCommand{}, err
 		}
+		capturedAt = time.Now()
 	}
 	ctxCfg, has := findContext(p, cmd.ContextID)
 	snap := ContextSnapshot{}
@@ -1262,17 +1264,17 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 	if has {
 		gen = m.contexts.Generation(p.ID, ctxCfg.ID)
 		if cmd.WaitForTranscriptMS > 0 {
-			complete, waitErr := m.waitPending(ctx, p.ID, ctxCfg.ID, gen, at, time.Duration(cmd.WaitForTranscriptMS)*time.Millisecond)
+			complete, waitErr := m.waitPending(ctx, p.ID, ctxCfg.ID, gen, triggeredAt, time.Duration(cmd.WaitForTranscriptMS)*time.Millisecond)
 			if waitErr != nil {
 				return PreparedCommand{}, waitErr
 			}
 			incomplete = !complete
 		}
 		if cmd.Intent == domain.IntentContext && len(img) > 0 {
-			m.contexts.SetScreen(ctxCfg, p.ID, gen, img, at)
+			m.contexts.SetScreen(ctxCfg, p.ID, gen, img, capturedAt)
 			return PreparedCommand{PipelineID: p.ID, Command: cmd, Context: ctxCfg, ContextGeneration: gen, SkipRun: true}, nil
 		}
-		snap = m.contexts.Snapshot(ctxCfg, p.ID, at)
+		snap = m.contexts.Snapshot(ctxCfg, p.ID, triggeredAt)
 	}
 	inputImage := img
 	if len(inputImage) == 0 && len(snap.ImageJPEG) > 0 {
