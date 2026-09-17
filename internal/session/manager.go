@@ -364,83 +364,123 @@ func (m *Manager) runSource(ctx context.Context, pipelineID string, r *sourceRun
 		r.mu.Unlock()
 	}
 }
-func (m *Manager) runAudio(ctx context.Context, pipelineID string, r *sourceRuntime) error {
-	if r.cfg.Audio == nil {
+func (m *Manager) recordAudioGap(pipelineID string, r *sourceRuntime, at time.Time, reason string) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	r.mu.Lock()
+	r.status.Dropped++
+	r.status.LastError = reason
+	r.mu.Unlock()
+	m.mu.RLock()
+	cfg := m.cfg
+	m.mu.RUnlock()
+	if p := activePipeline(cfg); p != nil && p.ID == pipelineID {
+		if c, ok := findContext(p, r.cfg.ContextID); ok {
+			g := m.contexts.Generation(pipelineID, c.ID)
+			m.contexts.Append(c, pipelineID, g, ContextEntry{Kind: "gap", Gap: true, At: at, SourceID: r.cfg.ID})
+		}
+	}
+}
+
+func (m *Manager) enqueueAudioSegment(pipelineID string, r *sourceRuntime, segments chan<- paudio.Segment, seg paudio.Segment) {
+	select {
+	case segments <- seg:
+	default:
+		m.recordAudioGap(pipelineID, r, seg.Ended, "audio queue overflow: transcript gap recorded")
+	}
+}
+
+func (m *Manager) runAudio(ctx context.Context, pipelineID string, runtime *sourceRuntime) error {
+	if runtime.cfg.Audio == nil {
 		return fmt.Errorf("audio settings missing")
 	}
+
+	capture, queueCapacity, err := m.audioRuntimeConfig(pipelineID)
+	if err != nil {
+		return err
+	}
+
+	segments := make(chan paudio.Segment, queueCapacity)
+	producerDone := make(chan error, 1)
+	go func() {
+		producerDone <- m.produceAudioSegments(ctx, pipelineID, runtime, capture, segments)
+		close(segments)
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case segment, ok := <-segments:
+			if !ok {
+				return captureResult(ctx, <-producerDone)
+			}
+			runtime.mu.Lock()
+			runtime.status.Segments++
+			runtime.status.LastEvent = segment.Ended.Format(time.RFC3339Nano)
+			runtime.mu.Unlock()
+			m.processAudioSegment(ctx, pipelineID, runtime, segment)
+		}
+	}
+}
+
+func (m *Manager) audioRuntimeConfig(pipelineID string) (paudio.CaptureFunc, int, error) {
 	m.mu.RLock()
 	capture := m.audioCapture
 	cfg := m.cfg
 	m.mu.RUnlock()
 	if capture == nil {
-		return fmt.Errorf("audio capture unavailable")
+		return nil, 0, fmt.Errorf("audio capture unavailable")
 	}
-	p := activePipeline(cfg)
-	queueCap := 4
-	if p != nil && p.SessionBudget != nil && p.SessionBudget.QueueCapacity > 0 {
-		queueCap = p.SessionBudget.QueueCapacity
+
+	queueCapacity := 4
+	pipeline := activePipeline(cfg)
+	if pipeline == nil || pipeline.ID != pipelineID {
+		return nil, 0, fmt.Errorf("active pipeline changed before audio source start")
 	}
-	segments := make(chan paudio.Segment, queueCap)
-	producerDone := make(chan error, 1)
-	go func() {
-		seg := paudio.Segmenter{Config: *r.cfg.Audio}
-		producerDone <- capture(ctx, *r.cfg.Audio, func(b paudio.Block) {
-			if b.Discontinuity || b.TimestampError {
-				r.mu.Lock()
-				r.status.Dropped++
-				r.status.LastError = "audio discontinuity: transcript context contains a gap"
-				r.mu.Unlock()
-				m.mu.RLock()
-				cfgNow := m.cfg
-				m.mu.RUnlock()
-				if pNow := activePipeline(cfgNow); pNow != nil && pNow.ID == pipelineID {
-					if c, ok := findContext(pNow, r.cfg.ContextID); ok {
-						g := m.contexts.Generation(pipelineID, c.ID)
-						m.contexts.Append(c, pipelineID, g, ContextEntry{Kind: "gap", Gap: true, At: b.At, SourceID: r.cfg.ID})
-					}
-				}
-			}
-			for _, s := range seg.Push(b) {
-				select {
-				case segments <- s:
-				default:
-					r.mu.Lock()
-					r.status.Dropped++
-					r.status.LastError = "audio queue overflow: transcript gap recorded"
-					r.mu.Unlock()
-					if c, ok := findContext(p, r.cfg.ContextID); ok {
-						g := m.contexts.Generation(pipelineID, c.ID)
-						m.contexts.Append(c, pipelineID, g, ContextEntry{Kind: "gap", Gap: true, At: s.Ended, SourceID: r.cfg.ID})
-					}
-				}
-			}
-			r.mu.Lock()
-			r.status.Level = seg.Level
-			r.mu.Unlock()
-		})
-		close(segments)
-	}()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-producerDone:
-			if err == context.Canceled && ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
-		case seg, ok := <-segments:
-			if !ok {
-				continue
-			}
-			r.mu.Lock()
-			r.status.Segments++
-			r.status.LastEvent = seg.Ended.Format(time.RFC3339Nano)
-			r.mu.Unlock()
-			m.processAudioSegment(ctx, pipelineID, r, seg)
-		}
+	if pipeline.SessionBudget != nil && pipeline.SessionBudget.QueueCapacity > 0 {
+		queueCapacity = pipeline.SessionBudget.QueueCapacity
 	}
+	return capture, queueCapacity, nil
 }
+
+func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, runtime *sourceRuntime, capture paudio.CaptureFunc, segments chan<- paudio.Segment) error {
+	segmenter := paudio.Segmenter{Config: *runtime.cfg.Audio}
+	err := capture(ctx, *runtime.cfg.Audio, func(block paudio.Block) {
+		if block.Discontinuity || block.TimestampError {
+			m.recordAudioGap(pipelineID, runtime, block.At, "audio discontinuity: transcript context contains a gap")
+		}
+		for _, segment := range segmenter.Push(block) {
+			m.enqueueAudioSegment(pipelineID, runtime, segments, segment)
+		}
+		runtime.mu.Lock()
+		runtime.status.Level = segmenter.Level
+		runtime.mu.Unlock()
+	})
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	interruptedAt := time.Now()
+	if tail, ok := segmenter.Interrupt(); ok {
+		m.enqueueAudioSegment(pipelineID, runtime, segments, tail)
+		interruptedAt = tail.Ended
+	}
+	m.recordAudioGap(pipelineID, runtime, interruptedAt, "audio source interrupted: transcript context contains a gap")
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("audio capture ended unexpectedly")
+}
+
+func captureResult(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
 func (m *Manager) notifyPendingLocked() {
 	close(m.pendingChanged)
 	m.pendingChanged = make(chan struct{})
@@ -520,8 +560,10 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 	clip.SegmentID = fmt.Sprintf("%s-%d", r.cfg.ID, m.eventSeq.Add(1))
 	clip.StartedAt = seg.Started
 	clip.EndedAt = seg.Ended
-	clip.Final = true
 	intent := r.cfg.Intent
+	if !clip.Final {
+		intent = domain.IntentContext
+	}
 	r.mu.RLock()
 	cool := r.cooldownUntil
 	r.mu.RUnlock()
@@ -693,7 +735,21 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 		if at.IsZero() {
 			at = turn.at
 		}
-		if m.contexts.Append(turn.ctxCfg, pipelineID, turn.generation, ContextEntry{ID: turn.input.EventID, Kind: "transcript", Text: o.Text, At: at, Start: start, End: end, SourceID: r.cfg.ID}) {
+		final := true
+		if turn.input.Audio != nil {
+			final = turn.input.Audio.Final
+		}
+		entry := ContextEntry{
+			ID:       turn.input.EventID,
+			Text:     o.Text,
+			At:       at,
+			Start:    start,
+			End:      end,
+			SourceID: r.cfg.ID,
+			Revision: 1,
+			Final:    final,
+		}
+		if m.contexts.UpsertTranscript(turn.ctxCfg, pipelineID, turn.generation, entry) {
 			r.mu.Lock()
 			r.status.LastTranscript = o.Text
 			r.status.TranscriptLagMS = time.Since(turn.at).Milliseconds()

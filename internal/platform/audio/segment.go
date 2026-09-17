@@ -27,7 +27,12 @@ func (s *Segmenter) Push(b Block) []Segment {
 	if b.Rate < 8000 || b.Rate > 192000 {
 		return out
 	}
-	if s.rate != b.Rate || b.Discontinuity || b.TimestampError {
+	if b.Discontinuity || b.TimestampError {
+		if seg, ok := s.Interrupt(); ok {
+			out = append(out, seg)
+		}
+	}
+	if s.rate != b.Rate {
 		s.Reset()
 		s.rate = b.Rate
 	}
@@ -57,7 +62,7 @@ func (s *Segmenter) Push(b Block) []Segment {
 		if !s.started.IsZero() {
 			s.pending = append(s.pending, p...)
 			if len(s.pending) >= s.rate*s.Config.SegmentMS/1000 || s.silence >= s.rate*s.Config.SilenceMS/1000 {
-				if seg, ok := s.flush(); ok {
+				if seg, ok := s.flushCompleted(); ok {
 					out = append(out, seg)
 				}
 			}
@@ -71,30 +76,62 @@ func (s *Segmenter) Push(b Block) []Segment {
 		}
 	}
 	if len(b.Samples) == 0 && !s.lastVoice.IsZero() && b.At.Sub(s.lastVoice) >= time.Duration(s.Config.SilenceMS)*time.Millisecond {
-		if seg, ok := s.flush(); ok {
+		if seg, ok := s.flushCompleted(); ok {
 			out = append(out, seg)
 		}
 	}
 	return out
 }
-func (s *Segmenter) flush() (Segment, bool) {
-	n := len(s.pending)
-	seg := Segment{Started: s.started, Ended: s.started.Add(time.Duration(n) * time.Second / time.Duration(s.rate))}
-	ok := n >= s.rate*s.Config.MinimumMS/1000 && !s.started.IsZero()
+func (s *Segmenter) flushCompleted() (Segment, bool) {
+	segment, ok := s.finishSegment()
 	if ok {
-		seg.Clip = domain.AudioClip{PCM16: append([]int16(nil), s.pending...), DurationMS: n * 1000 / s.rate, SampleRate: s.rate, Channels: 1, StartedAt: seg.Started, EndedAt: seg.Ended, Final: true}
+		segment.Clip.Final = true
 	}
-	s.pending = nil
-	s.started = time.Time{}
-	s.lastVoice = time.Time{}
-	s.silence = 0
-	return seg, ok
+	return segment, ok
 }
-func (s *Segmenter) Reset() {
-	s.pending = nil
+
+// Interrupt closes the current semantic span without pretending it ended on a
+// normal speech/silence boundary. It is used when the capture transport breaks.
+func (s *Segmenter) Interrupt() (Segment, bool) {
+	segment, ok := s.finishSegment()
 	s.pre = nil
+	s.Level = 0
+	return segment, ok
+}
+
+func (s *Segmenter) finishSegment() (Segment, bool) {
+	if s.rate <= 0 || s.started.IsZero() || len(s.pending) == 0 {
+		s.resetSpeech()
+		return Segment{}, false
+	}
+
+	sampleCount := len(s.pending)
+	duration := time.Duration(sampleCount) * time.Second / time.Duration(s.rate)
+	segment := Segment{Started: s.started, Ended: s.started.Add(duration)}
+	emit := sampleCount >= s.rate*s.Config.MinimumMS/1000
+	if emit {
+		segment.Clip = domain.AudioClip{
+			PCM16:      append([]int16(nil), s.pending...),
+			DurationMS: sampleCount * 1000 / s.rate,
+			SampleRate: s.rate,
+			Channels:   1,
+			StartedAt:  segment.Started,
+			EndedAt:    segment.Ended,
+		}
+	}
+	s.resetSpeech()
+	return segment, emit
+}
+
+func (s *Segmenter) resetSpeech() {
+	s.pending = nil
 	s.started = time.Time{}
 	s.lastVoice = time.Time{}
 	s.silence = 0
+}
+
+func (s *Segmenter) Reset() {
+	s.resetSpeech()
+	s.pre = nil
 	s.Level = 0
 }

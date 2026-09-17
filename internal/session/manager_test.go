@@ -5,6 +5,7 @@ import (
 	"aioverlay/internal/engine"
 	paudio "aioverlay/internal/platform/audio"
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -186,5 +187,61 @@ func TestAudioTimestampErrorRecordsContextGap(t *testing.T) {
 	}
 	if snap.Text != "[context gap]" {
 		t.Fatalf("context=%q", snap.Text)
+	}
+}
+
+func TestAudioCaptureFailureFlushesTailAndRecordsGap(t *testing.T) {
+	cfg := managerConfig()
+	type processedAudio struct {
+		clip   domain.AudioClip
+		intent string
+	}
+	processed := make(chan processedAudio, 1)
+	m := NewManager(func(_ context.Context, _ string, input engine.Input, opt engine.RunOptions) (engine.Result, error) {
+		if input.Audio == nil {
+			return engine.Result{}, nil
+		}
+		if opt.OnObservation != nil {
+			opt.OnObservation(engine.Observation{Kind: "audio.text", Text: "truncated phrase"})
+		}
+		processed <- processedAudio{clip: *input.Audio, intent: input.Intent}
+		return engine.Result{}, nil
+	})
+	m.SetAudioCapture(func(_ context.Context, _ domain.AudioSourceConfig, emit func(paudio.Block)) error {
+		voice := make([]int16, 1600)
+		for i := range voice {
+			voice[i] = 12000
+		}
+		emit(paudio.Block{Samples: voice, Rate: 16000, At: time.Now()})
+		return fmt.Errorf("device invalidated")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.Start(ctx, cfg)
+	defer func() {
+		cancel()
+		m.Close()
+	}()
+
+	select {
+	case got := <-processed:
+		if got.clip.Final {
+			t.Fatal("interrupted audio tail was marked final")
+		}
+		if got.intent != string(domain.IntentContext) {
+			t.Fatalf("interrupted audio intent=%q, want context", got.intent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("interrupted audio tail was not offered to the configured route")
+	}
+
+	snapshot := m.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+	if len(snapshot.Entries) < 2 {
+		t.Fatalf("expected transcript and gap, got %+v", snapshot.Entries)
+	}
+	transcript := snapshot.Entries[0]
+	gap := snapshot.Entries[len(snapshot.Entries)-1]
+	if transcript.Text != "truncated phrase" || transcript.Final || !gap.Gap {
+		t.Fatalf("expected incomplete transcript followed by gap, got %+v", snapshot.Entries)
 	}
 }

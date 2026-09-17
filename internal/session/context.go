@@ -18,6 +18,8 @@ type ContextEntry struct {
 	Start    time.Time `json:"start,omitempty"`
 	End      time.Time `json:"end,omitempty"`
 	Gap      bool      `json:"gap,omitempty"`
+	Revision uint64    `json:"revision,omitempty"`
+	Final    bool      `json:"final,omitempty"`
 }
 
 type ContextSnapshot struct {
@@ -75,8 +77,22 @@ func (s *ContextStore) Clear(pipelineID, contextID string) uint64 {
 	st.imageAt = time.Time{}
 	return st.generation
 }
+func entryTime(e ContextEntry) time.Time {
+	if !e.Start.IsZero() {
+		return e.Start
+	}
+	return e.At
+}
+
+func sortEntries(entries []ContextEntry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := entryTime(entries[i]), entryTime(entries[j])
+		return a.Before(b)
+	})
+}
+
 func (s *ContextStore) Append(cfg domain.ContextConfig, pipelineID string, generation uint64, entry ContextEntry) bool {
-	if !cfg.Enabled || cfg.ID == "" || entry.Text == "" && !entry.Gap {
+	if !cfg.Enabled || cfg.ID == "" || (entry.Text == "" && !entry.Gap) {
 		return false
 	}
 	s.mu.Lock()
@@ -89,6 +105,49 @@ func (s *ContextStore) Append(cfg domain.ContextConfig, pipelineID string, gener
 		entry.At = time.Now()
 	}
 	st.entries = append(st.entries, entry)
+	sortEntries(st.entries)
+	s.pruneLocked(st, cfg, entry.At)
+	return true
+}
+
+// UpsertTranscript keeps one chronological record per segment. Partial updates may
+// advance a non-final record, while a final transcript is immutable against late
+// partial callbacks. Cloud/local attempts remain separate from this accepted view.
+func (s *ContextStore) UpsertTranscript(cfg domain.ContextConfig, pipelineID string, generation uint64, entry ContextEntry) bool {
+	if !cfg.Enabled || cfg.ID == "" || entry.ID == "" || entry.Text == "" {
+		return false
+	}
+	entry.Kind = "transcript"
+	if entry.Revision == 0 {
+		entry.Revision = 1
+	}
+	if entry.At.IsZero() {
+		entry.At = entryTime(entry)
+		if entry.At.IsZero() {
+			entry.At = time.Now()
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.stateLocked(pipelineID, cfg.ID)
+	if generation != 0 && generation != st.generation {
+		return false
+	}
+	for i := range st.entries {
+		old := st.entries[i]
+		if old.Kind != "transcript" || old.ID != entry.ID {
+			continue
+		}
+		if old.Final || entry.Revision <= old.Revision {
+			return false
+		}
+		st.entries[i] = entry
+		sortEntries(st.entries)
+		s.pruneLocked(st, cfg, entry.At)
+		return true
+	}
+	st.entries = append(st.entries, entry)
+	sortEntries(st.entries)
 	s.pruneLocked(st, cfg, entry.At)
 	return true
 }
@@ -110,28 +169,43 @@ func (s *ContextStore) SetScreen(cfg domain.ContextConfig, pipelineID string, ge
 	return true
 }
 func (s *ContextStore) pruneLocked(st *contextState, cfg domain.ContextConfig, now time.Time) {
-	if cfg.MaxAgeS > 0 {
-		cut := now.Add(-time.Duration(cfg.MaxAgeS) * time.Second)
-		i := 0
-		for i < len(st.entries) && st.entries[i].At.Before(cut) {
-			i++
-		}
-		if i > 0 {
-			st.entries = append([]ContextEntry(nil), st.entries[i:]...)
-		}
+	s.pruneExpiredLocked(st, cfg, now)
+	s.pruneEntryCountLocked(st, cfg.MaxEntries)
+	s.pruneTextSizeLocked(st, cfg.MaxChars)
+}
+
+func (s *ContextStore) pruneExpiredLocked(st *contextState, cfg domain.ContextConfig, now time.Time) {
+	if cfg.MaxAgeS <= 0 {
+		return
 	}
-	if cfg.MaxEntries > 0 && len(st.entries) > cfg.MaxEntries {
-		st.entries = append([]ContextEntry(nil), st.entries[len(st.entries)-cfg.MaxEntries:]...)
+	cutoff := now.Add(-time.Duration(cfg.MaxAgeS) * time.Second)
+	firstKept := 0
+	for firstKept < len(st.entries) && entryTime(st.entries[firstKept]).Before(cutoff) {
+		firstKept++
 	}
-	if cfg.MaxChars > 0 {
-		total := 0
-		for _, e := range st.entries {
-			total += len(e.Text)
-		}
-		for total > cfg.MaxChars && len(st.entries) > 0 {
-			total -= len(st.entries[0].Text)
-			st.entries = append([]ContextEntry(nil), st.entries[1:]...)
-		}
+	if firstKept > 0 {
+		st.entries = append([]ContextEntry(nil), st.entries[firstKept:]...)
+	}
+}
+
+func (s *ContextStore) pruneEntryCountLocked(st *contextState, maxEntries int) {
+	if maxEntries <= 0 || len(st.entries) <= maxEntries {
+		return
+	}
+	st.entries = append([]ContextEntry(nil), st.entries[len(st.entries)-maxEntries:]...)
+}
+
+func (s *ContextStore) pruneTextSizeLocked(st *contextState, maxChars int) {
+	if maxChars <= 0 {
+		return
+	}
+	totalChars := 0
+	for _, entry := range st.entries {
+		totalChars += len(entry.Text)
+	}
+	for totalChars > maxChars && len(st.entries) > 0 {
+		totalChars -= len(st.entries[0].Text)
+		st.entries = append([]ContextEntry(nil), st.entries[1:]...)
 	}
 }
 func (s *ContextStore) Snapshot(cfg domain.ContextConfig, pipelineID string, cutoff time.Time) ContextSnapshot {
@@ -148,7 +222,7 @@ func (s *ContextStore) Snapshot(cfg domain.ContextConfig, pipelineID string, cut
 	s.pruneLocked(st, cfg, cutoff)
 	out.Generation = st.generation
 	for _, e := range st.entries {
-		if e.At.After(cutoff) {
+		if entryTime(e).After(cutoff) {
 			continue
 		}
 		switch e.Kind {
@@ -168,7 +242,7 @@ func (s *ContextStore) Snapshot(cfg domain.ContextConfig, pipelineID string, cut
 		out.ImageAt = st.imageAt
 	}
 	s.mu.Unlock()
-	sort.SliceStable(out.Entries, func(i, j int) bool { return out.Entries[i].At.Before(out.Entries[j].At) })
+	sortEntries(out.Entries)
 	var b strings.Builder
 	for _, e := range out.Entries {
 		if e.Gap {

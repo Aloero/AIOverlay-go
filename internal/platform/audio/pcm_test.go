@@ -121,3 +121,30 @@ func TestSegmenterTimestampErrorDoesNotJoinSpeechAcrossGap(t *testing.T) {
 		t.Fatalf("old speech crossed timestamp error: %dms", out[0].Clip.DurationMS)
 	}
 }
+
+func TestSegmenterInterruptFlushesIncompleteSpeech(t *testing.T) {
+	s := Segmenter{Config: domain.AudioSourceConfig{Mode: "system", SegmentMS: 2000, SilenceMS: 200, MinimumMS: 80, Threshold: .01}}
+	voice := make([]int16, 1600)
+	for i := range voice {
+		voice[i] = 12000
+	}
+	now := time.Now()
+	s.Push(Block{Samples: voice, Rate: 16000, At: now})
+	seg, ok := s.Interrupt()
+	if !ok {
+		t.Fatal("in-progress speech was discarded on interruption")
+	}
+	if seg.Clip.Final {
+		t.Fatal("transport interruption was marked as a normal final segment")
+	}
+	if seg.Started != now || seg.Ended.Sub(seg.Started) != 100*time.Millisecond {
+		t.Fatalf("unexpected interrupted range %v..%v", seg.Started, seg.Ended)
+	}
+}
+
+func TestSegmenterInterruptWithoutSamplesIsSafe(t *testing.T) {
+	s := Segmenter{Config: domain.AudioSourceConfig{Mode: "system", SegmentMS: 1000, SilenceMS: 200, MinimumMS: 80, Threshold: .01}}
+	if _, ok := s.Interrupt(); ok {
+		t.Fatal("empty segment unexpectedly emitted")
+	}
+}

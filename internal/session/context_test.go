@@ -56,3 +56,48 @@ func TestContextBounds(t *testing.T) {
 		t.Fatalf("%+v", snap.Entries)
 	}
 }
+
+func TestContextOrdersLateTranscriptByCaptureTimeBeforePruning(t *testing.T) {
+	s := NewContextStore()
+	c := testContext()
+	c.MaxEntries = 2
+	g := s.Generation("p", c.ID)
+	now := time.Now()
+	// Simulate STT completion order B, A, C even though capture order is A, B, C.
+	if !s.UpsertTranscript(c, "p", g, ContextEntry{ID: "b", Text: "second", At: now.Add(-2 * time.Second), Revision: 1, Final: true}) {
+		t.Fatal("append b")
+	}
+	if !s.UpsertTranscript(c, "p", g, ContextEntry{ID: "a", Text: "first", At: now.Add(-3 * time.Second), Revision: 1, Final: true}) {
+		t.Fatal("append a")
+	}
+	if !s.UpsertTranscript(c, "p", g, ContextEntry{ID: "c", Text: "third", At: now.Add(-time.Second), Revision: 1, Final: true}) {
+		t.Fatal("append c")
+	}
+	snap := s.Snapshot(c, "p", now)
+	if len(snap.Entries) != 2 || snap.Entries[0].ID != "b" || snap.Entries[1].ID != "c" {
+		t.Fatalf("chronological retention failed: %+v", snap.Entries)
+	}
+	if snap.Text != "[transcript] second\n[transcript] third" {
+		t.Fatalf("context=%q", snap.Text)
+	}
+}
+
+func TestTranscriptPartialFinalLatePartialKeepsOneFinalRecord(t *testing.T) {
+	s := NewContextStore()
+	c := testContext()
+	g := s.Generation("p", c.ID)
+	now := time.Now()
+	if !s.UpsertTranscript(c, "p", g, ContextEntry{ID: "seg", Text: "hel", At: now, Revision: 1}) {
+		t.Fatal("initial partial rejected")
+	}
+	if !s.UpsertTranscript(c, "p", g, ContextEntry{ID: "seg", Text: "hello", At: now, Revision: 2, Final: true}) {
+		t.Fatal("final rejected")
+	}
+	if s.UpsertTranscript(c, "p", g, ContextEntry{ID: "seg", Text: "hello?", At: now, Revision: 3}) {
+		t.Fatal("late partial replaced final")
+	}
+	snap := s.Snapshot(c, "p", now.Add(time.Second))
+	if len(snap.Entries) != 1 || snap.Entries[0].Text != "hello" || !snap.Entries[0].Final || snap.Entries[0].Revision != 2 {
+		t.Fatalf("unexpected transcript state: %+v", snap.Entries)
+	}
+}
