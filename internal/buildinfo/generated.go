@@ -4,5 +4,5 @@ package buildinfo
 const (
 	Company     = "Local"
 	ProductName = "AIOverlay"
-	Version     = "0.2.7"
+	Version     = "0.2.8"
 )

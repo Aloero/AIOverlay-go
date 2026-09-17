@@ -22,6 +22,8 @@ import (
 )
 
 type App struct {
+	recentModels      []string
+	recentChanged     bool
 	operation         sync.RWMutex
 	mu                sync.RWMutex
 	store             *config.Store
@@ -58,7 +60,7 @@ func New(configPath, catalogPath string) (*App, error) {
 	if cfg.App.PersistRuntimeStats {
 		eng.ImportStatistics(cfg.RuntimeStatistics)
 	}
-	a := &App{store: store, cfg: cfg, catalog: cat, registry: reg, tunnel: tun, engine: eng, traces: traces}
+	a := &App{recentModels: append([]string(nil), cfg.ControlCenter.RecentModels...), store: store, cfg: cfg, catalog: cat, registry: reg, tunnel: tun, engine: eng, traces: traces}
 	a.startMaintenance()
 	return a, nil
 }
@@ -81,8 +83,11 @@ func (a *App) Close() {
 	defer a.operation.Unlock()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.cfg.App.PersistRuntimeStats {
-		a.cfg.RuntimeStatistics = a.engine.ExportStatistics()
+	if a.cfg.App.PersistRuntimeStats || a.recentChanged {
+		if a.cfg.App.PersistRuntimeStats {
+			a.cfg.RuntimeStatistics = a.engine.ExportStatistics()
+		}
+		a.cfg.ControlCenter.RecentModels = mergeRecent(a.recentModels, a.cfg.ControlCenter.RecentModels)
 		if err := a.store.Save(a.cfg); err != nil {
 			log.Printf("runtime statistics save failed: %v", err)
 		}
@@ -117,6 +122,7 @@ func (a *App) saveConfigLocked(cfg domain.Config) error {
 	}
 	a.mu.RLock()
 	previous := a.cfg
+	cfg.ControlCenter.RecentModels = mergeRecent(a.recentModels, cfg.ControlCenter.RecentModels)
 	reg, tun, eng := a.registry, a.tunnel, a.engine
 	prepare, callback := a.beforeConfigSave, a.onConfigChanged
 	a.mu.RUnlock()
@@ -163,6 +169,8 @@ func (a *App) saveConfigLocked(cfg domain.Config) error {
 	a.mu.Lock()
 	oldReg, oldTun := a.registry, a.tunnel
 	a.cfg = cfg
+	a.recentModels = append([]string(nil), cfg.ControlCenter.RecentModels...)
+	a.recentChanged = false
 	a.registry = reg
 	a.tunnel = tun
 	a.mu.Unlock()
@@ -276,7 +284,9 @@ func (a *App) Run(ctx context.Context, pipelineID string, input engine.Input, op
 		pipelineID = a.cfg.ActivePipelineID
 	}
 	a.mu.RUnlock()
-	return eng.Execute(ctx, pipelineID, input, opt)
+	result, err := eng.Execute(ctx, pipelineID, input, opt)
+	a.recordRecentUsage(result.Trace)
+	return result, err
 }
 
 func (a *App) Traces() []domain.ExecutionTrace { return a.traces.List() }

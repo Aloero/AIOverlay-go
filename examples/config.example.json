@@ -540,7 +540,7 @@
     "product_name": "AIOverlay",
     "file_description": "AI Overlay Assistant",
     "company": "Local",
-    "version": "0.2.7",
+    "version": "0.2.8",
     "icon_path": "assets/app.ico"
   }
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -18,11 +19,12 @@ type Input struct {
 }
 
 type RunOptions struct {
-	OnStart func(domain.ExecutionTrace)
-	Purpose string
-	OnDelta func(string)
-	OnReset func()
-	OnTrace func(domain.TraceEvent)
+	OnPrompt func(PromptSnapshot)
+	OnStart  func(domain.ExecutionTrace)
+	Purpose  string
+	OnDelta  func(string)
+	OnReset  func()
+	OnTrace  func(domain.TraceEvent)
 }
 
 type Result struct {
@@ -31,6 +33,7 @@ type Result struct {
 }
 
 type Engine struct {
+	random            *rand.Rand
 	cfg               domain.Config
 	registry          *providers.Registry
 	catalog           *catalog.Service
@@ -49,7 +52,7 @@ func New(cfg domain.Config, registry *providers.Registry, cat *catalog.Service, 
 	if traces == nil {
 		traces = tracestore.New(100)
 	}
-	return &Engine{
+	return &Engine{random: rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
 		cfg: cfg, registry: registry, catalog: cat, traces: traces,
 		rr: map[string]int{}, lastGood: map[string]string{},
 		cooldown: map[string]time.Time{}, stats: map[string]modelStat{}, credentialResults: map[string]CredentialState{}, revision: 1,
@@ -78,8 +81,13 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 	}
 	r := newRunner(e, p, input, opt, &t)
 	text, err := r.run(ctx, p.EntryNodeID, nodeValue{image: input.ImageJPEG, text: input.Text})
+	terminalCause := context.Cause(ctx)
 	cancel()
 	r.workers.Wait()
+	for _, event := range poolCompletionEvents(t.Events) {
+		r.emit(event)
+	}
+	finishTrace(&t, err, terminalCause, r.lastNode, r.lastOutcome, r.redact)
 	t.FinishedAt = time.Now()
 	if t.Winner != nil {
 		t.Winner = r.redact.event(domain.TraceEvent{Attempt: t.Winner}).Attempt

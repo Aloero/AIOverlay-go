@@ -10,6 +10,7 @@ import (
 )
 
 type StudioState struct {
+	RecentModels     []string                 `json:"recent_models"`
 	ActivePipelineID string                   `json:"active_pipeline_id"`
 	Revision         uint64                   `json:"revision"`
 	Credentials      []engine.CredentialState `json:"credentials"`

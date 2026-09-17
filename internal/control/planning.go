@@ -3,6 +3,7 @@ package control
 import (
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
+	"fmt"
 	"net/http"
 )
 
@@ -73,27 +74,24 @@ func (s *Server) handleActivePipeline(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid pipeline selection", 400)
 		return
 	}
-	if b, ok := s.backend.(settingsBackend); ok {
-		if err := b.SetActivePipeline(req.ID); err != nil {
-			http.Error(w, err.Error(), 409)
-			return
+	err := s.jobs.WhenIdle(func() error {
+		if b, ok := s.backend.(settingsBackend); ok {
+			return b.SetActivePipeline(req.ID)
 		}
-		writeJSON(w, map[string]string{"active_pipeline_id": req.ID})
+		cfg := s.backend.GetConfig()
+		for _, p := range cfg.Pipelines {
+			if p.ID == req.ID && p.Enabled {
+				cfg.ActivePipelineID = p.ID
+				return s.backend.SaveConfig(cfg)
+			}
+		}
+		return fmt.Errorf("pipeline is missing or disabled")
+	})
+	if err != nil {
+		settingsError(w, err, 409)
 		return
 	}
-	cfg := s.backend.GetConfig()
-	for _, p := range cfg.Pipelines {
-		if p.ID == req.ID && p.Enabled {
-			cfg.ActivePipelineID = p.ID
-			if err := s.backend.SaveConfig(cfg); err != nil {
-				http.Error(w, err.Error(), 409)
-				return
-			}
-			writeJSON(w, map[string]string{"active_pipeline_id": p.ID})
-			return
-		}
-	}
-	http.Error(w, "pipeline is missing or disabled", 400)
+	writeJSON(w, map[string]string{"active_pipeline_id": req.ID})
 }
 
 // Saving a connection must not require committing an unfinished graph draft.
@@ -107,28 +105,26 @@ func (s *Server) handleProviderConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid provider configuration", 400)
 		return
 	}
-	if b, ok := s.backend.(settingsBackend); ok {
-		if err := b.SaveProvider(p); err != nil {
-			http.Error(w, err.Error(), 409)
-			return
+	err := s.jobs.WhenIdle(func() error {
+		if b, ok := s.backend.(settingsBackend); ok {
+			return b.SaveProvider(p)
 		}
-		writeJSON(w, map[string]bool{"ok": true})
-		return
-	}
-	cfg := s.backend.GetConfig()
-	found := false
-	for i := range cfg.Providers {
-		if cfg.Providers[i].ID == p.ID {
-			cfg.Providers[i] = p
-			found = true
-			break
+		cfg := s.backend.GetConfig()
+		found := false
+		for i := range cfg.Providers {
+			if cfg.Providers[i].ID == p.ID {
+				cfg.Providers[i] = p
+				found = true
+				break
+			}
 		}
-	}
-	if !found {
-		cfg.Providers = append(cfg.Providers, p)
-	}
-	if err := s.backend.SaveConfig(cfg); err != nil {
-		http.Error(w, err.Error(), 409)
+		if !found {
+			cfg.Providers = append(cfg.Providers, p)
+		}
+		return s.backend.SaveConfig(cfg)
+	})
+	if err != nil {
+		settingsError(w, err, 409)
 		return
 	}
 	writeJSON(w, map[string]bool{"ok": true})

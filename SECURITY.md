@@ -42,3 +42,8 @@ Saving a provider or importing a VPN share link does not send a model request or
 The virtual simulator never obtains a Provider registry and cannot invoke a transport. Its graph/config validation, virtual wall budget, 256-call/10000-step cap and request context limit apply independently of normal execution. A simulation result is not added to production run history or key/model health.
 
 URI import supports an explicit subset only. Unknown security/transport parameters are rejected rather than discarded. Insecure TLS flags produce a visible warning, not an unannounced change. URI text is not included in error messages. VPN secrets remain in the user's portable JSON and are hidden in the collapsed editor; none are part of the public example or release profile.
+
+
+## Explicit prompt inspection (0.2.8)
+
+`/api/prompts/last` shares the existing authenticated HTTP/trusted native boundary. It is not polled or included in normal job/trace responses. Only an explicit preview action fetches last-run bounded, redacted template text. The volatile Go store is limited to 16 × 32 KiB payload, excludes image bytes, and is cleared by a new run or Clear. This is sensitive task text even after credentials are redacted; do not attach it to diagnostic reports automatically. No new persistent screenshot/prompt file is introduced.

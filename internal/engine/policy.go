@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"math/rand/v2"
 	"sort"
 	"strings"
 	"time"
@@ -57,7 +56,7 @@ func (e *Engine) orderModelsForPolicy(nodeID string, policy domain.PoolPolicy, m
 				}
 				total += w
 			}
-			pick := rand.Float64() * total
+			pick := e.random.Float64() * total
 			idx := 0
 			for i, m := range out {
 				w := m.Weight
@@ -111,7 +110,7 @@ func (e *Engine) orderCredentials(providerID string, pool domain.CredentialPool)
 			}
 		}
 	case domain.CredentialRandom:
-		rand.Shuffle(len(keys), func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
+		e.random.Shuffle(len(keys), func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
 	}
 	return keys
 }

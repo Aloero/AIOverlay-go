@@ -1,4 +1,4 @@
-# Architecture · 0.2.7
+# Architecture · 0.2.8
 
 Production: native Win32 overlay + embedded WebView2 Studio + Go execution engine.
 Studio HTML/CSS/JS is compiled into the executable; its JSON requests call the existing handlers in-process via `internal/desktop/bridge.go`. A development HTTP listener is used only with `--headless`.
@@ -59,7 +59,7 @@ Frontend modules: app.js retains common UI and catalog/trace rendering; connecti
 
 A hidden or iconic Studio is not hidden/restored during capture. Only a visible non-iconic window is temporarily hidden. The GDI capture and native overlay privacy path remain unchanged.
 
-Schema remains version 1, with optional additive fields. Strict unknown-field rejection is retained from 0.2.2; general forward-preserving migrations are not implemented by this change. Configs using new fields require a version of the application that understands them.
+Historical 0.2.3–0.2.5 used schema 1. This was superseded by forward-preserving schema 2 in 0.2.6 and independent scheduling schema 3 in 0.2.7; 0.2.8 retains schema 3 and both migration paths.
 
 
 ## Audit stabilization · 0.2.6
@@ -94,3 +94,14 @@ Connection probes are confirmed single-model/key jobs with their own trace purpo
 ExecutionTrace now snapshots pipeline name, configuration revision, purpose and effective global budget; live JobManager receives that snapshot before events. Public snapshots are deep-copied and unrelated unknown budget fields are not included in execution traces. Credential status exposes IDs/outcomes/times only, not secrets.
 
 Frontend responsibilities are split: studio-workspace owns applied/draft state, bounded in-memory undo and panel/search controls; schedule-view, pool-plan and simulation-view own dispatch editing/planning/rehearsal; connection-hub and catalog-view own discovery/routes/shortcuts/consented probes; model-settings handles inherited limits; vpn-view handles compact profile editing/import/verification; run-insights presents summaries and timing without replacing the raw trace. Original capture, native lifecycle, authorization and draft-close safeguards remain in their existing layers.
+
+
+## Studio contract corrections · 0.2.8
+
+`control.JobManager` uses a separate admission/settings mutex from its progress mutex. Full config, provider, import and activation commands cannot race a preparing screenshot. Cancellation and snapshots do not wait on configuration I/O.
+
+`engine/input_context.go` computes bounded graph input states for previews. Execution and virtual simulation preserve the same previous-output rule for catalog modality. Mixed success/error paths produce an explicit conditional preview. Each engine owns a private locked random source; preview/simulation instances cannot consume a live random choice.
+
+Terminal trace fields describe the graph, not its last intermediate success. Structured plan IDs account for candidates/actual attempted slots/untried slots per visit. Edge IDs and typed cancellation/budget reasons support UI navigation without parsing provider error strings. Worker completion precedes summary generation.
+
+`engine.PromptSnapshot` and `control/prompt_history.go` form an opt-in inspection boundary: bounded/redacted text values, no image bytes and no automatic trace/job exposure. `prompt-preview.js` loads these only on explicit user action. `app/recent_models.go` records actual model references and persists them via the existing config save/exit lifecycle. User-edit history remains WebView-session-only.

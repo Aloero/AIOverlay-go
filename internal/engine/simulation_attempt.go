@@ -32,14 +32,14 @@ func (s *simulator) admit(n domain.Node, c *simChain) error {
 				c.repeats = 0
 				continue
 			}
-			s.emit(domain.TraceEvent{Kind: "budget_exhausted", NodeID: n.ID, Message: err.Error()})
+			s.emit(domain.TraceEvent{Kind: "budget_exhausted", NodeID: n.ID, BudgetScope: budgetScope(err), Message: err.Error()})
 			return err
 		}
 		if c.repeats == 0 {
 			c.keysTried++
 		}
 		c.repeats++
-		c.ref = &domain.AttemptRef{ID: fmt.Sprintf("sim-%d", s.r.calls.Load()), ProviderID: c.model.ProviderID, ModelID: c.model.ModelID, CredentialID: k.ID, CredentialAlias: k.Label, Transport: "Direct"}
+		c.ref = &domain.AttemptRef{ID: fmt.Sprintf("sim-%d", s.r.calls.Load()), SlotID: c.model.ID, ProviderID: c.model.ProviderID, ModelID: c.model.ModelID, CredentialID: k.ID, CredentialAlias: k.Label, Transport: "Direct"}
 		if c.ref.CredentialAlias == "" {
 			c.ref.CredentialAlias = k.ID
 		}

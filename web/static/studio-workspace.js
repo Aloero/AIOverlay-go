@@ -16,6 +16,10 @@ class DraftHistory {
  }
  move(config,direction){const from=direction==='undo'?this.undoStack:this.redoStack,to=direction==='undo'?this.redoStack:this.undoStack;if(!from.length)return false;to.push(this.current);this.current=from.pop();Object.assign(config,JSON.parse(this.current));this.lastKey='';return true;}
 }
+function flushFocusedEditor(){
+ const el=document.activeElement;
+ if(el?.isConnected&&el.matches('input,textarea,select'))el.dispatchEvent(new Event('change',{bubbles:true}));
+}
 const draftHistory=new DraftHistory();
 let appliedConfig=null,appliedJSON='',workspaceInfo=null,workspaceInfoAt=0,workspaceInfoPromise=null;
 function configDigest(c){return JSON.stringify(c);}
@@ -38,7 +42,7 @@ function updateApplyState(){
  const save=$('#saveConfig');if(save){save.disabled=!!savePromise||!!state.job?.running;save.title=state.job?.running?'Сначала остановите текущий запрос. Черновик можно редактировать.':'Сохранить config.json и применить к следующему снимку (Ctrl+S)';}
  const applied=appliedConfig?.pipelines.find(p=>p.id===appliedConfig.active_pipeline_id),summary=$('#appliedSummary');
  if(summary){summary.textContent='Следующий снимок: '+(applied?.name||'—');summary.title='Оверлей использует сохранённую конфигурацию, а не открытый черновик.';}
- const hint=$('#applyHint');if(hint){hint.textContent=dirtyNow?(state.job?.running?'Запрос выполняется. Применение доступно после завершения.':'Изменения ещё не применены.'):'Сохранённая конфигурация';hint.classList.toggle('warning-text',dirtyNow);}
+ const hint=$('#applyHint');if(hint){hint.textContent=state.job?.running?'Запрос выполняется. Применение доступно после завершения.':dirtyNow?'Изменения ещё не применены.':'Сохранённая конфигурация';hint.classList.toggle('warning-text',dirtyNow);}
  const current=$('#currentExecution');if(current){const tr=state.job?.trace;current.textContent=state.job?.running?'Сейчас: '+(tr?.pipeline_name||'подготовка')+(tr?.config_revision?' · r'+tr.config_revision:''):'';current.hidden=!state.job?.running;}
  if($('#undoDraft'))$('#undoDraft').disabled=!draftHistory.undoStack.length||!!savePromise||!!dialogDraft;
  if($('#redoDraft'))$('#redoDraft').disabled=!draftHistory.redoStack.length||!!savePromise||!!dialogDraft;
@@ -77,7 +81,7 @@ function moveDraftHistory(direction){
 async function restoreSavedDraft(){
  if(!await settleDialog())return;
  if(!confirm('Отбросить черновик и загрузить сохранённые настройки? Выполненные AI-запросы и история не отменяются.'))return;
- const c=normalizeConfig(await api('/api/config'));state.config=c;state.pipeline=c.active_pipeline_id;state.node=null;state.edge=null;configRevision++;markApplied(c);saved();renderPage();hydrateMetadata();applyWorkspaceLayout();
+ const revision=configRevision;const c=normalizeConfig(await api('/api/config'));if(configRevision!==revision){notify('Появились новые правки. Черновик не заменён.');return;}state.config=c;state.pipeline=c.active_pipeline_id;state.node=null;state.edge=null;configRevision++;markApplied(c);saved();renderPage();hydrateMetadata();applyWorkspaceLayout();
 }
 function acknowledgeProviderSave(p){
  if(appliedConfig){const index=appliedConfig.providers.findIndex(x=>x.id===p.id);if(index<0)appliedConfig.providers.push(copy(p));else appliedConfig.providers[index]=copy(p);appliedJSON=configDigest(appliedConfig);}
@@ -133,11 +137,21 @@ async function openSettingSearch(){
 }
 async function openSettingTarget(t){
  if($('#dialog').open&&!await closeModal())return;
+ flushFocusedEditor();
  if(t.pipelineID&&state.config.pipelines.some(p=>p.id===t.pipelineID))state.pipeline=t.pipelineID;
  state.page=t.page||'pipelines';state.edge=null;
- if(state.page==='pipelines'){state.node=t.nodeID||selectedNode()?.id||pipe().nodes.find(n=>n.model_pool)?.id;state.tab=t.tab||'models';}
+ if(state.page==='pipelines'){
+  state.node=t.nodeID||selectedNode()?.id||pipe().nodes.find(n=>n.model_pool)?.id;state.tab=t.tab||'models';
+  if(t.edgeID){if(!pipe().edges.some(e=>e.id===t.edgeID)){notify('Эта связь удалена из текущей конфигурации. История не изменена.');return;}state.edge=t.edgeID;}
+ }
  renderPage();applyWorkspaceLayout();
- const el=t.field?$('#'+t.field):null;if(el){for(let p=el.parentElement;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;el.scrollIntoView?.({block:'nearest'});el.focus();el.classList.add('setting-highlight');setTimeout(()=>el.classList.remove('setting-highlight'),1600);}
+ if(t.providerID){const p=provider(t.providerID);if(!p){notify('Подключение удалено из текущей конфигурации.');return;}providerDialog(p);return;}
+ let el=t.field?$('#'+t.field):null;
+ if(!el&&t.field==='sourceFloor'){state.tab='budget';renderInspector();el=$('#pQuality');}
+ if(el){for(let p=el.parentElement;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;
+  const target=el.hidden?(el.parentElement.querySelector('.inherit-toggle')||el.parentElement):el;
+  target.scrollIntoView?.({block:'nearest'});target.focus();target.classList.add('setting-highlight');setTimeout(()=>target.classList.remove('setting-highlight'),1600);
+ }
 }
 async function openAboutStudio(){
  if($('#dialog').open&&!await closeModal())return;

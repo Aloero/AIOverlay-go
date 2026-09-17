@@ -33,6 +33,8 @@ type nodeValue struct {
 	hasOutput bool
 }
 type runner struct {
+	lastNode      string
+	lastOutcome   domain.Outcome
 	redact        redactor
 	traceMu       sync.Mutex
 	callbackMu    sync.Mutex
@@ -111,6 +113,7 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 		if !ok {
 			return "", fmt.Errorf("node %q not found", nodeID)
 		}
+		r.lastNode = n.ID
 		var out nodeValue
 		outcome := domain.OutcomeSuccess
 		var err error
@@ -132,6 +135,8 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 			outcome = domain.OutcomeInvalidResponse
 			err = fmt.Errorf("unsupported node type %s", n.Type)
 		}
+		r.lastOutcome = outcome
+		r.emit(domain.TraceEvent{Kind: "node_end", NodeID: n.ID, Outcome: outcome})
 		next, ok := r.nextEdge(n.ID, outcome)
 		if !ok {
 			if err != nil {
@@ -142,7 +147,7 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 			}
 			return "", fmt.Errorf("node %s has no edge for outcome %s", n.ID, outcome)
 		}
-		r.emit(domain.TraceEvent{Kind: "transition", NodeID: n.ID, Outcome: outcome, Message: next.To})
+		r.emit(domain.TraceEvent{Kind: "transition", NodeID: n.ID, EdgeID: next.ID, Outcome: outcome, Message: next.To})
 		r.edgeVisits[next.ID]++
 		if r.edgeVisits[next.ID] > next.MaxVisits {
 			return "", fmt.Errorf("edge %s max_visits exceeded", next.ID)

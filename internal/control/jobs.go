@@ -34,10 +34,12 @@ type Job struct {
 }
 
 type JobManager struct {
-	mu     sync.Mutex
-	job    Job
-	cancel context.CancelFunc
-	done   chan struct{}
+	admission sync.Mutex
+	prompts   []engine.PromptSnapshot
+	mu        sync.Mutex
+	job       Job
+	cancel    context.CancelFunc
+	done      chan struct{}
 }
 
 func (j *JobManager) Snapshot() Job {
@@ -91,23 +93,27 @@ func (j *JobManager) startTask(parent context.Context, pipeline string, run func
 	return j.startTaskPurpose(parent, pipeline, "pipeline", run)
 }
 func (j *JobManager) startTaskPurpose(parent context.Context, pipeline, purpose string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
+	j.admission.Lock()
+	defer j.admission.Unlock()
 	j.mu.Lock()
 	if j.job.Running {
 		j.mu.Unlock()
 		return "", fmt.Errorf("a run is already active; stop it first")
 	}
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancelCause(parent)
 	id := fmt.Sprintf("run-%d", time.Now().UnixNano())
 	done := make(chan struct{})
 	j.job = Job{Purpose: purpose, ID: id, Running: true, Phase: "preparing", Started: time.Now(), Trace: domain.ExecutionTrace{PipelineID: pipeline, Events: []domain.TraceEvent{}}}
-	j.cancel = cancel
+	j.prompts = nil
+	j.cancel = func() { cancel(engine.ErrUserCancelled) }
 	j.done = done
 	j.mu.Unlock()
 	go func() {
-		defer cancel()
+		defer cancel(nil)
 		defer close(done)
 		opt := engine.RunOptions{
-			Purpose: purpose,
+			OnPrompt: func(p engine.PromptSnapshot) { j.rememberPrompt(id, p) },
+			Purpose:  purpose,
 			OnStart: func(tr domain.ExecutionTrace) {
 				j.mu.Lock()
 				defer j.mu.Unlock()
@@ -165,6 +171,7 @@ func (j *JobManager) Clear() {
 		j.job.CancelRequested = true
 		j.cancel()
 	}
+	j.prompts = nil
 	j.job.Cleared = true
 	j.job.Text = ""
 	j.job.Error = ""

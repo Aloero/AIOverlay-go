@@ -29,7 +29,8 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 	}
 	gate := &streamGate{runner: r, silent: ctx.Value(silentKey{}) == true}
 	ctx = context.WithValue(ctx, streamKey{}, gate)
-	models := r.planPool(n, *pool, modelInput)
+	ctx = context.WithValue(ctx, planKey{}, newID("plan"))
+	models := r.planPool(ctx, n, *pool, modelInput)
 	if len(models) == 0 {
 		return nodeValue{}, domain.OutcomeModelUnavailable, fmt.Errorf("pool %s has no enabled quality-approved models", n.ID)
 	}
@@ -75,8 +76,8 @@ func (r *runner) racePool(ctx context.Context, n domain.Node, pool domain.ModelP
 		outcome domain.Outcome
 		err     error
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	ch := make(chan rr, len(models))
 	maxParallel := min(pool.MaxParallel, cap(r.sem))
 	if maxParallel <= 0 {
@@ -92,7 +93,7 @@ func (r *runner) racePool(ctx context.Context, n domain.Node, pool domain.ModelP
 		if delay > 0 && active > 0 {
 			kind = "hedge_start"
 		}
-		r.emit(domain.TraceEvent{Kind: kind, NodeID: n.ID, Attempt: &domain.AttemptRef{ProviderID: m.ProviderID, ModelID: m.ModelID}, Message: "Waiting for admission; attempt_start counts the actual model call."})
+		r.emit(domain.TraceEvent{Kind: kind, NodeID: n.ID, PlanID: executionPlanID(ctx), Attempt: &domain.AttemptRef{ProviderID: m.ProviderID, ModelID: m.ModelID}, Message: "Waiting for admission; attempt_start counts the actual model call."})
 		active++
 		r.workers.Add(1)
 		go func() {
@@ -127,7 +128,7 @@ func (r *runner) racePool(ctx context.Context, n domain.Node, pool domain.ModelP
 			active--
 			if got.err == nil {
 				r.commit(ctx, n, got.slot, got.text)
-				cancel()
+				cancel(errRaceWon)
 				input.text = got.text
 				input.hasOutput = true
 				if input.vision == "" && len(input.image) > 0 {

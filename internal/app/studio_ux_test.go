@@ -110,3 +110,36 @@ func TestStudioConfirmedProbeDoesNotChangeActivePipeline(t *testing.T) {
 		t.Fatal(info)
 	}
 }
+
+func TestStudioCannotApplySettingsDuringCapturePreparation(t *testing.T) {
+	a := studioTestApp(t)
+	s := control.New("127.0.0.1:0", a)
+	started, release := make(chan struct{}), make(chan struct{})
+	s.Capture = func() ([]byte, error) { close(started); <-release; return []byte("fixture-frame"), nil }
+	if _, err := s.StartScreen(); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	defer func() {
+		s.CancelRun()
+		close(release)
+		until := time.Now().Add(time.Second)
+		for s.CurrentJob().Running && time.Now().Before(until) {
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	cfg := a.GetConfig()
+	before := cfg.Overlay.FontSize
+	cfg.Overlay.FontSize++
+	for _, request := range []struct {
+		method, path string
+		body         any
+	}{
+		{"PUT", "/api/config", cfg}, {"POST", "/api/config/import", cfg}, {"POST", "/api/providers/config", cfg.Providers[0]}, {"POST", "/api/pipelines/active", map[string]string{"id": cfg.Pipelines[1].ID}},
+	} {
+		reply := studioCall(t, s.DesktopHandler(), request.method, request.path, request.body)
+		if reply.Code != 409 || a.GetConfig().Overlay.FontSize != before || a.GetConfig().ActivePipelineID != cfg.ActivePipelineID {
+			t.Fatalf("capture accepted %s: HTTP %d", request.path, reply.Code)
+		}
+	}
+}

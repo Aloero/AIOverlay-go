@@ -94,7 +94,9 @@ function selectField(label, name, values, selected, help = '') {
 }
 function bindValue(id, object, key, numeric = false, after) {
  const el = $('#'+id); if (!el) return;
- el.addEventListener('change', () => {object[key] = numeric ? finite(el.value) : el.value; dirty(); if (after) after();});
+ const assign=()=>{const value=numeric?finite(el.value):el.value;if(object[key]!==value){object[key]=value;dirty();}};
+ el.addEventListener('input',assign);
+ el.addEventListener('change',()=>{assign();if(after)after();});
 }
 function modal(title, html, eyebrow = 'PIPELINE STUDIO') {
  $('#dialogTitle').textContent = title; $('#dialogEyebrow').textContent = eyebrow; $('#dialogBody').innerHTML = html;
@@ -145,12 +147,15 @@ async function boot() {
 
 async function saveConfig() {
  if (!state.config) return;
+ flushFocusedEditor();
  if(state.job?.running)throw new Error('Запрос выполняется. Черновик сохранится после остановки или завершения запроса.');
  if(dialogDraft?.saving)await dialogDraft.saving;
  if(savePromise){await savePromise;if(state.dirty)return saveConfig();return;}
  const button=$('#saveConfig'),revision=configRevision,snapshot=copy(state.config);button.disabled=true;
  savePromise=(async()=>{
   const reply=await api('/api/config','PUT',snapshot);if(reply.version){state.config.version=reply.version;snapshot.version=reply.version;}
+  if(reply.recent_models){snapshot.control_center.recent_models=reply.recent_models;
+   state.config.control_center.recent_models=configRevision===revision?copy(reply.recent_models):[...new Set([...state.config.control_center.recent_models,...reply.recent_models])].slice(0,30);}
   markApplied(snapshot);
   if(configRevision===revision)saved();
   notify(configRevision===revision?'Сохранено.':'Сохранено. Более новые изменения остаются в черновике.');
@@ -201,7 +206,7 @@ function arrange() {
 
 function renderGraph() {
  const p = pipe(), root = $('#graphNodes'); if (!root) return;
- root.innerHTML = p.nodes.map((n,i)=>graphNodeMarkup(n,i,p)).join('');
+ const primary=primaryRouteNodes(p);root.innerHTML = p.nodes.map((n,i)=>graphNodeMarkup(n,i,p,primary)).join('');
  applyViewport();
  $$('.node').forEach(el => {
   el.onpointerdown = e => {
@@ -375,7 +380,7 @@ function updateOutput() {
  $('#outputMeta').textContent=who ? (j.running?'trying · ':'')+who.provider_id+' / '+shortModel(who.model_id) : '';
 }
 
-const traceEventNames={pool_plan:'План этапа',candidates_skipped:'Пропущено при отборе',candidate_start:'Кандидат',hedge_start:'Старт резерва',attempt_start:'START',first_token:'FIRST TOKEN',attempt_end:'Завершение попытки',candidate_end:'Результат кандидата',budget_exhausted:'Бюджет исчерпан',winner:'WINNER',buffered:'Полный ответ',http_status:'HTTP',transition:'Переход',effective_limits:'Лимиты попытки',worker_cleanup_timeout:'Нет подтверждения отмены',edge:'Переход'};
+const traceEventNames={node_end:'Завершение этапа',pool_end:'Итог очереди',pool_plan:'План этапа',candidates_skipped:'Пропущено при отборе',candidate_start:'Кандидат',hedge_start:'Старт резерва',attempt_start:'START',first_token:'FIRST TOKEN',attempt_end:'Завершение попытки',candidate_end:'Результат кандидата',budget_exhausted:'Бюджет исчерпан',winner:'WINNER',buffered:'Полный ответ',http_status:'HTTP',transition:'Переход',effective_limits:'Лимиты попытки',worker_cleanup_timeout:'Нет подтверждения отмены',edge:'Переход'};
 function traceTable(events) {
  return `<div class="table-wrap"><table class="trace-table"><thead><tr><th>+ С</th><th>ЭТАП / МОДЕЛЬ</th><th>ТРАНСПОРТ / КЛЮЧ</th><th>СОБЫТИЕ</th><th>ИСХОД / HTTP</th><th>TTFT</th><th>ВРЕМЯ</th><th>ТОКЕНЫ / TPS</th></tr></thead><tbody>${events.map(e=>`<tr><td class="mono">${(e.at_ms/1000).toFixed(2)}</td><td><small>${esc(e.node_id||'')}</small><span class="mono">${esc(e.attempt?.model_id||'')}</span></td><td><small>${esc(e.attempt?.transport||'')}${e.attempt?.provider_id?' · '+esc(e.attempt.provider_id):''}</small>${esc(e.attempt?.credential_alias||e.attempt?.credential_id||'')}</td><td>${esc(traceEventNames[e.kind]||e.kind)}${e.message?`<details class="trace-detail"><summary>Подробности</summary><div>${esc(e.message)}</div></details>`:''}</td><td>${esc(outcomeNames[e.outcome]||e.outcome||'')}${e.http_status?' · '+e.http_status:''}</td><td class="mono">${e.ttft_ms?(e.ttft_ms/1000).toFixed(2)+'s':'—'}</td><td class="mono">${e.duration_ms?(e.duration_ms/1000).toFixed(2)+'s':'—'}</td><td class="mono">${e.output_tokens||'—'} / ${e.tps?Number(e.tps).toFixed(1):'—'}</td></tr>`).join('')}</tbody></table></div>`;
 }

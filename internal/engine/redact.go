@@ -74,8 +74,11 @@ func (r redactor) event(ev domain.TraceEvent) domain.TraceEvent {
 	ev = domain.CloneTraceEvent(ev)
 	ev.Message = r.text(ev.Message)
 	ev.NodeID = r.text(ev.NodeID)
+	ev.EdgeID = r.text(ev.EdgeID)
+	ev.PlanID = r.text(ev.PlanID)
 	if a := ev.Attempt; a != nil {
 		a.ID = r.text(a.ID)
+		a.SlotID = r.text(a.SlotID)
 		a.ProviderID = r.text(a.ProviderID)
 		a.ModelID = r.text(a.ModelID)
 		a.CredentialID = r.text(a.CredentialID)

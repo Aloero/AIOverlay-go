@@ -21,9 +21,12 @@ func (s *simulator) pool(n domain.Node, input nodeValue) (nodeValue, domain.Outc
 		}
 		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true}
 	}
-	plan := PlanPool(s.req.Config, s.r.engine.catalog, *p, len(modelInput.image) > 0)
+	oldPlan := s.planID
+	s.planID = fmt.Sprintf("sim-plan-%d", len(s.r.trace.Events))
+	defer func() { s.planID = oldPlan }()
+	plan := PlanPool(s.req.Config, s.r.engine.catalog, *p, len(modelInput.image) > 0 && !modelInput.hasOutput)
 	models := s.r.engine.orderPoolModels(s.r.pipeline.ID+"/"+n.ID, *p, plan.Candidates)
-	s.emit(domain.TraceEvent{Kind: "pool_plan", NodeID: n.ID, Message: fmt.Sprintf("source=%s; candidates=%d; order=%s; dispatch=%s", plan.Mode, len(models), p.EffectiveOrder(), p.EffectiveDispatch())})
+	s.emit(domain.TraceEvent{Kind: "pool_plan", NodeID: n.ID, CandidateCount: len(models), Message: fmt.Sprintf("source=%s; candidates=%d; order=%s; dispatch=%s", plan.Mode, len(models), p.EffectiveOrder(), p.EffectiveDispatch())})
 	reasons := make([]string, 0, len(plan.Skipped))
 	for reason := range plan.Skipped {
 		reasons = append(reasons, reason)

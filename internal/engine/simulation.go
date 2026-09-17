@@ -48,6 +48,7 @@ type simulator struct {
 	modelAttempts map[string]int
 	report        SimulationReport
 	steps         int
+	planID        string
 	halted        bool
 }
 type simChain struct {
@@ -103,6 +104,7 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 		if !ok {
 			return SimulationReport{}, fmt.Errorf("unknown simulation node")
 		}
+		s.r.lastNode = n.ID
 		outcome := domain.OutcomeSuccess
 		out := value
 		var err error
@@ -120,6 +122,8 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 		default:
 			return SimulationReport{}, fmt.Errorf("unsupported simulation node")
 		}
+		s.r.lastOutcome = outcome
+		s.emit(domain.TraceEvent{Kind: "node_end", NodeID: n.ID, Outcome: outcome})
 		edge, ok := s.r.nextEdge(n.ID, outcome)
 		if !ok {
 			if err != nil {
@@ -129,7 +133,7 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 			}
 			break
 		}
-		s.emit(domain.TraceEvent{Kind: "transition", NodeID: n.ID, Outcome: outcome, Message: edge.To})
+		s.emit(domain.TraceEvent{Kind: "transition", NodeID: n.ID, EdgeID: edge.ID, Outcome: outcome, Message: edge.To})
 		s.r.edgeVisits[edge.ID]++
 		s.now += int64(edge.DelayMS)
 		nodeID = edge.To
@@ -147,6 +151,15 @@ func (s *simulator) finish() {
 	s.report.Trace.FinishedAt = s.report.Trace.StartedAt.Add(time.Duration(s.now) * time.Millisecond)
 	s.report.Error = s.r.redact.text(s.report.Error)
 	s.report.Text = s.r.redact.text(s.report.Text)
+	for _, event := range poolCompletionEvents(s.report.Trace.Events) {
+		event.AtMS = s.now
+		s.report.Trace.Events = append(s.report.Trace.Events, event)
+	}
+	var err error
+	if s.report.Error != "" {
+		err = fmt.Errorf("%s", s.report.Error)
+	}
+	finishTrace(&s.report.Trace, err, context.Cause(s.ctx), s.r.lastNode, s.r.lastOutcome, s.r.redact)
 	s.report.Trace = domain.CloneTrace(s.report.Trace)
 }
 func simulationOutcome(o domain.Outcome) bool {
@@ -172,6 +185,7 @@ func (s *simulator) check() error {
 }
 func (s *simulator) emit(ev domain.TraceEvent) {
 	ev.AtMS = s.now
+	ev.PlanID = s.planID
 	ev = s.r.redact.event(ev)
 	s.r.trace.Events = append(s.r.trace.Events, domain.CloneTraceEvent(ev))
 }

@@ -148,6 +148,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 		w.Write(data)
 	})
 	mux.HandleFunc("/api/prompts/preview", s.handlePromptPreview)
+	mux.HandleFunc("/api/prompts/last", s.handleLastPrompts)
 	mux.HandleFunc("/api/job", s.handleJob)
 	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -187,11 +188,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if err := s.backend.SaveConfig(cfg); err != nil {
-			http.Error(w, err.Error(), 400)
+		if err := s.saveConfiguration(cfg); err != nil {
+			settingsError(w, err, 400)
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "version": s.backend.GetConfig().Version})
+		writeJSON(w, map[string]any{"ok": true, "version": s.backend.GetConfig().Version, "recent_models": s.backend.GetConfig().ControlCenter.RecentModels})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -211,8 +212,8 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if err := s.backend.SaveConfig(cfg); err != nil {
-		http.Error(w, err.Error(), 400)
+	if err := s.saveConfiguration(cfg); err != nil {
+		settingsError(w, err, 400)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})

@@ -328,6 +328,10 @@ func (m ModelMeta) HasImageInput() bool {
 func (m ModelMeta) TextOnly() bool { return !m.HasImageInput() }
 
 type ExecutionTrace struct {
+	Outcome        Outcome         `json:"outcome,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	FailureNodeID  string          `json:"failure_node_id,omitempty"`
+	CancelReason   string          `json:"cancel_reason,omitempty"`
 	PipelineName   string          `json:"pipeline_name,omitempty"`
 	ConfigRevision uint64          `json:"config_revision,omitempty"`
 	Budget         ExecutionBudget `json:"budget"`
@@ -341,6 +345,7 @@ type ExecutionTrace struct {
 }
 
 type AttemptRef struct {
+	SlotID          string `json:"slot_id,omitempty"`
 	ID              string `json:"id,omitempty"`
 	ProviderID      string `json:"provider_id"`
 	ModelID         string `json:"model_id"`
@@ -350,16 +355,23 @@ type AttemptRef struct {
 }
 
 type TraceEvent struct {
-	AtMS         int64       `json:"at_ms"`
-	Kind         string      `json:"kind"`
-	NodeID       string      `json:"node_id,omitempty"`
-	Attempt      *AttemptRef `json:"attempt,omitempty"`
-	Outcome      Outcome     `json:"outcome,omitempty"`
-	Message      string      `json:"message,omitempty"`
-	TTFTMS       int64       `json:"ttft_ms,omitempty"`
-	DurationMS   int64       `json:"duration_ms,omitempty"`
-	InputTokens  int         `json:"input_tokens,omitempty"`
-	OutputTokens int         `json:"output_tokens,omitempty"`
-	TPS          float64     `json:"tps,omitempty"`
-	HTTPStatus   int         `json:"http_status,omitempty"`
+	PlanID          string      `json:"plan_id,omitempty"`
+	EdgeID          string      `json:"edge_id,omitempty"`
+	BudgetScope     string      `json:"budget_scope,omitempty"`
+	CancelReason    string      `json:"cancel_reason,omitempty"`
+	CandidateCount  int         `json:"candidate_count,omitempty"`
+	AttemptedModels int         `json:"attempted_models,omitempty"`
+	UntriedModels   int         `json:"untried_models,omitempty"`
+	AtMS            int64       `json:"at_ms"`
+	Kind            string      `json:"kind"`
+	NodeID          string      `json:"node_id,omitempty"`
+	Attempt         *AttemptRef `json:"attempt,omitempty"`
+	Outcome         Outcome     `json:"outcome,omitempty"`
+	Message         string      `json:"message,omitempty"`
+	TTFTMS          int64       `json:"ttft_ms,omitempty"`
+	DurationMS      int64       `json:"duration_ms,omitempty"`
+	InputTokens     int         `json:"input_tokens,omitempty"`
+	OutputTokens    int         `json:"output_tokens,omitempty"`
+	TPS             float64     `json:"tps,omitempty"`
+	HTTPStatus      int         `json:"http_status,omitempty"`
 }

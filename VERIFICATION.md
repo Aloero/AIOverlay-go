@@ -1,10 +1,10 @@
-# Verification · AIOverlay-go 0.2.7
+# Verification · AIOverlay-go 0.2.8
 
 Host: Linux amd64. Target: Windows 10/11 x64. Date: 2026-09-17. This document separates executed automation from Windows desktop acceptance. The underlying 0.2.5 project and Git history have been preserved; changes address the audit baseline `261f569`.
 
 ## Executed checks
 
-The repaired working tree passed `go test ./... -count=1`: **172 test/subtest pass events, 0 failures**. Two sing-box integration tests are skipped in this ordinary environment-only run because they require an explicit host binary. They were also executed separately using the verified Linux sing-box 1.14.1 test runtime, **five consecutive runs**, including generated config check, preserved DNS dependencies, IPv4 endpoint policy, authenticated local proxy readiness/reuse and shutdown. No external tunnel server or provider account was contacted.
+The repaired working tree passed `go test ./... -count=1`: **194 test/subtest pass events, 0 failures**. Two sing-box integration tests are skipped in this ordinary environment-only run because they require an explicit host binary. They were also executed separately using the verified Linux sing-box 1.14.1 test runtime, **five consecutive runs**, including generated config check, preserved DNS dependencies, IPv4 endpoint policy, authenticated local proxy readiness/reuse and shutdown. No external tunnel server or provider account was contacted.
 
 `go vet ./...`, Windows-target vet and Windows x64 CGO-disabled cross-build passed. Race detection across the Go packages passed with the available Zig C compiler. The release command repeats critical engine/providers/app/control/desktop/platform/tunnel/hotkey tests 20 times and records the result rather than assuming the previous run applies. Per-command logs are in `releases/verification/` after release generation.
 
@@ -60,3 +60,12 @@ Confirmed connection tests are exercised with mock Go providers: exactly one ada
 VLESS, Hysteria2/hy2 and Trojan import fixtures are checked with the real Linux sing-box binary when explicitly enabled, including WebSocket and gRPC profiles. Unsupported/duplicate/conflicting link parameters are rejected without returning URI secrets. The separate HTTPS connection-test button is consent-tested with a browser fixture; no live VPN server, external HTTPS probe or cloud model request was sent during this verification.
 
 The source tree keeps the local user config excluded. Release version/build identity comes from the public schema-3 example; the private user's prior schema-2 config is not overwritten by this development operation. See STUDIO_UX.md for user-visible semantics and limitations.
+
+
+## Studio follow-up review 0.2.8
+
+The additional `studio-review.cjs` suite passed **14 scenarios**, with zero JavaScript errors and no model/capture/probe requests. It covers focused Ctrl+S, edge save and undo/redo, changing inherited-limit labels, the VLM cursor key, terminal graph failure, exact history actions without activation, explicit-only last prompt loading, actual recent usage, smaller reserve nodes, nested trace disclosures, untried counts and compact viewport bounds. The previous DOM 23, lifecycle 6, Chromium 45 and UX 56 suites remain in the runner and passed too.
+
+New Go regressions cover all 12 order/dispatch combinations with concurrency limits, real/simulated VLM-to-text-catalog agreement, graph-aware input states, final Validator failure metadata, untried models independent of retries, private-RNG preview isolation, redacted/non-trace prompt snapshots, bounded last-run retention and late-clear protection, actual usage persistence, and all four configuration mutation routes during blocked screenshot preparation. The latter test reproduced a HTTP 200 settings change during an active capture on 0.2.7, and now expects HTTP 409 with unchanged configuration.
+
+The versioned `UX_REVIEW.md` maps all nine requested UX areas to behavior and evidence. New native platform behavior is not inferred from Linux UI checks. The private user config is hash-checked before/after this work; it is not the safe release template. Config schema remains 3.

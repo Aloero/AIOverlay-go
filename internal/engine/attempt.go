@@ -13,6 +13,13 @@ import (
 
 func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.ModelPoolConfig, input nodeValue, m domain.ModelSlot, p providers.Provider, key domain.Credential) (string, domain.Outcome, error) {
 
+	emit := func(ev domain.TraceEvent) {
+		ev.PlanID = executionPlanID(ctx)
+		if ev.Outcome == domain.OutcomeCancelled {
+			ev.CancelReason = cancellationReason(ctx)
+		}
+		r.emit(ev)
+	}
 	select {
 	case r.sem <- struct{}{}:
 		defer func() { <-r.sem }()
@@ -23,7 +30,7 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 		return "", domain.OutcomeCancelled, ctx.Err()
 	}
 	if err := r.admit(n, pool, m, key); err != nil {
-		r.emit(domain.TraceEvent{Kind: "budget_exhausted", NodeID: n.ID, Message: err.Error()})
+		emit(domain.TraceEvent{Kind: "budget_exhausted", NodeID: n.ID, BudgetScope: budgetScope(err), Message: err.Error()})
 		return "", domain.OutcomeCancelled, err
 	}
 	started := time.Now()
@@ -35,17 +42,17 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 			gate.release(attemptID)
 		}
 	}()
-	attempt := &domain.AttemptRef{ID: attemptID, ProviderID: m.ProviderID, ModelID: m.ModelID, CredentialID: key.ID, CredentialAlias: key.Label, Transport: "Direct"}
+	attempt := &domain.AttemptRef{ID: attemptID, SlotID: m.ID, ProviderID: m.ProviderID, ModelID: m.ModelID, CredentialID: key.ID, CredentialAlias: key.Label, Transport: "Direct"}
 	if pc, ok := findProvider(r.engine.cfg, m.ProviderID); ok && pc.Kind == domain.ProviderEmbeddedOpenCode {
 		attempt.Transport = "Via OpenCode"
 	}
 	if attempt.CredentialAlias == "" {
 		attempt.CredentialAlias = key.ID
 	}
-	r.emit(domain.TraceEvent{Kind: "attempt_start", NodeID: n.ID, Attempt: attempt, Message: fmt.Sprintf("priority=%d", m.Priority)})
+	emit(domain.TraceEvent{Kind: "attempt_start", NodeID: n.ID, Attempt: attempt, Message: fmt.Sprintf("priority=%d", m.Priority)})
 	pc, _ := findProvider(r.engine.cfg, m.ProviderID)
 	limits := ResolveLimits(m, r.pipeline.Budget, pc.RequestDefaults)
-	r.emit(domain.TraceEvent{Kind: "effective_limits", NodeID: n.ID, Attempt: attempt, Message: fmt.Sprintf("connect=%dms; first_token=%dms; response=%dms; idle=%dms; output_tokens=%d", limits.ConnectMS, limits.FirstTokenMS, limits.ResponseMS, limits.IdleMS, limits.MaxOutputTokens)})
+	emit(domain.TraceEvent{Kind: "effective_limits", NodeID: n.ID, Attempt: attempt, Message: fmt.Sprintf("connect=%dms; first_token=%dms; response=%dms; idle=%dms; output_tokens=%d", limits.ConnectMS, limits.FirstTokenMS, limits.ResponseMS, limits.IdleMS, limits.MaxOutputTokens)})
 	respTimeout := durationMS(limits.ResponseMS)
 	actx, cancel := context.WithTimeout(ctx, respTimeout)
 	defer cancel()
@@ -53,6 +60,12 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	user := RenderPrompt(pool.Prompt.User, values)
 	system := RenderPrompt(pool.Prompt.System, values)
 	req := providers.Request{ProviderID: m.ProviderID, ModelID: m.ModelID, SystemPrompt: system, UserPrompt: user, ImageJPEG: input.image, TextInput: input.text, MaxOutputTokens: limits.MaxOutputTokens, ConnectTimeout: durationMS(limits.ConnectMS), FirstTokenTimeout: durationMS(limits.FirstTokenMS), ResponseTimeout: respTimeout, StreamIdleTimeout: durationMS(limits.IdleMS)}
+	if r.opt.OnPrompt != nil {
+		snapshot := BoundPromptSnapshot(PromptSnapshot{NodeID: r.redact.text(n.ID), ProviderID: r.redact.text(m.ProviderID), ModelID: r.redact.text(m.ModelID), ImageAttached: len(req.ImageJPEG) > 0, Values: PromptValues{InputText: r.redact.text(values.InputText), PreviousOutput: r.redact.text(values.PreviousOutput), VisionText: r.redact.text(values.VisionText)}})
+		r.callbackMu.Lock()
+		r.opt.OnPrompt(snapshot)
+		r.callbackMu.Unlock()
+	}
 	events, errs := p.Stream(actx, req, key.Secret)
 	defer func() {
 		cancel()
@@ -71,7 +84,7 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 					errs = nil
 				}
 			case <-timer.C:
-				r.emit(domain.TraceEvent{Kind: "worker_cleanup_timeout", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeProviderUnavailable, Message: "Provider did not acknowledge cancellation within 1500ms"})
+				emit(domain.TraceEvent{Kind: "worker_cleanup_timeout", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeProviderUnavailable, Message: "Provider did not acknowledge cancellation within 1500ms"})
 				return
 			}
 		}
@@ -85,7 +98,7 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	if buffered {
 		firstTokenTimer.Stop()
 		firstTokenC = nil
-		r.emit(domain.TraceEvent{Kind: "buffered", NodeID: n.ID, Attempt: attempt, Message: "Provider returns a complete answer; TTFT/TPS are unavailable."})
+		emit(domain.TraceEvent{Kind: "buffered", NodeID: n.ID, Attempt: attempt, Message: "Provider returns a complete answer; TTFT/TPS are unavailable."})
 	}
 	defer firstTokenTimer.Stop()
 	var idleTimer *time.Timer
@@ -129,7 +142,7 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 					firstTokenSeen = true
 					ttft = time.Since(started).Milliseconds()
 					if !buffered {
-						r.emit(domain.TraceEvent{Kind: "first_token", NodeID: n.ID, Attempt: attempt, TTFTMS: ttft})
+						emit(domain.TraceEvent{Kind: "first_token", NodeID: n.ID, Attempt: attempt, TTFTMS: ttft})
 					}
 					if !firstTokenTimer.Stop() {
 						select {
@@ -143,13 +156,13 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 					firstTokenSeen = true
 					ttft = time.Since(started).Milliseconds()
 					if !buffered {
-						r.emit(domain.TraceEvent{Kind: "first_token", NodeID: n.ID, Attempt: attempt, TTFTMS: ttft})
+						emit(domain.TraceEvent{Kind: "first_token", NodeID: n.ID, Attempt: attempt, TTFTMS: ttft})
 					}
 				}
 				resetIdle()
 				if text.Len()+len(ev.Text) > 16<<20 {
 					err := &providers.RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "Model text exceeded the 16 MiB safety limit"}
-					r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Message, DurationMS: time.Since(started).Milliseconds()})
+					emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Message, DurationMS: time.Since(started).Milliseconds()})
 					r.engine.recordModel(m, err.Outcome, 0, time.Since(started))
 					return "", err.Outcome, err
 				}
@@ -171,9 +184,9 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 				outcome := providers.OutcomeOf(err)
 				var pe *providers.RequestError
 				if errors.As(err, &pe) {
-					r.emit(domain.TraceEvent{Kind: "http_status", NodeID: n.ID, Attempt: attempt, HTTPStatus: pe.StatusCode})
+					emit(domain.TraceEvent{Kind: "http_status", NodeID: n.ID, Attempt: attempt, HTTPStatus: pe.StatusCode})
 				}
-				r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: outcome, Message: err.Error(), TTFTMS: ttft, DurationMS: time.Since(started).Milliseconds()})
+				emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: outcome, Message: err.Error(), TTFTMS: ttft, DurationMS: time.Since(started).Milliseconds()})
 				r.engine.recordModel(m, outcome, time.Duration(ttft)*time.Millisecond, time.Since(started))
 				return "", outcome, err
 			}
@@ -181,14 +194,14 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 			if !firstTokenSeen {
 				cancel()
 				err := &providers.RequestError{Outcome: domain.OutcomeFirstTokenTimeout, Message: "first token timeout", Retryable: true}
-				r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
+				emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
 				r.engine.recordModel(m, err.Outcome, time.Duration(ttft)*time.Millisecond, time.Since(started))
 				return "", err.Outcome, err
 			}
 		case <-idleC:
 			cancel()
 			err := &providers.RequestError{Outcome: domain.OutcomeStreamIdleTimeout, Message: "stream idle timeout", Retryable: true}
-			r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Error(), TTFTMS: ttft, DurationMS: time.Since(started).Milliseconds()})
+			emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: err.Outcome, Message: err.Error(), TTFTMS: ttft, DurationMS: time.Since(started).Milliseconds()})
 			r.engine.recordModel(m, err.Outcome, time.Duration(ttft)*time.Millisecond, time.Since(started))
 			return "", err.Outcome, err
 		case <-actx.Done():
@@ -197,14 +210,14 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 				outcome = domain.OutcomeCancelled
 			}
 			err := actx.Err()
-			r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: outcome, Message: err.Error(), TTFTMS: ttft, DurationMS: time.Since(started).Milliseconds()})
+			emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: outcome, Message: err.Error(), TTFTMS: ttft, DurationMS: time.Since(started).Milliseconds()})
 			r.engine.recordModel(m, outcome, time.Duration(ttft)*time.Millisecond, time.Since(started))
 			return "", outcome, err
 		}
 	}
 	if strings.TrimSpace(text.String()) == "" {
 		err := fmt.Errorf("empty response")
-		r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeInvalidResponse, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
+		emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeInvalidResponse, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
 		r.engine.recordModel(m, domain.OutcomeInvalidResponse, 0, time.Since(started))
 		return "", domain.OutcomeInvalidResponse, err
 	}
@@ -220,7 +233,7 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	if buffered {
 		ttft = 0
 	}
-	r.emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeSuccess, TTFTMS: ttft, DurationMS: dur.Milliseconds(), OutputTokens: outTokens, TPS: tps})
+	emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeSuccess, TTFTMS: ttft, DurationMS: dur.Milliseconds(), OutputTokens: outTokens, TPS: tps})
 	r.engine.recordModel(m, domain.OutcomeSuccess, time.Duration(ttft)*time.Millisecond, dur)
 	success = true
 	r.traceMu.Lock()

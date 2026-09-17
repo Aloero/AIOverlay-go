@@ -22,7 +22,7 @@ func DesktopHTML() (string, error) {
 		}
 		text = strings.Replace(text, `<link rel="stylesheet" href="/assets/`+name+`">`, "<style>"+string(data)+"</style>", 1)
 	}
-	for _, name := range []string{"app.js", "studio-lifecycle.js", "studio-workspace.js", "application-settings.js", "vpn-view.js", "benchmark-view.js", "run-insights.js", "simulation-view.js", "connections.js", "connection-hub.js", "catalog-view.js", "schedule-view.js", "pool-plan.js", "pool-editor.js", "model-settings.js", "studio-interactions.js", "pipeline-view.js"} {
+	for _, name := range []string{"app.js", "studio-lifecycle.js", "studio-workspace.js", "application-settings.js", "vpn-view.js", "benchmark-view.js", "prompt-preview.js", "run-insights.js", "simulation-view.js", "connections.js", "connection-hub.js", "catalog-view.js", "schedule-view.js", "pool-plan.js", "pool-editor.js", "model-settings.js", "studio-interactions.js", "pipeline-view.js"} {
 		data, err := FS.ReadFile("static/" + name)
 		if err != nil {
 			return "", err

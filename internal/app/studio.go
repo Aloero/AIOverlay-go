@@ -13,8 +13,9 @@ func (a *App) StudioState() control.StudioState {
 	a.mu.RLock()
 	id := a.cfg.ActivePipelineID
 	e := a.engine
+	recent := mergeRecent(a.recentModels, a.cfg.ControlCenter.RecentModels)
 	a.mu.RUnlock()
-	return control.StudioState{ActivePipelineID: id, Revision: e.ConfigRevision(), Credentials: e.CredentialStates(), Version: buildinfo.Version}
+	return control.StudioState{RecentModels: recent, ActivePipelineID: id, Revision: e.ConfigRevision(), Credentials: e.CredentialStates(), Version: buildinfo.Version}
 }
 func (a *App) Simulate(ctx context.Context, req engine.SimulationRequest) (engine.SimulationReport, error) {
 	if req.Config.Version == 0 {
@@ -41,5 +42,7 @@ func (a *App) ProbeConnection(ctx context.Context, req engine.ConnectionProbe, o
 	a.mu.RLock()
 	e := a.engine
 	a.mu.RUnlock()
-	return e.Probe(ctx, req, opt)
+	result, err := e.Probe(ctx, req, opt)
+	a.recordRecentUsage(result.Trace)
+	return result, err
 }
