@@ -54,10 +54,10 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 				modelInput.text = res
 				modelInput.hasOutput = true
 				modelInput.image = input.image
-				if len(input.image) > 0 {
+				if len(input.image) > 0 && pool.Task != "transcribe" {
 					modelInput.imageResolved = true
 				}
-				if modelInput.vision == "" && len(input.image) > 0 {
+				if modelInput.vision == "" && len(input.image) > 0 && pool.Task != "transcribe" {
 					modelInput.vision = res
 				}
 				return modelInput, domain.OutcomeSuccess, nil
@@ -134,10 +134,10 @@ func (r *runner) racePool(ctx context.Context, n domain.Node, pool domain.ModelP
 				cancel(errRaceWon)
 				input.text = got.text
 				input.hasOutput = true
-				if len(input.image) > 0 {
+				if len(input.image) > 0 && pool.Task != "transcribe" {
 					input.imageResolved = true
 				}
-				if input.vision == "" && len(input.image) > 0 {
+				if input.vision == "" && len(input.image) > 0 && pool.Task != "transcribe" {
 					input.vision = got.text
 				}
 				return input, domain.OutcomeSuccess, nil

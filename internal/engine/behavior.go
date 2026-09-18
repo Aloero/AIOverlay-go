@@ -97,10 +97,7 @@ func (report *BehaviorReport) warnMissingEntry(trigger BehaviorTrigger) {
 
 func behaviorCommand(pipeline domain.Pipeline, command domain.CommandConfig, contexts map[string]string) BehaviorTrigger {
 	skipRun := command.Intent == domain.IntentContext
-	start := inputState{
-		id: command.EntryNodeID, image: command.CaptureScreen,
-		text: command.ContextID != "", source: "command:" + command.Action,
-	}
+	start := commandInputState(pipeline, command)
 	trigger := BehaviorTrigger{
 		ID: command.ID, Name: behaviorName(command.Name, command.ID), Kind: "command",
 		Intent: command.Intent, ContextID: command.ContextID, ContextName: contexts[command.ContextID],
@@ -126,10 +123,7 @@ func behaviorCommand(pipeline domain.Pipeline, command domain.CommandConfig, con
 
 func behaviorSource(pipeline domain.Pipeline, source domain.EventSource, contexts map[string]string) BehaviorTrigger {
 	skipRun := source.Kind == domain.SourceScreenTimer && source.Intent == domain.IntentContext
-	start := inputState{
-		id: source.EntryNodeID, text: source.ContextID != "", source: "source:" + source.ID,
-		audio: source.Kind == domain.SourceAudio, image: source.Kind == domain.SourceScreenTimer,
-	}
+	start := sourceInputState(pipeline, source)
 	trigger := BehaviorTrigger{
 		ID: source.ID, Name: behaviorName(source.Name, source.ID), Kind: "source",
 		Intent: source.Intent, ContextID: source.ContextID, ContextName: contexts[source.ContextID],

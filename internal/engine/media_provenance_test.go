@@ -87,3 +87,62 @@ func TestFreshCaptureIsNotDroppedForTextOnlyAnswer(t *testing.T) {
 		t.Fatalf("decision=%d answer=%d err=%v", decisionCalls.Load(), answerCalls.Load(), err)
 	}
 }
+
+func TestTranscriptionPoolDoesNotResolveUnsentContextScreen(t *testing.T) {
+	for _, dispatch := range []domain.DispatchPolicy{domain.DispatchSequential, domain.DispatchParallel} {
+		t.Run(string(dispatch), func(t *testing.T) {
+			cfg := selectionConfig()
+			cfg.Providers[0].AudioInput = true
+			pool := domain.ModelPoolConfig{
+				Task: "transcribe", ResultName: "audio.text",
+				Policy: domain.PoolPriority, Dispatch: dispatch, MaxParallel: 1, MaxCalls: 1,
+				Models: []domain.ModelSlot{{
+					ID: "stt", ProviderID: "test", ModelID: "stt", Enabled: true,
+					Priority: 100, QualityScore: 100, MaxAttempts: 1,
+				}},
+			}
+			pipeline := domain.Pipeline{
+				ID: "stt-provenance", Budget: domain.ExecutionBudget{
+					MaxWallTimeMS: 5000, MaxModelCalls: 2, MaxParallelCalls: 1,
+					MaxProviders: 1, MaxKeysPerProvider: 1,
+				},
+			}
+			cfg.Pipelines = []domain.Pipeline{pipeline}
+			cfg.ActivePipelineID = pipeline.ID
+
+			provider := &scriptedProvider{run: func(_ context.Context, request providers.Request, _ string, events chan<- providers.Event) error {
+				if request.Audio == nil {
+					return fmt.Errorf("transcription lost audio")
+				}
+				if len(request.ImageJPEG) != 0 {
+					return fmt.Errorf("transcription transport received context screen")
+				}
+				events <- providers.Event{Type: providers.EventDelta, Text: "transcript"}
+				return nil
+			}}
+			registry, err := providers.NewRegistry(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry.Set("test", provider)
+			t.Cleanup(registry.Close)
+
+			engine := New(cfg, registry, nil, nil)
+			trace := domain.ExecutionTrace{ID: "trace", PipelineID: pipeline.ID, Budget: pipeline.Budget}
+			runner := newRunner(engine, pipeline, Input{}, RunOptions{}, &trace)
+			clip := &domain.AudioClip{PCM16: []int16{1, 2, 3}, SampleRate: 16000, Channels: 1}
+			out, outcome, err := runner.runPool(context.Background(), domain.Node{ID: "stt", Type: domain.NodeModelPool, ModelPool: &pool}, nodeValue{
+				audio: clip, image: []byte("context-screen"),
+			})
+			if err != nil || outcome != domain.OutcomeSuccess {
+				t.Fatalf("transcription failed: outcome=%s err=%v", outcome, err)
+			}
+			if out.imageResolved {
+				t.Fatal("STT marked an image as resolved even though the transport never received it")
+			}
+			if string(out.image) != "context-screen" || out.text != "transcript" {
+				t.Fatalf("STT provenance lost: image=%q text=%q", out.image, out.text)
+			}
+		})
+	}
+}

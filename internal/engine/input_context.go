@@ -37,21 +37,46 @@ func pipelineInputStarts(pipeline domain.Pipeline) []inputState {
 		starts = append(starts, inputState{id: pipeline.EntryNodeID, image: true, source: "legacy/manual screen"})
 	}
 	for _, command := range pipeline.Commands {
-		starts = append(starts, inputState{
-			id: command.EntryNodeID, image: command.CaptureScreen,
-			text: command.ContextID != "", source: "command:" + command.Action,
-		})
+		starts = append(starts, commandInputState(pipeline, command))
 	}
 	for _, source := range pipeline.Sources {
 		if !source.Enabled {
 			continue
 		}
-		state := inputState{id: source.EntryNodeID, text: source.ContextID != "", source: "source:" + source.ID}
-		state.audio = source.Kind == domain.SourceAudio
-		state.image = source.Kind == domain.SourceScreenTimer
-		starts = append(starts, state)
+		starts = append(starts, sourceInputState(pipeline, source))
 	}
 	return starts
+}
+
+func commandInputState(pipeline domain.Pipeline, command domain.CommandConfig) inputState {
+	return inputState{
+		id:     command.EntryNodeID,
+		image:  command.CaptureScreen || contextMayProvideScreen(pipeline, command.ContextID),
+		text:   command.ContextID != "",
+		source: "command:" + command.Action,
+	}
+}
+
+func sourceInputState(pipeline domain.Pipeline, source domain.EventSource) inputState {
+	return inputState{
+		id:     source.EntryNodeID,
+		image:  source.Kind == domain.SourceScreenTimer || contextMayProvideScreen(pipeline, source.ContextID),
+		audio:  source.Kind == domain.SourceAudio,
+		text:   source.ContextID != "",
+		source: "source:" + source.ID,
+	}
+}
+
+func contextMayProvideScreen(pipeline domain.Pipeline, contextID string) bool {
+	if contextID == "" {
+		return false
+	}
+	for _, context := range pipeline.Contexts {
+		if context.ID == contextID && context.Enabled {
+			return context.KeepLatestScreen
+		}
+	}
+	return false
 }
 
 func describePoolInput(pipeline domain.Pipeline, nodeID string, starts []inputState) PoolInput {
@@ -139,10 +164,11 @@ func applySuccessfulNodeInput(node domain.Node, state inputState) inputState {
 	case domain.NodeModelPool:
 		success.text = true
 		success.hasOutput = true
-		if success.image {
+		transcription := node.ModelPool != nil && node.ModelPool.Task == "transcribe"
+		if success.image && !transcription {
 			success.imageResolved = true
 		}
-		if node.ModelPool != nil && node.ModelPool.Task == "transcribe" {
+		if transcription {
 			success.audio = false
 		}
 	case domain.NodeDecision:

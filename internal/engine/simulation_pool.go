@@ -156,10 +156,10 @@ func (s *simulator) pool(n domain.Node, input nodeValue) (nodeValue, domain.Outc
 				modelInput.text = c.text
 				modelInput.hasOutput = true
 				modelInput.image = input.image
-				if len(input.image) > 0 {
+				if len(input.image) > 0 && p.Task != "transcribe" {
 					modelInput.imageResolved = true
 				}
-				if modelInput.vision == "" && len(input.image) > 0 {
+				if modelInput.vision == "" && len(input.image) > 0 && p.Task != "transcribe" {
 					modelInput.vision = c.text
 				}
 				return modelInput, domain.OutcomeSuccess, nil

@@ -75,3 +75,43 @@ func TestBehaviorReportManualRespondSkipsDecisionModel(t *testing.T) {
 		}
 	}
 }
+
+func TestBehaviorReportKeepsLatestContextScreenUnresolvedAcrossSTT(t *testing.T) {
+	cfg := mixedSimulationConfig()
+	pipeline := cfg.Pipelines[0]
+	pipeline.Contexts = []domain.ContextConfig{{
+		ID: "conversation", Name: "Conversation", Enabled: true,
+		IncludeTranscript: true, KeepLatestScreen: true,
+		MaxAgeS: 120, MaxEntries: 30, MaxChars: 24000, ScreenMaxAgeS: 30,
+	}}
+	pipeline.Sources[0].ContextID = "conversation"
+
+	audioStart := []inputState{sourceInputState(pipeline, pipeline.Sources[0])}
+	sttInput := describePoolInput(pipeline, "stt", audioStart)
+	if !sttInput.AudioRequired || sttInput.ImageRequired {
+		t.Fatalf("STT should receive audio without raw context screen: %+v", sttInput)
+	}
+	decisionInput := describePoolInput(pipeline, "decision", audioStart)
+	if decisionInput.AudioRequired || !decisionInput.ImageRequired || !decisionInput.TextAvailable {
+		t.Fatalf("latest context screen was lost or falsely resolved after STT: %+v", decisionInput)
+	}
+
+	report := DescribePipelineBehavior(pipeline)
+	var decisionStage *BehaviorAIStage
+	for i := range report.Sources[0].AIStages {
+		stage := &report.Sources[0].AIStages[i]
+		if stage.ID == "decision" {
+			decisionStage = stage
+			break
+		}
+	}
+	if decisionStage == nil || !decisionStage.Input.ImageRequired {
+		t.Fatalf("behavior summary hid possible context image from Decision: %+v", report.Sources[0].AIStages)
+	}
+
+	pipeline.Contexts[0].KeepLatestScreen = false
+	withoutScreen := describePoolInput(pipeline, "decision", []inputState{sourceInputState(pipeline, pipeline.Sources[0])})
+	if withoutScreen.ImageRequired {
+		t.Fatalf("disabled latest-screen context still requires image: %+v", withoutScreen)
+	}
+}
