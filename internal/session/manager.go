@@ -897,9 +897,7 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 			}
 			img, capturedAt, err := captureBackgroundFrame(ctx, capture)
 			if err != nil {
-				r.mu.Lock()
-				r.status.LastError = err.Error()
-				r.mu.Unlock()
+				recordScreenCaptureFailure(r, err)
 				continue
 			}
 			if !m.sourceCurrent(r.cfg.ID, r.epoch) {

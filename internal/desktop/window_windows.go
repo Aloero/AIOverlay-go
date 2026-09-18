@@ -591,10 +591,10 @@ func (w *desktopWindow) CaptureBackground(fn func() ([]byte, error)) ([]byte, er
 	select {
 	case state := <-result:
 		if state.visible && !state.minimized && !protection.Applied {
-			return nil, fmt.Errorf("Studio is visible and capture exclusion is not confirmed; background screen capture paused")
+			return nil, suppressBackgroundCapture("studio_visible_without_capture_exclusion", "Studio is visible and capture exclusion is not confirmed; background screen capture paused")
 		}
 		return fn()
 	case <-ctx.Done():
-		return nil, fmt.Errorf("Studio did not acknowledge background capture safety check")
+		return nil, suppressBackgroundCapture("studio_capture_safety_timeout", "Studio did not acknowledge background capture safety check")
 	}
 }
