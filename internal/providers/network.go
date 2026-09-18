@@ -25,7 +25,7 @@ func requestTransport(ctx context.Context, resolver ProxyResolver, connectTimeou
 	if resolver != nil {
 		raw, err := resolver.ProxyURL(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("AI VPN unavailable: %w", err)
+			return nil, fmt.Errorf("AI VPN unavailable")
 		}
 		if raw != "" {
 			u, err := url.Parse(raw)

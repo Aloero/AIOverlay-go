@@ -5,6 +5,7 @@ import (
 	"aioverlay/internal/engine"
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -39,5 +40,92 @@ func TestJobRemainsLiveUntilCancelledAndRejectsOverlap(t *testing.T) {
 	}
 	if jobs.Snapshot().Running || jobs.Snapshot().Error == "" {
 		t.Fatal("did not cancel")
+	}
+}
+
+func TestManualCommandQueueKeepsOnePendingTaskAndStableIDs(t *testing.T) {
+	var jobs JobManager
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+
+	firstRun := func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		close(firstStarted)
+		<-releaseFirst
+		return engine.Result{Text: "first", Trace: domain.ExecutionTrace{ID: "trace-first"}}, nil, nil
+	}
+	secondRun := func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		close(secondStarted)
+		return engine.Result{Text: "second", Trace: domain.ExecutionTrace{ID: "trace-second"}}, nil, nil
+	}
+
+	firstID, err := jobs.queueTaskPurpose(context.Background(), "p", "command", nil, firstRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first manual command did not start")
+	}
+	secondID, err := jobs.queueTaskPurpose(context.Background(), "p", "command", nil, secondRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstID == secondID {
+		t.Fatalf("manual command IDs collided: %q", firstID)
+	}
+	if snapshot := jobs.Snapshot(); snapshot.ID != firstID || snapshot.QueuedID != secondID {
+		t.Fatalf("queue snapshot=%+v", snapshot)
+	}
+	if _, err := jobs.queueTaskPurpose(context.Background(), "p", "command", nil, secondRun); err == nil {
+		t.Fatal("third manual command exceeded bounded one-item queue")
+	}
+
+	close(releaseFirst)
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("queued manual command did not start")
+	}
+	deadline := time.Now().Add(time.Second)
+	for jobs.Snapshot().Running && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	final := jobs.Snapshot()
+	if final.ID != secondID || final.Text != "second" || final.QueuedID != "" {
+		t.Fatalf("queued command result mixed with first: %+v", final)
+	}
+}
+
+func TestClearDropsPendingManualCommand(t *testing.T) {
+	var jobs JobManager
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var secondRuns atomic.Int32
+	first := func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		close(started)
+		<-release
+		return engine.Result{}, nil, nil
+	}
+	second := func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		secondRuns.Add(1)
+		return engine.Result{}, nil, nil
+	}
+	if _, err := jobs.queueTaskPurpose(context.Background(), "p", "command", nil, first); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if _, err := jobs.queueTaskPurpose(context.Background(), "p", "command", nil, second); err != nil {
+		t.Fatal(err)
+	}
+	jobs.Clear()
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for jobs.Snapshot().Running && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if secondRuns.Load() != 0 || jobs.Snapshot().QueuedID != "" {
+		t.Fatalf("cleared pending command ran: count=%d job=%+v", secondRuns.Load(), jobs.Snapshot())
 	}
 }

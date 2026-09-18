@@ -27,14 +27,17 @@ type Publication struct {
 }
 
 var errCommandContextChanged = fmt.Errorf("conversation cleared during command preparation: %w", context.Canceled)
+var errCapturePermissionChanged = fmt.Errorf("screen capture permission changed during request: %w", context.Canceled)
 
 type PreparedCommand struct {
-	PipelineID        string
-	Command           domain.CommandConfig
-	Input             engine.Input
-	Context           domain.ContextConfig
-	ContextGeneration uint64
-	SkipRun           bool
+	PipelineID           string
+	Command              domain.CommandConfig
+	Input                engine.Input
+	Context              domain.ContextConfig
+	ContextGeneration    uint64
+	PermissionGeneration uint64
+	Capture              ScreenCapture
+	SkipRun              bool
 }
 
 type SourceStatus struct {
@@ -106,6 +109,7 @@ type Manager struct {
 	cancel                context.CancelFunc
 	started               bool
 	paused                bool
+	permissionGeneration  uint64
 	sources               map[string]*sourceRuntime
 	sourceOverrides       map[string]bool
 	turnSem               chan struct{}
@@ -130,6 +134,7 @@ func NewManager(execute Executor) *Manager {
 		audioCapture:          paudio.Capture,
 		contexts:              NewContextStore(),
 		governor:              NewGovernor(),
+		permissionGeneration:  1,
 		sources:               map[string]*sourceRuntime{},
 		sourceOverrides:       map[string]bool{},
 		turnSem:               make(chan struct{}, 3),
@@ -210,6 +215,9 @@ func (m *Manager) ApplyImported(cfg domain.Config) {
 func (m *Manager) apply(cfg domain.Config, clearRuntimeOverrides bool) {
 	m.mu.Lock()
 	pipelineChanged := activePipelineID(m.cfg) != activePipelineID(cfg)
+	if !sameCapturePermissions(m.cfg, cfg) {
+		m.permissionGeneration++
+	}
 	if clearRuntimeOverrides || pipelineChanged {
 		m.sourceOverrides = map[string]bool{}
 	} else {
@@ -837,8 +845,10 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 	exec := m.execute
 	publisher := m.publish
 	cfg := m.cfg
+	capture := m.backgroundCapture
+	permissionGeneration := m.permissionGeneration
 	m.mu.RUnlock()
-	capture := m.backgroundScreenCapture()
+	capture = m.permissionedCapture(permissionGeneration, capture)
 	if exec == nil {
 		return
 	}
@@ -890,7 +900,11 @@ func (m *Manager) transcriptObserver(pipelineID string, runtime *sourceRuntime, 
 			return
 		}
 		entry := transcriptEntry(runtime.cfg.ID, turn, observation)
-		if !m.contexts.UpsertTranscript(turn.ctxCfg, pipelineID, turn.generation, entry) {
+		accepted := m.contexts.UpsertTranscript(turn.ctxCfg, pipelineID, turn.generation, entry)
+		if entry.Final {
+			m.finishPending(turn.input.EventID)
+		}
+		if !accepted {
 			return
 		}
 		runtime.mu.Lock()
@@ -900,9 +914,6 @@ func (m *Manager) transcriptObserver(pipelineID string, runtime *sourceRuntime, 
 		}
 		runtime.status.LastError = ""
 		runtime.mu.Unlock()
-		if entry.Final {
-			m.finishPending(turn.input.EventID)
-		}
 	}
 }
 
@@ -1037,10 +1048,12 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 	m.mu.RLock()
 	cfg := m.cfg
 	capture := m.capture
+	permissionGeneration := m.permissionGeneration
 	m.mu.RUnlock()
 	if override != nil {
 		capture = override
 	}
+	capture = m.permissionedCapture(permissionGeneration, capture)
 	p := activePipeline(cfg)
 	if p == nil {
 		return PreparedCommand{}, fmt.Errorf("active pipeline missing")
@@ -1086,7 +1099,7 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 			if ctxCfg.KeepLatestScreen && !stored {
 				return PreparedCommand{}, errCommandContextChanged
 			}
-			return PreparedCommand{PipelineID: p.ID, Command: cmd, Context: ctxCfg, ContextGeneration: gen, SkipRun: true}, nil
+			return PreparedCommand{PipelineID: p.ID, Command: cmd, Context: ctxCfg, ContextGeneration: gen, PermissionGeneration: permissionGeneration, Capture: capture, SkipRun: true}, nil
 		}
 		snap = m.contexts.Snapshot(ctxCfg, p.ID, triggeredAt)
 		if snap.Generation != gen {
@@ -1098,7 +1111,7 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 		inputImage = snap.ImageJPEG
 	}
 	input := engine.Input{ImageJPEG: append([]byte(nil), inputImage...), ContextText: snap.Text, ContextIncomplete: incomplete, EntryNodeID: cmd.EntryNodeID, Intent: string(cmd.Intent), SourceID: cmd.ID, EventID: fmt.Sprintf("%s-%d", cmd.ID, m.eventSeq.Add(1))}
-	return PreparedCommand{PipelineID: p.ID, Command: cmd, Input: input, Context: ctxCfg, ContextGeneration: gen}, nil
+	return PreparedCommand{PipelineID: p.ID, Command: cmd, Input: input, Context: ctxCfg, ContextGeneration: gen, PermissionGeneration: permissionGeneration, Capture: capture}, nil
 }
 
 // RecordCommandResult stores an accepted manual answer in the context snapshot
@@ -1161,5 +1174,8 @@ func (m *Manager) Status() map[string]any {
 		pid = p.ID
 		contexts = m.contexts.Status(p.ID, p.Contexts)
 	}
-	return map[string]any{"active_pipeline_id": pid, "paused": paused, "sources": rows, "contexts": contexts, "governor": m.governor.Snapshot()}
+	m.mu.RLock()
+	permissionGeneration := m.permissionGeneration
+	m.mu.RUnlock()
+	return map[string]any{"active_pipeline_id": pid, "paused": paused, "permission_generation": permissionGeneration, "sources": rows, "contexts": contexts, "governor": m.governor.Snapshot()}
 }

@@ -110,6 +110,12 @@ Screen-generation and delayed-native-teardown tests use virtual time. The mixed
 lifecycle soak accepts only the specific cancellation caused by a concurrent
 Clear and checks that a fresh manual command still succeeds afterward.
 
+R2 regressions now also cover bounded long-speech overlap with time-scoped
+transcript deduplication, synthetic silence/noise/short-negation/number fixtures,
+one active plus one pending manual command with separately pinned screenshots,
+permission-generation fencing for late screen actions, and proxy-credential
+redaction on realtime fail-closed errors.
+
 The release command now repeats `internal/session` and `internal/platform/audio`
 as well as the earlier critical packages. Run `go run ./cmd/release --race` with
 a working C toolchain, Node, Playwright Chromium and its system font/library
@@ -120,9 +126,10 @@ DOM/Chromium, CRC, every-entry hashes, clean extraction and a reproducible EXE
 from the extracted source. Consult the generated report for the checks actually
 completed on that archive's commit.
 
-Physical Windows audio/desktop acceptance, real cloud inference and real VPN
-packet-trace verification have not been performed for this snapshot. Persistent
-realtime and local STT helper experiments are not production-ready provider
-routes. There is still no shipped whisper.cpp runtime/weights, process-only Zoom
-capture or ML VAD. No hardware-readiness claim follows from a Linux mock or a
-Windows-target compilation.
+The acceptance scope for this branch is automated Go/race/UI verification plus
+Windows-target compile/vet. Physical Windows audio/desktop acceptance and a
+shipped/running local STT helper are intentionally out of scope rather than
+pending release gates. Persistent realtime remains an experiment until a
+production adapter is explicitly selected. Real cloud inference and real VPN
+packet-trace verification are reported separately when they are actually run;
+no hardware-readiness claim follows from mocks or a Windows-target compilation.

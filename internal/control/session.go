@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -43,22 +44,32 @@ func (s *Server) StartCommand(action string) (string, error) {
 	}
 	pipelineID := s.backend.GetConfig().ActivePipelineID
 	purpose := commandPurpose(action)
-	return s.jobs.startTaskPurpose(s.ctx, pipelineID, purpose, func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
-		prepared, err := b.PrepareCommand(ctx, action, s.manualCapture)
-		if err != nil {
+	var prepareOnce sync.Once
+	var prepared session.PreparedCommand
+	var prepareErr error
+	prepare := func(ctx context.Context) error {
+		prepareOnce.Do(func() {
+			prepared, prepareErr = b.PrepareCommand(ctx, action, s.manualCapture)
+		})
+		return prepareErr
+	}
+	run := func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		if err := prepare(ctx); err != nil {
 			return engine.Result{}, nil, err
 		}
 		if prepared.SkipRun {
 			return engine.Result{Trace: emptyCommandTrace(prepared.PipelineID, prepared.Command.ID, purpose)}, nil, nil
 		}
-		opt.Capture = s.manualCapture
+		opt.Capture = prepared.Capture
 		res, err := live.Run(ctx, prepared.PipelineID, prepared.Input, opt)
 		if err == nil {
 			b.RecordCommandResult(prepared, res)
 		}
 		return res, nil, err
-	})
+	}
+	return s.jobs.queueTaskPurpose(s.ctx, pipelineID, purpose, prepare, run)
 }
+
 func (s *Server) manualCapture(ctx context.Context) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -111,14 +111,16 @@ type SessionBudget struct {
 // AudioClip is ephemeral immutable media. PCM16 is kept in RAM and converted to
 // the transport-specific container only by the adapter that needs it.
 type AudioClip struct {
-	PCM16      []int16   `json:"-"`
-	DurationMS int       `json:"duration_ms"`
-	SampleRate int       `json:"sample_rate"`
-	Channels   int       `json:"channels"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	EndedAt    time.Time `json:"ended_at,omitempty"`
-	SegmentID  string    `json:"segment_id,omitempty"`
-	Final      bool      `json:"final"`
+	PCM16        []int16   `json:"-"`
+	DurationMS   int       `json:"duration_ms"`
+	SampleRate   int       `json:"sample_rate"`
+	Channels     int       `json:"channels"`
+	StartedAt    time.Time `json:"started_at,omitempty"`
+	EndedAt      time.Time `json:"ended_at,omitempty"`
+	SegmentID    string    `json:"segment_id,omitempty"`
+	OverlapMS    int       `json:"overlap_ms,omitempty"`
+	Continuation bool      `json:"continuation,omitempty"`
+	Final        bool      `json:"final"`
 }
 
 const (

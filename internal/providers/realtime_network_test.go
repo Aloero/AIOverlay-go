@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,5 +94,30 @@ func TestRealtimeEndpointRequiresWSS(t *testing.T) {
 	}
 	if _, err := parseRealtimeEndpoint("wss://provider.example/realtime"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRealtimeProxyResolverErrorDoesNotExposeCredentials(t *testing.T) {
+	const secret = "proxy-password-do-not-leak"
+	resolverErr := errors.New("proxy http://alice:" + secret + "@127.0.0.1:1080 unavailable")
+	connector := newRealtimeConnector(testProxyResolver{err: resolverErr}, time.Second)
+	var dials atomic.Int32
+	connector.dialContext = func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return nil, errors.New("unexpected dial")
+	}
+
+	_, err := connector.DialTLS(context.Background(), "wss://provider.example/realtime")
+	if err == nil {
+		t.Fatal("resolver failure was ignored")
+	}
+	public := err.Error()
+	for _, forbidden := range []string{secret, "alice", "http://", "127.0.0.1:1080"} {
+		if strings.Contains(public, forbidden) {
+			t.Fatalf("proxy resolver detail leaked %q in %q", forbidden, public)
+		}
+	}
+	if dials.Load() != 0 {
+		t.Fatalf("resolver failure allowed %d network dials", dials.Load())
 	}
 }

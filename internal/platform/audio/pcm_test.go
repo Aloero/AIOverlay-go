@@ -209,3 +209,62 @@ func TestTimestampErrorPacketCannotBecomeOrdinarySpeech(t *testing.T) {
 		t.Fatal("timestamp-error samples became speech eligible for normal processing")
 	}
 }
+
+func TestSegmenterLongSpeechUsesBoundedOverlap(t *testing.T) {
+	segmenter := Segmenter{Config: domain.AudioSourceConfig{Mode: "system", SegmentMS: 1000, SilenceMS: 200, MinimumMS: 80, Threshold: .01}}
+	start := time.Now()
+	voice := make([]int16, 16000*2)
+	for i := range voice {
+		voice[i] = 12000
+	}
+
+	segments := segmenter.Push(Block{Samples: voice, Rate: 16000, At: start})
+	segments = append(segments, segmenter.Push(Block{Rate: 16000, At: start.Add(2500 * time.Millisecond)})...)
+	if len(segments) < 2 {
+		t.Fatalf("continuous speech produced %d segments, want at least 2", len(segments))
+	}
+	if segments[0].Clip.Continuation || segments[0].Clip.OverlapMS != 0 {
+		t.Fatalf("first segment unexpectedly marked as continuation: %+v", segments[0].Clip)
+	}
+	for i := 1; i < len(segments); i++ {
+		segment := segments[i]
+		if !segment.Clip.Continuation || segment.Clip.OverlapMS != segmentOverlapMS {
+			t.Fatalf("segment %d overlap=%d continuation=%v", i, segment.Clip.OverlapMS, segment.Clip.Continuation)
+		}
+		if overlap := segments[i-1].Ended.Sub(segment.Started); overlap != segmentOverlapMS*time.Millisecond {
+			t.Fatalf("segment %d capture overlap=%v", i, overlap)
+		}
+		if len(segment.Clip.PCM16) > 16000 {
+			t.Fatalf("segment %d exceeded max segment memory: %d samples", i, len(segment.Clip.PCM16))
+		}
+	}
+}
+
+func TestSyntheticAudioCorpusKeepsShortSignalsAndRejectsSilenceNoise(t *testing.T) {
+	tests := []struct {
+		name         string
+		amplitude    int16
+		durationMS   int
+		wantSegments int
+	}{
+		{name: "silence", amplitude: 0, durationMS: 300, wantSegments: 0},
+		{name: "background_noise", amplitude: 100, durationMS: 300, wantSegments: 0},
+		{name: "short_no", amplitude: 12000, durationMS: 100, wantSegments: 1},
+		{name: "short_number", amplitude: 9000, durationMS: 120, wantSegments: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segmenter := Segmenter{Config: domain.AudioSourceConfig{Mode: "system", SegmentMS: 1000, SilenceMS: 120, MinimumMS: 80, Threshold: .01}}
+			start := time.Now()
+			samples := make([]int16, 16000*tt.durationMS/1000)
+			for i := range samples {
+				samples[i] = tt.amplitude
+			}
+			segments := segmenter.Push(Block{Samples: samples, Rate: 16000, At: start})
+			segments = append(segments, segmenter.Push(Block{Rate: 16000, At: start.Add(time.Duration(tt.durationMS+200) * time.Millisecond)})...)
+			if len(segments) != tt.wantSegments {
+				t.Fatalf("segments=%d want=%d", len(segments), tt.wantSegments)
+			}
+		})
+	}
+}

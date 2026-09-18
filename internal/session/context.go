@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 type ContextEntry struct {
@@ -112,7 +113,8 @@ func (s *ContextStore) Append(cfg domain.ContextConfig, pipelineID string, gener
 
 // UpsertTranscript keeps one chronological record per segment. Partial updates may
 // advance a non-final record, while a final transcript is immutable against late
-// partial callbacks. Cloud/local attempts remain separate from this accepted view.
+// partial callbacks. Final transcripts from deliberately overlapped audio segments
+// trim only a matching suffix/prefix inside the overlapping capture interval.
 func (s *ContextStore) UpsertTranscript(cfg domain.ContextConfig, pipelineID string, generation uint64, entry ContextEntry) bool {
 	if !cfg.Enabled || cfg.ID == "" || entry.ID == "" || entry.Text == "" {
 		return false
@@ -133,24 +135,97 @@ func (s *ContextStore) UpsertTranscript(cfg domain.ContextConfig, pipelineID str
 	if generation != 0 && generation != st.generation {
 		return false
 	}
-	for i := range st.entries {
-		old := st.entries[i]
-		if old.Kind != "transcript" || old.ID != entry.ID {
-			continue
-		}
+
+	existing := transcriptIndex(st.entries, entry.ID)
+	if existing >= 0 {
+		old := st.entries[existing]
 		if old.Final || entry.Revision <= old.Revision {
 			return false
 		}
-		st.entries[i] = entry
-		sortEntries(st.entries)
-		s.pruneLocked(st, cfg, entry.At)
-		return true
 	}
-	st.entries = append(st.entries, entry)
+	if entry.Final {
+		entry.Text = trimTranscriptOverlap(st.entries, entry)
+		if entry.Text == "" {
+			if existing >= 0 {
+				st.entries = append(st.entries[:existing], st.entries[existing+1:]...)
+			}
+			return true
+		}
+	}
+	if existing >= 0 {
+		st.entries[existing] = entry
+	} else {
+		st.entries = append(st.entries, entry)
+	}
 	sortEntries(st.entries)
 	s.pruneLocked(st, cfg, entry.At)
 	return true
 }
+
+func transcriptIndex(entries []ContextEntry, id string) int {
+	for i := range entries {
+		if entries[i].Kind == "transcript" && entries[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+const maxTranscriptOverlapTokens = 16
+
+func trimTranscriptOverlap(entries []ContextEntry, current ContextEntry) string {
+	if current.Start.IsZero() || current.End.IsZero() {
+		return current.Text
+	}
+	previous := previousOverlappingTranscript(entries, current)
+	if previous == nil {
+		return current.Text
+	}
+	left, right := strings.Fields(previous.Text), strings.Fields(current.Text)
+	limit := min(len(left), len(right), maxTranscriptOverlapTokens)
+	for count := limit; count > 0; count-- {
+		if equalTranscriptTokens(left[len(left)-count:], right[:count]) {
+			return strings.Join(right[count:], " ")
+		}
+	}
+	return current.Text
+}
+
+func previousOverlappingTranscript(entries []ContextEntry, current ContextEntry) *ContextEntry {
+	var best *ContextEntry
+	for i := range entries {
+		candidate := &entries[i]
+		if candidate.Kind != "transcript" || candidate.ID == current.ID || !candidate.Final || candidate.SourceID != current.SourceID {
+			continue
+		}
+		if candidate.Start.IsZero() || candidate.End.IsZero() || !candidate.Start.Before(current.Start) || !current.Start.Before(candidate.End) {
+			continue
+		}
+		if best == nil || best.End.Before(candidate.End) {
+			best = candidate
+		}
+	}
+	return best
+}
+
+func equalTranscriptTokens(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if normalizeTranscriptToken(left[i]) != normalizeTranscriptToken(right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeTranscriptToken(token string) string {
+	return strings.ToLower(strings.TrimFunc(token, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}))
+}
+
 func (s *ContextStore) SetScreen(cfg domain.ContextConfig, pipelineID string, generation uint64, image []byte, at time.Time) bool {
 	if !cfg.Enabled || !cfg.KeepLatestScreen || cfg.ID == "" || len(image) == 0 {
 		return false

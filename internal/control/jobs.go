@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"aioverlay/internal/benchmark"
@@ -32,7 +33,20 @@ type Job struct {
 	Started         time.Time             `json:"started"`
 	Finished        time.Time             `json:"finished,omitempty"`
 	DurationMS      int64                 `json:"duration_ms"`
+	QueuedID        string                `json:"queued_id,omitempty"`
+	QueuedPurpose   string                `json:"queued_purpose,omitempty"`
 }
+
+type queuedJob struct {
+	parent        context.Context
+	pipeline      string
+	purpose       string
+	id            string
+	run           func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)
+	cancelPrepare context.CancelFunc
+}
+
+var jobSequence atomic.Uint64
 
 type JobManager struct {
 	admission sync.Mutex
@@ -41,6 +55,7 @@ type JobManager struct {
 	job       Job
 	cancel    context.CancelFunc
 	done      chan struct{}
+	pending   *queuedJob
 }
 
 func (j *JobManager) Snapshot() Job {
@@ -94,78 +109,157 @@ func (j *JobManager) startTask(parent context.Context, pipeline string, run func
 	return j.startTaskPurpose(parent, pipeline, "pipeline", run)
 }
 func (j *JobManager) startTaskPurpose(parent context.Context, pipeline, purpose string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
+	return j.startTaskPurposeID(parent, pipeline, purpose, newJobID(), run)
+}
+
+func (j *JobManager) queueTaskPurpose(parent context.Context, pipeline, purpose string, prepareQueued func(context.Context) error, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
+	j.admission.Lock()
+	j.mu.Lock()
+	if !j.job.Running {
+		j.mu.Unlock()
+		id, err := j.startTaskPurposeIDWithoutAdmission(parent, pipeline, purpose, newJobID(), run)
+		j.admission.Unlock()
+		return id, err
+	}
+	if j.pending != nil {
+		j.mu.Unlock()
+		j.admission.Unlock()
+		return "", fmt.Errorf("manual command queue is full; wait for or cancel the pending command")
+	}
+	id := newJobID()
+	ready := make(chan struct{})
+	prepareCtx, cancelPrepare := context.WithCancel(parent)
+	var prepareErr error
+	queuedRun := func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return engine.Result{}, nil, ctx.Err()
+		}
+		if prepareErr != nil {
+			return engine.Result{}, nil, prepareErr
+		}
+		return run(ctx, opt)
+	}
+	j.pending = &queuedJob{parent: parent, pipeline: pipeline, purpose: purpose, id: id, run: queuedRun, cancelPrepare: cancelPrepare}
+	j.job.QueuedID = id
+	j.job.QueuedPurpose = purpose
+	j.mu.Unlock()
+	j.admission.Unlock()
+
+	if prepareQueued != nil {
+		prepareErr = prepareQueued(prepareCtx)
+	}
+	close(ready)
+	cancelPrepare()
+	j.mu.Lock()
+	accepted := (j.pending != nil && j.pending.id == id) || j.job.ID == id
+	j.mu.Unlock()
+	if !accepted {
+		return "", context.Canceled
+	}
+	return id, nil
+}
+
+func newJobID() string {
+	return fmt.Sprintf("run-%d-%d", time.Now().UnixNano(), jobSequence.Add(1))
+}
+
+func (j *JobManager) startTaskPurposeID(parent context.Context, pipeline, purpose, id string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
 	j.admission.Lock()
 	defer j.admission.Unlock()
+	return j.startTaskPurposeIDWithoutAdmission(parent, pipeline, purpose, id, run)
+}
+
+func (j *JobManager) startTaskPurposeIDWithoutAdmission(parent context.Context, pipeline, purpose, id string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
 	j.mu.Lock()
 	if j.job.Running {
 		j.mu.Unlock()
 		return "", fmt.Errorf("a run is already active; stop it first")
 	}
 	ctx, cancel := context.WithCancelCause(parent)
-	id := fmt.Sprintf("run-%d", time.Now().UnixNano())
 	done := make(chan struct{})
 	j.job = Job{Purpose: purpose, ID: id, Running: true, Phase: "preparing", Started: time.Now(), Trace: domain.ExecutionTrace{PipelineID: pipeline, Events: []domain.TraceEvent{}}}
 	j.prompts = nil
 	j.cancel = func() { cancel(engine.ErrUserCancelled) }
 	j.done = done
 	j.mu.Unlock()
-	go func() {
-		defer cancel(nil)
-		defer close(done)
-		opt := engine.RunOptions{
-			OnPrompt: func(p engine.PromptSnapshot) { j.rememberPrompt(id, p) },
-			Purpose:  purpose,
-			OnStart: func(tr domain.ExecutionTrace) {
-				j.mu.Lock()
-				defer j.mu.Unlock()
-				if j.job.ID == id {
-					j.job.Trace = domain.CloneTrace(tr)
-				}
-			},
-			OnDelta: func(delta string) {
-				j.mu.Lock()
-				defer j.mu.Unlock()
-				if j.job.ID == id && !j.job.Cleared {
-					j.job.Text += delta
-				}
-			},
-			OnReset: func() {
-				j.mu.Lock()
-				defer j.mu.Unlock()
-				if j.job.ID == id {
-					j.job.Text = ""
-				}
-			},
-			OnTrace: func(ev domain.TraceEvent) {
-				j.mu.Lock()
-				defer j.mu.Unlock()
-				if j.job.ID == id {
-					j.job.Trace.Events = append(j.job.Trace.Events, domain.CloneTraceEvent(ev))
-				}
-			},
-		}
-		result, report, err := run(ctx, opt)
-		j.mu.Lock()
-		defer j.mu.Unlock()
-		if j.job.ID != id {
-			return
-		}
-		j.job.Running = false
-		j.job.Finished = time.Now()
-		j.job.Phase = "finished"
-		j.job.Trace = domain.CloneTrace(result.Trace)
-		j.job.DurationMS = time.Since(j.job.Started).Milliseconds()
-		j.job.Benchmark = report
-		if !j.job.Cleared {
-			if err != nil {
-				j.job.Error = err.Error()
-			} else {
-				j.job.Text = result.Text
-			}
-		}
-	}()
+	go j.runTask(ctx, cancel, done, id, pipeline, purpose, run)
 	return id, nil
 }
+
+func (j *JobManager) runTask(ctx context.Context, cancel context.CancelCauseFunc, done chan struct{}, id, pipeline, purpose string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) {
+	defer cancel(nil)
+	defer close(done)
+	opt := engine.RunOptions{
+		OnPrompt: func(p engine.PromptSnapshot) { j.rememberPrompt(id, p) },
+		Purpose:  purpose,
+		OnStart: func(tr domain.ExecutionTrace) {
+			j.mu.Lock()
+			defer j.mu.Unlock()
+			if j.job.ID == id {
+				j.job.Trace = domain.CloneTrace(tr)
+			}
+		},
+		OnDelta: func(delta string) {
+			j.mu.Lock()
+			defer j.mu.Unlock()
+			if j.job.ID == id && !j.job.Cleared {
+				j.job.Text += delta
+			}
+		},
+		OnReset: func() {
+			j.mu.Lock()
+			defer j.mu.Unlock()
+			if j.job.ID == id {
+				j.job.Text = ""
+			}
+		},
+		OnTrace: func(ev domain.TraceEvent) {
+			j.mu.Lock()
+			defer j.mu.Unlock()
+			if j.job.ID == id {
+				j.job.Trace.Events = append(j.job.Trace.Events, domain.CloneTraceEvent(ev))
+			}
+		},
+	}
+	result, report, err := run(ctx, opt)
+	j.finishTask(id, result, report, err)
+}
+
+func (j *JobManager) finishTask(id string, result engine.Result, report *BenchmarkReport, runErr error) {
+	j.admission.Lock()
+	defer j.admission.Unlock()
+	j.mu.Lock()
+	if j.job.ID != id {
+		j.mu.Unlock()
+		return
+	}
+	j.job.Running = false
+	j.job.Finished = time.Now()
+	j.job.Phase = "finished"
+	j.job.Trace = domain.CloneTrace(result.Trace)
+	j.job.DurationMS = time.Since(j.job.Started).Milliseconds()
+	j.job.Benchmark = report
+	if !j.job.Cleared {
+		if runErr != nil {
+			j.job.Error = runErr.Error()
+		} else {
+			j.job.Text = result.Text
+		}
+	}
+	pending := j.pending
+	j.pending = nil
+	if pending == nil {
+		j.job.QueuedID = ""
+		j.job.QueuedPurpose = ""
+		j.mu.Unlock()
+		return
+	}
+	j.mu.Unlock()
+	_, _ = j.startTaskPurposeIDWithoutAdmission(pending.parent, pending.pipeline, pending.purpose, pending.id, pending.run)
+}
+
 func (j *JobManager) Clear() {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -174,6 +268,12 @@ func (j *JobManager) Clear() {
 		j.cancel()
 	}
 	j.prompts = nil
+	if j.pending != nil && j.pending.cancelPrepare != nil {
+		j.pending.cancelPrepare()
+	}
+	j.pending = nil
+	j.job.QueuedID = ""
+	j.job.QueuedPurpose = ""
 	j.job.Cleared = true
 	j.job.Text = ""
 	j.job.Error = ""
@@ -188,7 +288,11 @@ func (j *JobManager) Wait(ctx context.Context, id string) (Job, error) {
 	}
 	select {
 	case <-done:
-		return j.Snapshot(), nil
+		job := j.Snapshot()
+		if job.ID != id {
+			return Job{}, fmt.Errorf("run completed and a queued run is now current")
+		}
+		return job, nil
 	case <-ctx.Done():
 		return Job{}, ctx.Err()
 	}

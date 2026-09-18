@@ -297,3 +297,89 @@ func TestServerScreenDecideNeedScreenUsesFreshManualCapture(t *testing.T) {
 		t.Fatalf("need_screen capture trace events=%d", captureEvents)
 	}
 }
+
+type queuedManualProvider struct {
+	started chan string
+	release chan struct{}
+}
+
+func (*queuedManualProvider) ID() string { return "opencode" }
+func (provider *queuedManualProvider) Stream(ctx context.Context, request providers.Request, _ string) (<-chan providers.Event, <-chan error) {
+	events := make(chan providers.Event, 2)
+	errors := make(chan error, 1)
+	image := string(request.ImageJPEG)
+	provider.started <- image
+	go func() {
+		defer close(events)
+		defer close(errors)
+		if image == "manual-frame-1" {
+			select {
+			case <-provider.release:
+			case <-ctx.Done():
+				errors <- ctx.Err()
+				return
+			}
+		}
+		events <- providers.Event{Type: providers.EventDelta, Text: image, ModelID: request.ModelID}
+		events <- providers.Event{Type: providers.EventDone, ModelID: request.ModelID}
+	}()
+	return events, errors
+}
+
+func TestTwoManualCommandsPinDistinctScreensBeforeQueuedExecution(t *testing.T) {
+	a := studioTestApp(t)
+	provider := &queuedManualProvider{started: make(chan string, 2), release: make(chan struct{})}
+	a.registry.Set("opencode", provider)
+	server := control.New("127.0.0.1:0", a)
+	var captures atomic.Int32
+	server.Capture = func() ([]byte, error) {
+		n := captures.Add(1)
+		return []byte(fmt.Sprintf("manual-frame-%d", n)), nil
+	}
+
+	firstID, err := server.StartCommand("analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case image := <-provider.started:
+		if image != "manual-frame-1" {
+			t.Fatalf("first request image=%q", image)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first manual request did not reach provider")
+	}
+
+	secondID, err := server.StartCommand("analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstID == secondID {
+		t.Fatalf("manual IDs collided: %q", firstID)
+	}
+	if captures.Load() != 2 {
+		t.Fatalf("queued command did not pin its screen at admission: captures=%d", captures.Load())
+	}
+	job := server.CurrentJob()
+	if job.ID != firstID || job.QueuedID != secondID {
+		t.Fatalf("manual queue state=%+v", job)
+	}
+
+	close(provider.release)
+	select {
+	case image := <-provider.started:
+		if image != "manual-frame-2" {
+			t.Fatalf("queued request used wrong pinned screen: %q", image)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued manual request did not reach provider")
+	}
+	deadline := time.Now().Add(time.Second)
+	for server.CurrentJob().Running && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	job = server.CurrentJob()
+	if job.ID != secondID || job.Text != "manual-frame-2" || job.Error != "" {
+		t.Fatalf("queued manual result=%+v", job)
+	}
+}

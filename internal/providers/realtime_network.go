@@ -89,7 +89,7 @@ func resolveRealtimeProxy(ctx context.Context, resolver ProxyResolver) (*url.URL
 	}
 	raw, err := resolver.ProxyURL(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("AI VPN unavailable: %w", err)
+		return nil, fmt.Errorf("AI VPN unavailable")
 	}
 	if raw == "" {
 		return nil, nil

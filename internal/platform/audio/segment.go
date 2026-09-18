@@ -17,10 +17,14 @@ type Segmenter struct {
 	Config             domain.AudioSourceConfig
 	rate               int
 	pending, pre       []int16
+	pendingOverlap     int
+	carryOverlap       bool
 	started, lastVoice time.Time
 	silence            int
 	Level              float64
 }
+
+const segmentOverlapMS = 200
 
 func (s *Segmenter) Push(b Block) []Segment {
 	var out []Segment
@@ -54,8 +58,12 @@ func (s *Segmenter) Push(b Block) []Segment {
 		if voice {
 			if len(s.pending) == 0 {
 				s.pending = append(s.pending, s.pre...)
+				if s.carryOverlap {
+					s.pendingOverlap = len(s.pre)
+				}
 				s.started = at.Add(-time.Duration(len(s.pre)) * time.Second / time.Duration(s.rate))
 				s.pre = nil
+				s.carryOverlap = false
 			}
 			s.lastVoice = at.Add(time.Duration(len(p)) * time.Second / time.Duration(s.rate))
 			s.silence = 0
@@ -64,14 +72,20 @@ func (s *Segmenter) Push(b Block) []Segment {
 		}
 		if !s.started.IsZero() {
 			s.pending = append(s.pending, p...)
-			if len(s.pending) >= s.rate*s.Config.SegmentMS/1000 || s.silence >= s.rate*s.Config.SilenceMS/1000 {
+			maxSamples := s.rate * s.Config.SegmentMS / 1000
+			switch {
+			case maxSamples > 0 && len(s.pending) >= maxSamples:
+				if seg, ok := s.flushAtLimit(); ok {
+					out = append(out, seg)
+				}
+			case s.silence >= s.rate*s.Config.SilenceMS/1000:
 				if seg, ok := s.flushCompleted(); ok {
 					out = append(out, seg)
 				}
 			}
 		} else {
 			s.pre = append(s.pre, p...)
-			cap := s.rate / 5
+			cap := s.rate * segmentOverlapMS / 1000
 			if len(s.pre) > cap {
 				copy(s.pre, s.pre[len(s.pre)-cap:])
 				s.pre = s.pre[:cap]
@@ -93,11 +107,25 @@ func (s *Segmenter) flushCompleted() (Segment, bool) {
 	return segment, ok
 }
 
+func (s *Segmenter) flushAtLimit() (Segment, bool) {
+	overlapSamples := min(len(s.pending), s.rate*segmentOverlapMS/1000)
+	overlap := append([]int16(nil), s.pending[len(s.pending)-overlapSamples:]...)
+	segment, ok := s.finishSegment()
+	if !ok {
+		return Segment{}, false
+	}
+	segment.Clip.Final = true
+	s.pre = overlap
+	s.carryOverlap = len(overlap) > 0
+	return segment, true
+}
+
 // Interrupt closes the current semantic span without pretending it ended on a
 // normal speech/silence boundary. It is used when the capture transport breaks.
 func (s *Segmenter) Interrupt() (Segment, bool) {
 	segment, ok := s.finishSegment()
 	s.pre = nil
+	s.carryOverlap = false
 	s.Level = 0
 	return segment, ok
 }
@@ -114,12 +142,14 @@ func (s *Segmenter) finishSegment() (Segment, bool) {
 	emit := sampleCount >= s.rate*s.Config.MinimumMS/1000
 	if emit {
 		segment.Clip = domain.AudioClip{
-			PCM16:      append([]int16(nil), s.pending...),
-			DurationMS: sampleCount * 1000 / s.rate,
-			SampleRate: s.rate,
-			Channels:   1,
-			StartedAt:  segment.Started,
-			EndedAt:    segment.Ended,
+			PCM16:        append([]int16(nil), s.pending...),
+			DurationMS:   sampleCount * 1000 / s.rate,
+			SampleRate:   s.rate,
+			Channels:     1,
+			StartedAt:    segment.Started,
+			EndedAt:      segment.Ended,
+			OverlapMS:    s.pendingOverlap * 1000 / s.rate,
+			Continuation: s.pendingOverlap > 0,
 		}
 	}
 	s.resetSpeech()
@@ -128,6 +158,7 @@ func (s *Segmenter) finishSegment() (Segment, bool) {
 
 func (s *Segmenter) resetSpeech() {
 	s.pending = nil
+	s.pendingOverlap = 0
 	s.started = time.Time{}
 	s.lastVoice = time.Time{}
 	s.silence = 0
@@ -136,5 +167,6 @@ func (s *Segmenter) resetSpeech() {
 func (s *Segmenter) Reset() {
 	s.resetSpeech()
 	s.pre = nil
+	s.carryOverlap = false
 	s.Level = 0
 }

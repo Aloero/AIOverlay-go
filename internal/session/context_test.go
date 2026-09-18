@@ -101,3 +101,46 @@ func TestTranscriptPartialFinalLatePartialKeepsOneFinalRecord(t *testing.T) {
 		t.Fatalf("unexpected transcript state: %+v", snap.Entries)
 	}
 }
+
+func TestOverlappingTranscriptTrimsOnlySharedAudioPrefix(t *testing.T) {
+	store := NewContextStore()
+	cfg := testContext()
+	generation := store.Generation("p", cfg.ID)
+	start := time.Now()
+	first := ContextEntry{ID: "a", SourceID: "speaker", Text: "alpha beta gamma", Start: start, End: start.Add(time.Second), Revision: 1, Final: true}
+	second := ContextEntry{ID: "b", SourceID: "speaker", Text: "Gamma, delta", Start: start.Add(800 * time.Millisecond), End: start.Add(1800 * time.Millisecond), Revision: 1, Final: true}
+	third := ContextEntry{ID: "c", SourceID: "speaker", Text: "delta delta", Start: start.Add(1800 * time.Millisecond), End: start.Add(2 * time.Second), Revision: 1, Final: true}
+	for _, entry := range []ContextEntry{first, second, third} {
+		if !store.UpsertTranscript(cfg, "p", generation, entry) {
+			t.Fatalf("rejected transcript %s", entry.ID)
+		}
+	}
+
+	snapshot := store.Snapshot(cfg, "p", start.Add(3*time.Second))
+	if len(snapshot.Entries) != 3 {
+		t.Fatalf("entries=%+v", snapshot.Entries)
+	}
+	if snapshot.Entries[1].Text != "delta" {
+		t.Fatalf("overlap was not trimmed: %q", snapshot.Entries[1].Text)
+	}
+	if snapshot.Entries[2].Text != "delta delta" {
+		t.Fatalf("non-overlapping real repetition was removed: %q", snapshot.Entries[2].Text)
+	}
+}
+
+func TestShortTranscriptCorpusPreservesNegationAndNumber(t *testing.T) {
+	store := NewContextStore()
+	cfg := testContext()
+	generation := store.Generation("p", cfg.ID)
+	start := time.Now()
+	for i, text := range []string{"нет", "42"} {
+		at := start.Add(time.Duration(i) * time.Second)
+		if !store.UpsertTranscript(cfg, "p", generation, ContextEntry{ID: text, SourceID: "speaker", Text: text, Start: at, End: at.Add(100 * time.Millisecond), Revision: 1, Final: true}) {
+			t.Fatalf("short transcript %q rejected", text)
+		}
+	}
+	snapshot := store.Snapshot(cfg, "p", start.Add(3*time.Second))
+	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Text != "нет" || snapshot.Entries[1].Text != "42" {
+		t.Fatalf("short transcripts changed: %+v", snapshot.Entries)
+	}
+}
