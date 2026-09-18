@@ -148,3 +148,46 @@ func TestSegmenterInterruptWithoutSamplesIsSafe(t *testing.T) {
 		t.Fatal("empty segment unexpectedly emitted")
 	}
 }
+
+func TestSegmenterDiscontinuityKeepsNewPacketAsSeparateSpeech(t *testing.T) {
+	segmenter := Segmenter{Config: domain.AudioSourceConfig{
+		Mode: "system", SegmentMS: 2000, SilenceMS: 200, MinimumMS: 80, Threshold: .01,
+	}}
+	firstVoice := make([]int16, 1600)
+	secondVoice := make([]int16, 1600)
+	for i := range firstVoice {
+		firstVoice[i] = 9000
+		secondVoice[i] = 14000
+	}
+	start := time.Now()
+	if out := segmenter.Push(Block{Samples: firstVoice, Rate: 16000, At: start}); len(out) != 0 {
+		t.Fatalf("first packet unexpectedly completed %d segments", len(out))
+	}
+
+	interrupted := segmenter.Push(Block{
+		Samples: secondVoice, Rate: 16000, At: start.Add(100 * time.Millisecond), Discontinuity: true,
+	})
+	if len(interrupted) != 1 {
+		t.Fatalf("discontinuity did not flush exactly one old segment: %d", len(interrupted))
+	}
+	if interrupted[0].Clip.Final {
+		t.Fatal("old speech flushed by discontinuity was marked as a normal final segment")
+	}
+	if interrupted[0].Started != start || interrupted[0].Ended.Sub(interrupted[0].Started) != 100*time.Millisecond {
+		t.Fatalf("old speech boundaries=%v..%v", interrupted[0].Started, interrupted[0].Ended)
+	}
+
+	completed := segmenter.Push(Block{Rate: 16000, At: start.Add(500 * time.Millisecond)})
+	if len(completed) != 1 {
+		t.Fatalf("new packet after discontinuity was lost: completed=%d", len(completed))
+	}
+	if !completed[0].Clip.Final {
+		t.Fatal("new speech after discontinuity did not complete normally")
+	}
+	if completed[0].Started.Before(start.Add(100 * time.Millisecond)) {
+		t.Fatalf("new speech was joined to pre-gap audio: started=%v", completed[0].Started)
+	}
+	if len(completed[0].Clip.PCM16) != len(secondVoice) {
+		t.Fatalf("new speech samples=%d want=%d", len(completed[0].Clip.PCM16), len(secondVoice))
+	}
+}
