@@ -129,3 +129,65 @@ func TestClearDropsPendingManualCommand(t *testing.T) {
 		t.Fatalf("cleared pending command ran: count=%d job=%+v", secondRuns.Load(), jobs.Snapshot())
 	}
 }
+
+func TestClearCancelsPreparationAfterPendingManualBecomesActive(t *testing.T) {
+	var jobs JobManager
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	prepareStarted := make(chan struct{})
+	prepareCancelled := make(chan struct{})
+	var secondRuns atomic.Int32
+
+	first := func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		close(firstStarted)
+		<-releaseFirst
+		return engine.Result{}, nil, nil
+	}
+	second := func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		secondRuns.Add(1)
+		return engine.Result{}, nil, nil
+	}
+	prepare := func(ctx context.Context) error {
+		close(prepareStarted)
+		<-ctx.Done()
+		close(prepareCancelled)
+		return ctx.Err()
+	}
+	if _, err := jobs.queueTaskPurpose(context.Background(), "p", "command", nil, first); err != nil {
+		t.Fatal(err)
+	}
+	<-firstStarted
+	queuedResult := make(chan error, 1)
+	go func() {
+		_, err := jobs.queueTaskPurpose(context.Background(), "p", "command", prepare, second)
+		queuedResult <- err
+	}()
+	<-prepareStarted
+	close(releaseFirst)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		job := jobs.Snapshot()
+		if job.Running && job.QueuedID == "" && job.ID != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queued manual did not become active: %+v", job)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	jobs.Clear()
+	select {
+	case <-prepareCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("Clear did not cancel active queued preparation")
+	}
+	select {
+	case <-queuedResult:
+	case <-time.After(time.Second):
+		t.Fatal("queued StartCommand preparation remained blocked")
+	}
+	if secondRuns.Load() != 0 {
+		t.Fatalf("cancelled queued run executed %d times", secondRuns.Load())
+	}
+}

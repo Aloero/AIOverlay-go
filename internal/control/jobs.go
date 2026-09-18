@@ -117,7 +117,7 @@ func (j *JobManager) queueTaskPurpose(parent context.Context, pipeline, purpose 
 	j.mu.Lock()
 	if !j.job.Running {
 		j.mu.Unlock()
-		id, err := j.startTaskPurposeIDWithoutAdmission(parent, pipeline, purpose, newJobID(), run)
+		id, err := j.startTaskPurposeIDWithoutAdmission(parent, pipeline, purpose, newJobID(), run, nil)
 		j.admission.Unlock()
 		return id, err
 	}
@@ -168,10 +168,10 @@ func newJobID() string {
 func (j *JobManager) startTaskPurposeID(parent context.Context, pipeline, purpose, id string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
 	j.admission.Lock()
 	defer j.admission.Unlock()
-	return j.startTaskPurposeIDWithoutAdmission(parent, pipeline, purpose, id, run)
+	return j.startTaskPurposeIDWithoutAdmission(parent, pipeline, purpose, id, run, nil)
 }
 
-func (j *JobManager) startTaskPurposeIDWithoutAdmission(parent context.Context, pipeline, purpose, id string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error)) (string, error) {
+func (j *JobManager) startTaskPurposeIDWithoutAdmission(parent context.Context, pipeline, purpose, id string, run func(context.Context, engine.RunOptions) (engine.Result, *BenchmarkReport, error), cancelPrepare context.CancelFunc) (string, error) {
 	j.mu.Lock()
 	if j.job.Running {
 		j.mu.Unlock()
@@ -181,7 +181,12 @@ func (j *JobManager) startTaskPurposeIDWithoutAdmission(parent context.Context, 
 	done := make(chan struct{})
 	j.job = Job{Purpose: purpose, ID: id, Running: true, Phase: "preparing", Started: time.Now(), Trace: domain.ExecutionTrace{PipelineID: pipeline, Events: []domain.TraceEvent{}}}
 	j.prompts = nil
-	j.cancel = func() { cancel(engine.ErrUserCancelled) }
+	j.cancel = func() {
+		cancel(engine.ErrUserCancelled)
+		if cancelPrepare != nil {
+			cancelPrepare()
+		}
+	}
 	j.done = done
 	j.mu.Unlock()
 	go j.runTask(ctx, cancel, done, id, pipeline, purpose, run)
@@ -257,7 +262,7 @@ func (j *JobManager) finishTask(id string, result engine.Result, report *Benchma
 		return
 	}
 	j.mu.Unlock()
-	_, _ = j.startTaskPurposeIDWithoutAdmission(pending.parent, pending.pipeline, pending.purpose, pending.id, pending.run)
+	_, _ = j.startTaskPurposeIDWithoutAdmission(pending.parent, pending.pipeline, pending.purpose, pending.id, pending.run, pending.cancelPrepare)
 }
 
 func (j *JobManager) Clear() {
