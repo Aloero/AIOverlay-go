@@ -69,7 +69,7 @@ func verifyCode(o options, r commandRunner) error {
 	if err = r.run("windows-vet", target, o.goBin, "vet", "./..."); err != nil {
 		return err
 	}
-	if err = r.run("repeat", nil, o.goBin, "test", "./internal/engine", "./internal/providers", "./internal/app", "./internal/control", "./internal/desktop", "./internal/platform", "./internal/tunnel", "./internal/hotkey", "-count=20"); err != nil {
+	if err = r.run("repeat", nil, o.goBin, "test", "./internal/engine", "./internal/providers", "./internal/app", "./internal/control", "./internal/desktop", "./internal/platform", "./internal/platform/audio", "./internal/session", "./internal/tunnel", "./internal/hotkey", "-count=20"); err != nil {
 		return err
 	}
 	if o.race {

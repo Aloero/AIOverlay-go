@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"aioverlay/internal/domain"
@@ -12,31 +13,33 @@ import (
 )
 
 func TestPreviewRefusesNativeCaptureStillReleasingAfterPause(t *testing.T) {
-	manager := NewManager(nil)
-	entered, release, nativeDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	var calls atomic.Int32
-	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
-		if calls.Add(1) != 1 {
-			return errors.New("overlapping native capture")
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager(nil)
+		entered, release, nativeDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var calls atomic.Int32
+		manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+			if calls.Add(1) != 1 {
+				return errors.New("overlapping native capture")
+			}
+			close(entered)
+			<-ctx.Done()
+			<-release // Simulate native teardown still holding the device.
+			close(nativeDone)
+			return ctx.Err()
+		})
+		manager.Start(context.Background(), managerConfig())
+		t.Cleanup(func() { close(release); manager.Close(); <-nativeDone })
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("audio capture did not start")
 		}
-		close(entered)
-		<-ctx.Done()
-		<-release // Simulate native teardown still holding the device.
-		close(nativeDone)
-		return ctx.Err()
+		manager.Pause(true)
+		_, err := manager.PreviewAudio(context.Background(), domain.AudioSourceConfig{Mode: "system"}, time.Second)
+		if err == nil || calls.Load() != 1 {
+			t.Fatalf("preview overlapped native teardown: calls=%d err=%v", calls.Load(), err)
+		}
 	})
-	manager.Start(context.Background(), managerConfig())
-	t.Cleanup(func() { close(release); manager.Close(); <-nativeDone })
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("audio capture did not start")
-	}
-	manager.Pause(true)
-	_, err := manager.PreviewAudio(context.Background(), domain.AudioSourceConfig{Mode: "system"}, time.Second)
-	if err == nil || calls.Load() != 1 {
-		t.Fatalf("preview overlapped native teardown: calls=%d err=%v", calls.Load(), err)
-	}
 }
 
 func TestPreviewExcludesAnotherPreviewAndBackgroundStart(t *testing.T) {

@@ -69,3 +69,60 @@ The additional `studio-review.cjs` suite passed **14 scenarios**, with zero Java
 New Go regressions cover all 12 order/dispatch combinations with concurrency limits, real/simulated VLM-to-text-catalog agreement, graph-aware input states, final Validator failure metadata, untried models independent of retries, private-RNG preview isolation, redacted/non-trace prompt snapshots, bounded last-run retention and late-clear protection, actual usage persistence, and all four configuration mutation routes during blocked screenshot preparation. The latter test reproduced a HTTP 200 settings change during an active capture on 0.2.7, and now expects HTTP 409 with unchanged configuration.
 
 The versioned `UX_REVIEW.md` maps all nine requested UX areas to behavior and evidence. New native platform behavior is not inferred from Linux UI checks. The private user config is hash-checked before/after this work; it is not the safe release template. Config schema remains 3.
+
+## R2 development branch: context and capture ownership (2026-09-18)
+
+This is a development snapshot of `feature/audio-context-029`, not completion of
+R2 and not a new stable release tag. The public build profile still has the
+existing version label. Identify a generated archive by `BUILD.json.source_commit`
+and `releases/RELEASE.json`, not by assuming the old version label denotes the
+unchanged v0.2.8 code.
+
+Capture now pins the local context generation before work enters a queue. Audio
+queued before Clear cannot be relabelled with the new generation; Clear also
+resets unfinished speech and pre-roll on the producer's next callback. Old gaps
+cannot overwrite the new conversation or its diagnostics. Screen capture uses
+the same boundary: a delayed frame from the old generation is discarded, while
+an unchanged frame captured after Clear remains eligible for the new context.
+A manual command whose selected context is cleared during preparation is
+cancelled before AI dispatch. A subsequent screenshot remains available, and the
+legacy no-context screenshot does not acquire an audio device.
+
+Native audio ownership is separate from membership in the source-runtime map.
+A capture lease survives Pause until the native producer has actually returned.
+Local preview cannot overlap that teardown, a second preview, or a new capture
+for the same source. Lease release is idempotent and cannot free a replacement
+owner. Preview has a core deadline and an input-duration clamp; cancellation does
+not return a partial recording as success. These tests use synthetic capture,
+including a deliberately blocked producer, not a physical Windows driver.
+
+Timestamp-error packets do not become ordinary speech. The previous span closes
+as incomplete; samples from the packet with an unreliable capture range are
+discarded with an explicit diagnostic and context gap. A regular discontinuity
+still preserves the following valid packet as a separate span, and silent
+packets are not classified as discontinuities. This conservative timestamp-error
+policy does lose that packet's samples; the gap makes the loss visible.
+
+Regression coverage lives in `internal/session/audio_generation_test.go`,
+`audio_preview_test.go`, `audio_capture_gate_test.go`, `screen_generation_test.go`,
+`internal/platform/audio/pcm_test.go` and `internal/control/audio_preview_test.go`.
+Screen-generation and delayed-native-teardown tests use virtual time. The mixed
+lifecycle soak accepts only the specific cancellation caused by a concurrent
+Clear and checks that a fresh manual command still succeeds afterward.
+
+The release command now repeats `internal/session` and `internal/platform/audio`
+as well as the earlier critical packages. Run `go run ./cmd/release --race` with
+a working C toolchain, Node, Playwright Chromium and its system font/library
+dependencies. Environment repair is a host-toolchain step; no compiler, font,
+browser profile, raw recording or test screenshot belongs in either archive.
+Archive verification records tests/vet, Windows cross-build, real race detection,
+DOM/Chromium, CRC, every-entry hashes, clean extraction and a reproducible EXE
+from the extracted source. Consult the generated report for the checks actually
+completed on that archive's commit.
+
+Physical Windows audio/desktop acceptance, real cloud inference and real VPN
+packet-trace verification have not been performed for this snapshot. Persistent
+realtime and local STT helper experiments are not production-ready provider
+routes. There is still no shipped whisper.cpp runtime/weights, process-only Zoom
+capture or ML VAD. No hardware-readiness claim follows from a Linux mock or a
+Windows-target compilation.

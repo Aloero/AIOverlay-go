@@ -174,7 +174,7 @@ func release(o options) error {
 	if err = atomicfile.Write(filepath.Join(root, "releases", "SHA256SUMS.txt"), []byte(sums.String()), 0644); err != nil {
 		return err
 	}
-	verification := map[string]any{"go_test": "PASS", "go_vet": "PASS", "windows_vet": "PASS", "windows_cross_build": "PASS", "js_syntax": "PASS", "critical_repeat": "PASS (20)", "ui": "not run", "race": "not run", "physical_windows": "not run", "source_archive_rebuild": "PASS"}
+	verification := map[string]any{"go_test": "PASS", "go_vet": "PASS", "windows_vet": "PASS", "windows_cross_build": "PASS", "js_syntax": "PASS", "critical_repeat": "PASS (20)", "ui": "not run", "race": "not run", "physical_windows": "not run", "real_provider": "not run", "real_vpn": "not run", "source_archive_rebuild": "PASS"}
 	if o.ui {
 		verification["ui"] = "PASS (DOM, regression and Chromium suites)"
 	}
