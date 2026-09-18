@@ -428,19 +428,29 @@ func waitForSourceStop(runtime *sourceRuntime, timeout time.Duration) {
 	waitForChannelUntil(runtime.turnDone, deadline)
 }
 
-func waitForChannelUntil(done <-chan struct{}, deadline time.Time) {
+func waitForChannelUntil(done <-chan struct{}, deadline time.Time) bool {
+	return waitForChannel(done, time.Until(deadline))
+}
+
+func waitForChannel(done <-chan struct{}, timeout time.Duration) bool {
 	if done == nil {
-		return
+		return true
 	}
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		return
+	if timeout <= 0 {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
 	}
-	timer := time.NewTimer(remaining)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-done:
+		return true
 	case <-timer.C:
+		return false
 	}
 }
 
@@ -485,8 +495,10 @@ func (m *Manager) runSource(ctx context.Context, pipelineID string, runtime *sou
 }
 
 const (
-	defaultAudioRestartDelay = 250 * time.Millisecond
-	maxAudioRestartDelay     = 5 * time.Second
+	defaultAudioRestartDelay      = 250 * time.Millisecond
+	maxAudioRestartDelay          = 5 * time.Second
+	defaultAudioRestartDrainGrace = 2 * time.Second
+	defaultAudioRestartCancelWait = 2 * time.Second
 )
 
 func shouldRestartDefaultAudio(runtime *sourceRuntime, runErr, contextErr error) bool {
@@ -538,7 +550,13 @@ func restartBackoff(base, maximum time.Duration, failures int) time.Duration {
 }
 
 func (m *Manager) restartDefaultAudioSource(runtime *sourceRuntime, delay time.Duration) {
-	waitForSourceStop(runtime, 2*time.Second)
+	if !drainAudioRuntimeForRestart(runtime, defaultAudioRestartDrainGrace, defaultAudioRestartCancelWait) {
+		runtime.mu.Lock()
+		runtime.status.TransportState = "unavailable"
+		runtime.status.LastDiagnostic = "audio recovery stopped because the previous turn did not release after cancellation"
+		runtime.mu.Unlock()
+		return
+	}
 	m.mu.RLock()
 	root := m.root
 	m.mu.RUnlock()
@@ -565,6 +583,19 @@ func (m *Manager) restartDefaultAudioSource(runtime *sourceRuntime, delay time.D
 	delete(m.sources, runtime.cfg.ID)
 	m.mu.Unlock()
 	m.reconcile()
+}
+
+func drainAudioRuntimeForRestart(runtime *sourceRuntime, grace, cancelWait time.Duration) bool {
+	if runtime == nil {
+		return true
+	}
+	if waitForChannel(runtime.turnDone, grace) {
+		return true
+	}
+	if runtime.cancel != nil {
+		runtime.cancel()
+	}
+	return waitForChannel(runtime.turnDone, cancelWait)
 }
 
 func setAudioRecovering(runtime *sourceRuntime) {

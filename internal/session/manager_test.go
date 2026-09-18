@@ -6,6 +6,7 @@ import (
 	paudio "aioverlay/internal/platform/audio"
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1393,5 +1394,60 @@ func TestScreenContextUsesCaptureCompletionTimestamp(t *testing.T) {
 	}
 	if snapshot.ImageAt.Before(releasedAt) {
 		t.Fatalf("screen context timestamp predates capture completion: image_at=%v released_at=%v", snapshot.ImageAt, releasedAt)
+	}
+}
+
+func TestAudioRestartDrainLetsCurrentTurnFinishBeforeCancellation(t *testing.T) {
+	turnDone := make(chan struct{})
+	var cancelled atomic.Int32
+	runtime := &sourceRuntime{
+		turnDone: turnDone,
+		cancel:   func() { cancelled.Add(1) },
+	}
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		close(turnDone)
+	}()
+
+	if !drainAudioRuntimeForRestart(runtime, 50*time.Millisecond, 50*time.Millisecond) {
+		t.Fatal("gracefully finishing turn blocked audio restart")
+	}
+	if cancelled.Load() != 0 {
+		t.Fatal("graceful tail was cancelled before its drain window ended")
+	}
+}
+
+func TestAudioRestartDrainCancelsStuckTurnBeforeReplacement(t *testing.T) {
+	turnDone := make(chan struct{})
+	cancelled := make(chan struct{})
+	var once sync.Once
+	runtime := &sourceRuntime{
+		turnDone: turnDone,
+		cancel: func() {
+			once.Do(func() { close(cancelled) })
+		},
+	}
+	go func() {
+		<-cancelled
+		close(turnDone)
+	}()
+
+	if !drainAudioRuntimeForRestart(runtime, 0, 50*time.Millisecond) {
+		t.Fatal("cancelled turn did not release before audio restart")
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("stuck prior turn was not cancelled before replacement")
+	}
+}
+
+func TestAudioRestartDrainRefusesOverlapWithNonCooperativeTurn(t *testing.T) {
+	runtime := &sourceRuntime{
+		turnDone: make(chan struct{}),
+		cancel:   func() {},
+	}
+	if drainAudioRuntimeForRestart(runtime, 0, 5*time.Millisecond) {
+		t.Fatal("audio restart allowed a second runtime while the old turn was still alive")
 	}
 }
