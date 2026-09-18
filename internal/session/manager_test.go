@@ -1451,3 +1451,73 @@ func TestAudioRestartDrainRefusesOverlapWithNonCooperativeTurn(t *testing.T) {
 		t.Fatal("audio restart allowed a second runtime while the old turn was still alive")
 	}
 }
+
+func TestBackgroundScreenUsesCaptureCompletionTimeForContextSnapshot(t *testing.T) {
+	cfg := managerConfig()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Sources = []domain.EventSource{{
+		ID: "screen", Name: "screen", Kind: domain.SourceScreenTimer, Enabled: true,
+		EntryNodeID: "decision", Intent: domain.IntentDecide, ContextID: "c",
+	}}
+
+	manager := NewManager(nil)
+	manager.cfg = cfg
+	manager.started = true
+	runtime := &sourceRuntime{
+		cfg:      pipeline.Sources[0],
+		epoch:    1,
+		turns:    make(chan backgroundTurn, 1),
+		turnDone: make(chan struct{}),
+	}
+	manager.sources[runtime.cfg.ID] = runtime
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	capture := func(context.Context) ([]byte, error) {
+		close(started)
+		<-release
+		return []byte("fresh-frame"), nil
+	}
+	type captureResult struct {
+		image []byte
+		at    time.Time
+		err   error
+	}
+	captured := make(chan captureResult, 1)
+	go func() {
+		image, at, err := captureBackgroundFrame(context.Background(), capture)
+		captured <- captureResult{image: image, at: at, err: err}
+	}()
+	<-started
+
+	contextCfg := pipeline.Contexts[0]
+	generation := manager.contexts.Generation(pipeline.ID, contextCfg.ID)
+	transcriptAt := time.Now()
+	if !manager.contexts.Append(contextCfg, pipeline.ID, generation, ContextEntry{
+		ID: "during-capture", Kind: "transcript", SourceID: "audio", Text: "spoken while capture was running",
+		At: transcriptAt, Start: transcriptAt, End: transcriptAt, Revision: 1, Final: true,
+	}) {
+		t.Fatal("could not append transcript during screen capture")
+	}
+	close(release)
+	result := <-captured
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.at.Before(transcriptAt) {
+		t.Fatalf("background frame timestamp predates capture completion: frame=%v transcript=%v", result.at, transcriptAt)
+	}
+
+	manager.processScreenFrame(pipeline.ID, runtime, cfg, result.image, result.at)
+	select {
+	case turn := <-runtime.turns:
+		if turn.input.ContextText != "[transcript/audio] spoken while capture was running" {
+			t.Fatalf("screen decision used context from before capture completed: %q", turn.input.ContextText)
+		}
+		if !turn.at.Equal(result.at) {
+			t.Fatalf("turn timestamp=%v capture completion=%v", turn.at, result.at)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background screen turn was not queued")
+	}
+}

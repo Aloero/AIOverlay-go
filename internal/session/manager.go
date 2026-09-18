@@ -884,7 +884,7 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case at := <-ticker.C:
+		case <-ticker.C:
 			capture := m.backgroundScreenCapture()
 			m.mu.RLock()
 			cfg := m.cfg
@@ -895,7 +895,7 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 				r.mu.Unlock()
 				continue
 			}
-			img, err := capture(ctx)
+			img, capturedAt, err := captureBackgroundFrame(ctx, capture)
 			if err != nil {
 				r.mu.Lock()
 				r.status.LastError = err.Error()
@@ -905,13 +905,21 @@ func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sour
 			if !m.sourceCurrent(r.cfg.ID, r.epoch) {
 				continue
 			}
-			if !changeGate.Accept(img, at) {
+			if !changeGate.Accept(img, capturedAt) {
 				continue
 			}
-			m.processScreenFrame(pipelineID, r, cfg, img, at)
+			m.processScreenFrame(pipelineID, r, cfg, img, capturedAt)
 		}
 	}
 }
+func captureBackgroundFrame(ctx context.Context, capture ScreenCapture) ([]byte, time.Time, error) {
+	image, err := capture(ctx)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return image, time.Now(), nil
+}
+
 func (m *Manager) processScreenFrame(pipelineID string, runtime *sourceRuntime, cfg domain.Config, image []byte, at time.Time) {
 	runtime.mu.Lock()
 	runtime.status.LastEvent = at.Format(time.RFC3339Nano)
