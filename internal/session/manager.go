@@ -6,7 +6,6 @@ import (
 	paudio "aioverlay/internal/platform/audio"
 	"context"
 	"fmt"
-	"math"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -98,6 +97,7 @@ type Manager struct {
 	capture               ScreenCapture
 	backgroundCapture     ScreenCapture
 	audioCapture          paudio.CaptureFunc
+	captureGate           audioCaptureGate
 	contexts              *ContextStore
 	governor              *Governor
 	root                  context.Context
@@ -313,6 +313,10 @@ func (m *Manager) SetSourceRunning(id string, running bool) error {
 	if p != nil {
 		for _, src := range p.Sources {
 			if src.ID == id && src.Enabled {
+				if running && src.Kind == domain.SourceAudio && m.captureGate.previewActive() {
+					m.mu.Unlock()
+					return errAudioPreviewActive
+				}
 				found = true
 				break
 			}
@@ -1226,81 +1230,4 @@ func (m *Manager) Status() map[string]any {
 		contexts = m.contexts.Status(p.ID, p.Contexts)
 	}
 	return map[string]any{"active_pipeline_id": pid, "paused": paused, "sources": rows, "contexts": contexts, "governor": m.governor.Snapshot()}
-}
-
-type AudioPreview struct {
-	PCM16      []int16 `json:"-"`
-	SampleRate int     `json:"sample_rate"`
-	DurationMS int     `json:"duration_ms"`
-	Peak       float64 `json:"peak"`
-	RMS        float64 `json:"rms"`
-}
-
-func (m *Manager) PreviewAudio(ctx context.Context, cfg domain.AudioSourceConfig, duration time.Duration) (AudioPreview, error) {
-	m.mu.RLock()
-	for _, runtime := range m.sources {
-		if runtime.cfg.Kind == domain.SourceAudio && !sourceFinished(runtime) {
-			m.mu.RUnlock()
-			return AudioPreview{}, fmt.Errorf("pause the running audio source before local preview")
-		}
-	}
-	m.mu.RUnlock()
-	if duration < 250*time.Millisecond {
-		duration = 250 * time.Millisecond
-	}
-	if duration > 5*time.Second {
-		duration = 5 * time.Second
-	}
-	m.mu.RLock()
-	capture := m.audioCapture
-	m.mu.RUnlock()
-	if capture == nil {
-		return AudioPreview{}, fmt.Errorf("audio capture unavailable")
-	}
-	cctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	out := AudioPreview{}
-	var sum float64
-	err := capture(cctx, cfg, func(b paudio.Block) {
-		if len(b.Samples) == 0 {
-			return
-		}
-		if out.SampleRate == 0 {
-			out.SampleRate = b.Rate
-		}
-		if b.Rate != out.SampleRate {
-			return
-		}
-		need := out.SampleRate*int(duration/time.Millisecond)/1000 - len(out.PCM16)
-		if need <= 0 {
-			cancel()
-			return
-		}
-		if need > len(b.Samples) {
-			need = len(b.Samples)
-		}
-		for _, v := range b.Samples[:need] {
-			x := float64(v) / 32768
-			if x < 0 {
-				x = -x
-			}
-			if x > out.Peak {
-				out.Peak = x
-			}
-			sum += x * x
-		}
-		out.PCM16 = append(out.PCM16, b.Samples[:need]...)
-		if len(out.PCM16) >= out.SampleRate*int(duration/time.Millisecond)/1000 {
-			cancel()
-		}
-	})
-	if err != nil && cctx.Err() == nil {
-		return AudioPreview{}, err
-	}
-	if out.SampleRate == 0 || len(out.PCM16) == 0 {
-		return AudioPreview{}, fmt.Errorf("audio preview received no samples")
-	}
-	out.DurationMS = len(out.PCM16) * 1000 / out.SampleRate
-	out.RMS = math.Sqrt(sum / float64(len(out.PCM16)))
-	return out, nil
 }

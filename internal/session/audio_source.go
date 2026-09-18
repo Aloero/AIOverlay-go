@@ -65,12 +65,25 @@ func (m *Manager) runAudio(ctx context.Context, pipelineID string, runtime *sour
 		return err
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	release, err := m.captureGate.acquireSource(runtime.cfg.ID)
+	if err != nil {
+		return err
+	}
 	queue := newAudioSegmentQueue(queueCapacity, maxQueuedAudioPCMBytes)
-	producerDone := make(chan error, 1)
+	producerDone := make(chan struct{})
+	var captureErr error
 	go func() {
-		producerDone <- m.produceAudioSegments(ctx, pipelineID, runtime, capture, queue)
-		queue.Close()
+		defer close(producerDone)
+		defer queue.Close()
+		defer release()
+		captureErr = m.produceAudioSegments(ctx, pipelineID, runtime, capture, queue)
 	}()
+	// done must acknowledge native teardown, not just cancellation of the queue
+	// consumer. Manager's stop wait stays bounded even for a stuck driver.
+	defer func() { <-producerDone }()
 
 	for {
 		select {
@@ -78,7 +91,8 @@ func (m *Manager) runAudio(ctx context.Context, pipelineID string, runtime *sour
 			return ctx.Err()
 		case segment, ok := <-queue.items:
 			if !ok {
-				return captureResult(ctx, <-producerDone)
+				<-producerDone
+				return captureResult(ctx, captureErr)
 			}
 			queue.Release(segment)
 			runtime.mu.Lock()
@@ -111,6 +125,9 @@ func (m *Manager) audioRuntimeConfig(pipelineID string) (paudio.CaptureFunc, int
 }
 
 func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, runtime *sourceRuntime, capture paudio.CaptureFunc, queue *audioSegmentQueue) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	segmenter := paudio.Segmenter{Config: *runtime.cfg.Audio}
 	captured := m.captureAudioContext(pipelineID, runtime)
 	err := capture(ctx, *runtime.cfg.Audio, func(block paudio.Block) {

@@ -122,6 +122,7 @@ func (s *Server) handleAudioPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	req.DurationMS = min(5000, max(250, req.DurationMS))
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.DurationMS+2000)*time.Millisecond)
 	defer cancel()
 	preview, err := b.PreviewAudio(ctx, req.Config, time.Duration(req.DurationMS)*time.Millisecond)
