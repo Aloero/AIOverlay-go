@@ -1175,7 +1175,7 @@ func TestScreenCooldownUpdatesContextWithoutStartingAITurn(t *testing.T) {
 	manager.sources[source.ID] = runtime
 
 	at := time.Now()
-	manager.processScreenFrame("p", runtime, cfg, []byte("cooldown-frame"), at)
+	manager.processScreenFrame("p", runtime, cfg, []byte("cooldown-frame"), at, manager.contexts.Generation("p", runtime.cfg.ContextID))
 	if len(runtime.turns) != 0 {
 		t.Fatal("screen cooldown still started an AI turn")
 	}
@@ -1193,7 +1193,7 @@ func TestScreenCooldownUpdatesContextWithoutStartingAITurn(t *testing.T) {
 	runtime.mu.Lock()
 	runtime.cooldownUntil = time.Now().Add(-time.Second)
 	runtime.mu.Unlock()
-	manager.processScreenFrame("p", runtime, cfg, []byte("after-cooldown"), at.Add(time.Second))
+	manager.processScreenFrame("p", runtime, cfg, []byte("after-cooldown"), at.Add(time.Second), manager.contexts.Generation("p", runtime.cfg.ContextID))
 	if len(runtime.turns) != 1 {
 		t.Fatal("screen AI turn did not resume after cooldown")
 	}
@@ -1508,7 +1508,7 @@ func TestBackgroundScreenUsesCaptureCompletionTimeForContextSnapshot(t *testing.
 		t.Fatalf("background frame timestamp predates capture completion: frame=%v transcript=%v", result.at, transcriptAt)
 	}
 
-	manager.processScreenFrame(pipeline.ID, runtime, cfg, result.image, result.at)
+	manager.processScreenFrame(pipeline.ID, runtime, cfg, result.image, result.at, generation)
 	select {
 	case turn := <-runtime.turns:
 		if turn.input.ContextText != "[transcript/audio] spoken while capture was running" {

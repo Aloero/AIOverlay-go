@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -79,6 +80,7 @@ func TestSessionMixedLifecycleSoakKeepsStateBounded(t *testing.T) {
 		manager.Close()
 	}()
 
+	var clearedCommands int
 	var concurrent sync.WaitGroup
 	errCh := make(chan error, 2)
 	concurrent.Add(2)
@@ -95,6 +97,12 @@ func TestSessionMixedLifecycleSoakKeepsStateBounded(t *testing.T) {
 		defer concurrent.Done()
 		for index := 0; index < restartCycles; index++ {
 			prepared, err := manager.PrepareCommand(context.Background(), "analyze")
+			if errors.Is(err, errCommandContextChanged) {
+				// Clear revokes the generation selected before capture. Do not
+				// turn this deliberate cancellation into an unrelated error.
+				clearedCommands++
+				continue
+			}
 			if err != nil {
 				errCh <- fmt.Errorf("prepare manual command: %w", err)
 				return
@@ -128,6 +136,13 @@ func TestSessionMixedLifecycleSoakKeepsStateBounded(t *testing.T) {
 	}
 
 	concurrent.Wait()
+	if clearedCommands > restartCycles/6 {
+		t.Fatalf("more command cancellations than context clears: %d", clearedCommands)
+	}
+	prepared, err := manager.PrepareCommand(context.Background(), "analyze")
+	if err != nil || string(prepared.Input.ImageJPEG) != "manual-screen" {
+		t.Fatalf("fresh manual command unavailable after context clears: %v", err)
+	}
 	close(errCh)
 	for err := range errCh {
 		if err != nil {

@@ -26,6 +26,8 @@ type Publication struct {
 	Automatic   bool      `json:"automatic"`
 }
 
+var errCommandContextChanged = fmt.Errorf("conversation cleared during command preparation: %w", context.Canceled)
+
 type PreparedCommand struct {
 	PipelineID        string
 	Command           domain.CommandConfig
@@ -719,90 +721,6 @@ func (m *Manager) waitPending(ctx context.Context, pipelineID, contextID string,
 	}
 }
 
-func (m *Manager) runScreenTimer(ctx context.Context, pipelineID string, r *sourceRuntime) error {
-	interval := time.Duration(r.cfg.IntervalMS) * time.Millisecond
-	if interval < time.Second {
-		interval = time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	changeGate := newScreenChangeGate(r.cfg)
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			capture := m.backgroundScreenCapture()
-			m.mu.RLock()
-			cfg := m.cfg
-			m.mu.RUnlock()
-			if capture == nil {
-				r.mu.Lock()
-				r.status.LastError = "background screen capture unavailable"
-				r.mu.Unlock()
-				continue
-			}
-			img, capturedAt, err := captureBackgroundFrame(ctx, capture)
-			if err != nil {
-				recordScreenCaptureFailure(r, err)
-				continue
-			}
-			if !m.sourceCurrent(r.cfg.ID, r.epoch) {
-				continue
-			}
-			if !changeGate.Accept(img, capturedAt) {
-				continue
-			}
-			m.processScreenFrame(pipelineID, r, cfg, img, capturedAt)
-		}
-	}
-}
-func captureBackgroundFrame(ctx context.Context, capture ScreenCapture) ([]byte, time.Time, error) {
-	image, err := capture(ctx)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	return image, time.Now(), nil
-}
-
-func (m *Manager) processScreenFrame(pipelineID string, runtime *sourceRuntime, cfg domain.Config, image []byte, at time.Time) {
-	runtime.mu.Lock()
-	runtime.status.LastEvent = at.Format(time.RFC3339Nano)
-	runtime.mu.Unlock()
-
-	pipeline := activePipeline(cfg)
-	if pipeline == nil || pipeline.ID != pipelineID {
-		return
-	}
-	contextCfg, hasContext := findContext(pipeline, runtime.cfg.ContextID)
-	generation := uint64(0)
-	if hasContext {
-		generation = m.contexts.Generation(pipelineID, contextCfg.ID)
-		m.contexts.SetScreen(contextCfg, pipelineID, generation, image, at)
-	}
-	if runtime.cfg.Intent == domain.IntentContext {
-		clearSourceSuppression(runtime)
-		setSourceOutcome(runtime, domain.OutcomeContextOnly, nil)
-		return
-	}
-	if sourceCooldownActive(runtime, time.Now()) {
-		setSourceSuppression(runtime, "cooldown_after_auto_answer")
-		return
-	}
-	clearSourceSuppression(runtime)
-
-	snapshot := ContextSnapshot{}
-	if hasContext {
-		snapshot = m.contexts.Snapshot(contextCfg, pipelineID, at)
-	}
-	input := engine.Input{
-		ImageJPEG: append([]byte(nil), image...), ContextText: snapshot.Text,
-		EntryNodeID: runtime.cfg.EntryNodeID, Intent: string(runtime.cfg.Intent),
-		SourceID: runtime.cfg.ID, EventID: fmt.Sprintf("%s-%d", runtime.cfg.ID, m.eventSeq.Add(1)),
-	}
-	m.enqueueBackgroundTurn(runtime, backgroundTurn{pipelineID: pipelineID, ctxCfg: contextCfg, generation: generation, input: input, at: at})
-}
-
 func sourceCooldownActive(runtime *sourceRuntime, now time.Time) bool {
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
@@ -1113,6 +1031,9 @@ func (m *Manager) PrepareCommand(ctx context.Context, action string) (PreparedCo
 	return m.PrepareCommandWithCapture(ctx, action, nil)
 }
 func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, override ScreenCapture) (PreparedCommand, error) {
+	if err := ctx.Err(); err != nil {
+		return PreparedCommand{}, err
+	}
 	m.mu.RLock()
 	cfg := m.cfg
 	capture := m.capture
@@ -1128,6 +1049,8 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 	if !ok {
 		return PreparedCommand{}, fmt.Errorf("command %q is not configured in active pipeline", action)
 	}
+	ctxCfg, has := findContext(p, cmd.ContextID)
+	gen := m.contexts.Generation(p.ID, ctxCfg.ID)
 	triggeredAt := time.Now()
 	capturedAt := triggeredAt
 	var img []byte
@@ -1140,14 +1063,14 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 		if err != nil {
 			return PreparedCommand{}, err
 		}
+		if err := ctx.Err(); err != nil {
+			return PreparedCommand{}, err
+		}
 		capturedAt = time.Now()
 	}
-	ctxCfg, has := findContext(p, cmd.ContextID)
 	snap := ContextSnapshot{}
-	gen := uint64(0)
 	incomplete := false
 	if has {
-		gen = m.contexts.Generation(p.ID, ctxCfg.ID)
 		if cmd.WaitForTranscriptMS > 0 {
 			complete, waitErr := m.waitPending(ctx, p.ID, ctxCfg.ID, gen, triggeredAt, time.Duration(cmd.WaitForTranscriptMS)*time.Millisecond)
 			if waitErr != nil {
@@ -1155,11 +1078,20 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 			}
 			incomplete = !complete
 		}
+		if m.contexts.Generation(p.ID, ctxCfg.ID) != gen {
+			return PreparedCommand{}, errCommandContextChanged
+		}
 		if cmd.Intent == domain.IntentContext && len(img) > 0 {
-			m.contexts.SetScreen(ctxCfg, p.ID, gen, img, capturedAt)
+			stored := m.contexts.SetScreen(ctxCfg, p.ID, gen, img, capturedAt)
+			if ctxCfg.KeepLatestScreen && !stored {
+				return PreparedCommand{}, errCommandContextChanged
+			}
 			return PreparedCommand{PipelineID: p.ID, Command: cmd, Context: ctxCfg, ContextGeneration: gen, SkipRun: true}, nil
 		}
 		snap = m.contexts.Snapshot(ctxCfg, p.ID, triggeredAt)
+		if snap.Generation != gen {
+			return PreparedCommand{}, errCommandContextChanged
+		}
 	}
 	inputImage := img
 	if len(inputImage) == 0 && len(snap.ImageJPEG) > 0 {
