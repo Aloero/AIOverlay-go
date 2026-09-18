@@ -105,20 +105,24 @@ func TestDecodeWASAPIBufferFlagsDistinguishesSilentFromGaps(t *testing.T) {
 }
 
 func TestSegmenterTimestampErrorDoesNotJoinSpeechAcrossGap(t *testing.T) {
-	s := Segmenter{Config: domain.AudioSourceConfig{Mode: "system", SegmentMS: 2000, SilenceMS: 200, MinimumMS: 80, Threshold: .01}}
+	segmenter := Segmenter{Config: domain.AudioSourceConfig{Mode: "system", SegmentMS: 2000, SilenceMS: 200, MinimumMS: 80, Threshold: .01}}
 	voice := make([]int16, 1600)
 	for i := range voice {
 		voice[i] = 12000
 	}
-	now := time.Now()
-	s.Push(Block{Samples: voice, Rate: 16000, At: now})
-	s.Push(Block{Samples: voice, Rate: 16000, At: now.Add(100 * time.Millisecond), TimestampError: true})
-	out := s.Push(Block{Rate: 16000, At: now.Add(500 * time.Millisecond)})
-	if len(out) != 1 {
-		t.Fatalf("segments=%d", len(out))
+	start := time.Now()
+	segmenter.Push(Block{Samples: voice, Rate: 16000, At: start})
+	interrupted := segmenter.Push(Block{Samples: voice, Rate: 16000, At: start.Add(100 * time.Millisecond), TimestampError: true})
+	if len(interrupted) != 1 || interrupted[0].Clip.Final || interrupted[0].Clip.DurationMS != 100 {
+		t.Fatalf("timestamp error must preserve only the incomplete prior span: %+v", interrupted)
 	}
-	if out[0].Clip.DurationMS > 250 {
-		t.Fatalf("old speech crossed timestamp error: %dms", out[0].Clip.DurationMS)
+	if out := segmenter.Push(Block{Rate: 16000, At: start.Add(500 * time.Millisecond)}); len(out) != 0 {
+		t.Fatal("timestamp-error packet was retained as normal speech")
+	}
+	segmenter.Push(Block{Samples: voice, Rate: 16000, At: start.Add(time.Second)})
+	completed := segmenter.Push(Block{Rate: 16000, At: start.Add(1500 * time.Millisecond)})
+	if len(completed) != 1 || !completed[0].Clip.Final || !completed[0].Started.Equal(start.Add(time.Second)) {
+		t.Fatalf("valid speech after timestamp error did not resume independently: %+v", completed)
 	}
 }
 
@@ -189,5 +193,19 @@ func TestSegmenterDiscontinuityKeepsNewPacketAsSeparateSpeech(t *testing.T) {
 	}
 	if len(completed[0].Clip.PCM16) != len(secondVoice) {
 		t.Fatalf("new speech samples=%d want=%d", len(completed[0].Clip.PCM16), len(secondVoice))
+	}
+}
+
+func TestTimestampErrorPacketCannotBecomeOrdinarySpeech(t *testing.T) {
+	segmenter := Segmenter{Config: domain.AudioSourceConfig{Mode: "system", SegmentMS: 1000, SilenceMS: 200, MinimumMS: 80, Threshold: .01}}
+	voice := make([]int16, 16000)
+	for i := range voice {
+		voice[i] = 12000
+	}
+	start := time.Now()
+	segments := segmenter.Push(Block{Samples: voice, Rate: 16000, At: start, TimestampError: true})
+	segments = append(segments, segmenter.Push(Block{Rate: 16000, At: start.Add(2 * time.Second)})...)
+	if len(segments) != 0 {
+		t.Fatal("timestamp-error samples became speech eligible for normal processing")
 	}
 }

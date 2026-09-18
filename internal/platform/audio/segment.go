@@ -24,13 +24,16 @@ type Segmenter struct {
 
 func (s *Segmenter) Push(b Block) []Segment {
 	var out []Segment
-	if b.Rate < 8000 || b.Rate > 192000 {
-		return out
-	}
 	if b.Discontinuity || b.TimestampError {
 		if seg, ok := s.Interrupt(); ok {
 			out = append(out, seg)
 		}
+	}
+	// A bad timestamp cannot establish a reliable capture range or manual
+	// cutoff. Discard this packet after closing the old span; the session
+	// records the gap. Ordinary discontinuity packets still start a new span.
+	if b.TimestampError || b.Rate < 8000 || b.Rate > 192000 {
+		return out
 	}
 	if s.rate != b.Rate {
 		s.Reset()

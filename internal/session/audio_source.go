@@ -141,7 +141,9 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 			segmenter.Reset()
 		}
 		captured = current
-		if block.Discontinuity || block.TimestampError {
+		if block.TimestampError {
+			m.recordAudioGap(captured, runtime, block.At, "audio timestamp error: packet discarded and transcript gap recorded")
+		} else if block.Discontinuity {
 			m.recordAudioGap(captured, runtime, block.At, "audio discontinuity: transcript context contains a gap")
 		}
 		for _, segment := range segmenter.Push(block) {

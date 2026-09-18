@@ -180,3 +180,33 @@ func TestStaleAudioGapDoesNotOverwriteCurrentDiagnostics(t *testing.T) {
 		t.Fatalf("stale generation changed current source status: %+v", runtime.status)
 	}
 }
+
+func TestTimestampErrorRecordsGapWithoutQueuingCorruptSpeech(t *testing.T) {
+	cfg := managerConfig()
+	manager := NewManager(nil)
+	manager.cfg = cfg
+	runtime := &sourceRuntime{cfg: cfg.Pipelines[0].Sources[0]}
+	queue := newAudioSegmentQueue(4, maxQueuedAudioPCMBytes)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture := func(_ context.Context, _ domain.AudioSourceConfig, emit func(paudio.Block)) error {
+		voice := make([]int16, 16000)
+		for i := range voice {
+			voice[i] = 12000
+		}
+		emit(paudio.Block{Samples: voice, Rate: 16000, At: time.Now(), TimestampError: true})
+		cancel()
+		return ctx.Err()
+	}
+	_ = manager.produceAudioSegments(ctx, "p", runtime, capture, queue)
+	if len(queue.items) != 0 {
+		t.Fatal("timestamp-error packet was queued for an ordinary AI turn")
+	}
+	snapshot := manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now())
+	if len(snapshot.Entries) != 1 || !snapshot.Entries[0].Gap {
+		t.Fatal("discarded timestamp-error audio was not recorded as a gap")
+	}
+	if runtime.status.LastDiagnostic != "audio timestamp error: packet discarded and transcript gap recorded" {
+		t.Fatalf("discard reason=%q", runtime.status.LastDiagnostic)
+	}
+}
