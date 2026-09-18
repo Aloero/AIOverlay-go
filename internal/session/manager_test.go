@@ -1221,7 +1221,7 @@ func TestAudioCooldownUsesContextOnlyOrSkipsWhenNoContextExists(t *testing.T) {
 		Started: time.Now(), Ended: time.Now().Add(100 * time.Millisecond),
 		Clip: domain.AudioClip{PCM16: make([]int16, 1600), SampleRate: 16000, Channels: 1, DurationMS: 100, Final: true},
 	}
-	manager.processAudioSegment(context.Background(), "p", runtime, segment)
+	manager.processAudioSegment(context.Background(), "p", runtime, capturedAudioSegment{segment: segment, context: manager.captureAudioContext("p", runtime)})
 	select {
 	case turn := <-runtime.turns:
 		if turn.input.Intent != string(domain.IntentContext) {
@@ -1240,7 +1240,7 @@ func TestAudioCooldownUsesContextOnlyOrSkipsWhenNoContextExists(t *testing.T) {
 		status: SourceStatus{ID: withoutContext.ID, Running: true}, cooldownUntil: time.Now().Add(time.Minute),
 	}
 	manager.sources[withoutContext.ID] = noContextRuntime
-	manager.processAudioSegment(context.Background(), "p", noContextRuntime, segment)
+	manager.processAudioSegment(context.Background(), "p", noContextRuntime, capturedAudioSegment{segment: segment, context: manager.captureAudioContext("p", noContextRuntime)})
 	if len(noContextRuntime.turns) != 0 {
 		t.Fatal("audio cooldown without context spent an AI turn")
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 
+	"aioverlay/internal/domain"
 	paudio "aioverlay/internal/platform/audio"
 )
 
@@ -14,8 +15,20 @@ var (
 	errAudioQueueMemory   = errors.New("audio queue memory limit reached")
 )
 
+// The context generation travels with PCM from capture, not from dequeue time.
+type capturedAudioSegment struct {
+	segment paudio.Segment
+	context audioContext
+}
+
+type audioContext struct {
+	pipelineID string
+	config     domain.ContextConfig
+	generation uint64
+}
+
 type audioSegmentQueue struct {
-	items    chan paudio.Segment
+	items    chan capturedAudioSegment
 	maxBytes int
 
 	mu    sync.Mutex
@@ -29,10 +42,10 @@ func newAudioSegmentQueue(capacity, maxBytes int) *audioSegmentQueue {
 	if maxBytes < 1 {
 		maxBytes = maxQueuedAudioPCMBytes
 	}
-	return &audioSegmentQueue{items: make(chan paudio.Segment, capacity), maxBytes: maxBytes}
+	return &audioSegmentQueue{items: make(chan capturedAudioSegment, capacity), maxBytes: maxBytes}
 }
 
-func (queue *audioSegmentQueue) TryPush(segment paudio.Segment) error {
+func (queue *audioSegmentQueue) TryPush(segment capturedAudioSegment) error {
 	bytes := segmentPCMBytes(segment)
 	queue.mu.Lock()
 	if bytes > queue.maxBytes-queue.bytes {
@@ -51,7 +64,7 @@ func (queue *audioSegmentQueue) TryPush(segment paudio.Segment) error {
 	}
 }
 
-func (queue *audioSegmentQueue) Release(segment paudio.Segment) {
+func (queue *audioSegmentQueue) Release(segment capturedAudioSegment) {
 	queue.releaseBytes(segmentPCMBytes(segment))
 }
 
@@ -74,6 +87,6 @@ func (queue *audioSegmentQueue) releaseBytes(bytes int) {
 	queue.mu.Unlock()
 }
 
-func segmentPCMBytes(segment paudio.Segment) int {
-	return len(segment.Clip.PCM16) * 2
+func segmentPCMBytes(segment capturedAudioSegment) int {
+	return len(segment.segment.Clip.PCM16) * 2
 }

@@ -8,8 +8,8 @@ import (
 	paudio "aioverlay/internal/platform/audio"
 )
 
-func audioQueueSegment(samples int) paudio.Segment {
-	return paudio.Segment{Clip: domain.AudioClip{PCM16: make([]int16, samples)}}
+func audioQueueSegment(samples int) capturedAudioSegment {
+	return capturedAudioSegment{segment: paudio.Segment{Clip: domain.AudioClip{PCM16: make([]int16, samples)}}}
 }
 
 func TestAudioSegmentQueueBoundsPCMBytesIndependentlyOfCount(t *testing.T) {
