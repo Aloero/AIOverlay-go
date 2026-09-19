@@ -1,8 +1,7 @@
 package providers
 
-// This file proves the WebSocket transport boundary for a future realtime
-// adapter. It is deliberately not registered as a Provider until a concrete
-// API contract has been verified against a real service.
+// This file implements the bounded RFC6455 client transport shared by realtime
+// adapters. Provider protocol semantics live above this socket boundary.
 
 import (
 	"bufio"
@@ -25,7 +24,7 @@ import (
 const realtimeWebSocketMaxFrameBytes = 4 << 20
 const websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-type realtimeWebSocketExperiment struct {
+type realtimeWebSocket struct {
 	connection net.Conn
 	reader     *bufio.Reader
 	writeMu    sync.Mutex
@@ -33,7 +32,7 @@ type realtimeWebSocketExperiment struct {
 	close      sync.Once
 }
 
-func dialRealtimeWebSocketExperiment(ctx context.Context, connector realtimeConnector, endpoint string, headers http.Header) (*realtimeWebSocketExperiment, error) {
+func dialRealtimeWebSocket(ctx context.Context, connector realtimeConnector, endpoint string, headers http.Header) (*realtimeWebSocket, error) {
 	target, err := parseRealtimeEndpoint(endpoint)
 	if err != nil {
 		return nil, err
@@ -47,7 +46,7 @@ func dialRealtimeWebSocketExperiment(ctx context.Context, connector realtimeConn
 		connection.Close()
 		return nil, err
 	}
-	return &realtimeWebSocketExperiment{connection: connection, reader: reader}, nil
+	return &realtimeWebSocket{connection: connection, reader: reader}, nil
 }
 
 func performWebSocketUpgrade(ctx context.Context, connection net.Conn, reader *bufio.Reader, target *url.URL, headers http.Header) error {
@@ -82,7 +81,7 @@ func performWebSocketUpgrade(ctx context.Context, connection net.Conn, reader *b
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusSwitchingProtocols {
-		return fmt.Errorf("realtime websocket upgrade rejected: %s", strings.TrimSpace(response.Status))
+		return fmt.Errorf("realtime websocket upgrade rejected: HTTP %d", response.StatusCode)
 	}
 	if !headerHasToken(response.Header, "Upgrade", "websocket") || !headerHasToken(response.Header, "Connection", "upgrade") {
 		return fmt.Errorf("realtime websocket upgrade headers are invalid")
@@ -109,7 +108,7 @@ func headerHasToken(header http.Header, name, token string) bool {
 	return false
 }
 
-func (socket *realtimeWebSocketExperiment) WriteText(ctx context.Context, text string) error {
+func (socket *realtimeWebSocket) WriteText(ctx context.Context, text string) error {
 	if socket == nil || socket.connection == nil {
 		return fmt.Errorf("realtime websocket is closed")
 	}
@@ -119,7 +118,7 @@ func (socket *realtimeWebSocketExperiment) WriteText(ctx context.Context, text s
 	return socket.writeFrame(ctx, 0x1, []byte(text))
 }
 
-func (socket *realtimeWebSocketExperiment) ReadText(ctx context.Context) (string, error) {
+func (socket *realtimeWebSocket) ReadText(ctx context.Context) (string, error) {
 	if socket == nil || socket.connection == nil {
 		return "", fmt.Errorf("realtime websocket is closed")
 	}
@@ -150,7 +149,7 @@ func (socket *realtimeWebSocketExperiment) ReadText(ctx context.Context) (string
 	}
 }
 
-func (socket *realtimeWebSocketExperiment) Close() error {
+func (socket *realtimeWebSocket) Close() error {
 	if socket == nil {
 		return nil
 	}
@@ -172,7 +171,7 @@ type realtimeWebSocketFrame struct {
 	payload []byte
 }
 
-func (socket *realtimeWebSocketExperiment) readFrame(ctx context.Context) (realtimeWebSocketFrame, error) {
+func (socket *realtimeWebSocket) readFrame(ctx context.Context) (realtimeWebSocketFrame, error) {
 	cleanup := applyConnectionDeadline(ctx, socket.connection)
 	defer cleanup()
 	first, err := socket.reader.ReadByte()
@@ -230,7 +229,7 @@ func readWebSocketLength(reader io.Reader, marker byte) (uint64, error) {
 	}
 }
 
-func (socket *realtimeWebSocketExperiment) writeFrame(ctx context.Context, opcode byte, payload []byte) error {
+func (socket *realtimeWebSocket) writeFrame(ctx context.Context, opcode byte, payload []byte) error {
 	if len(payload) > realtimeWebSocketMaxFrameBytes {
 		return fmt.Errorf("realtime websocket frame exceeds %d bytes", realtimeWebSocketMaxFrameBytes)
 	}

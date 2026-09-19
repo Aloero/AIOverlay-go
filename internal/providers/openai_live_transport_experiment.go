@@ -30,7 +30,7 @@ func dialOpenAILiveTransportExperiment(ctx context.Context, connector realtimeCo
 
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+config.APIKey)
-	socket, err := dialRealtimeWebSocketExperiment(ctx, connector, config.Endpoint, headers)
+	socket, err := dialRealtimeWebSocket(ctx, connector, config.Endpoint, headers)
 	if err != nil {
 		return nil, err
 	}

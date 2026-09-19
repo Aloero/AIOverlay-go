@@ -90,7 +90,7 @@ func TestRealtimeWebSocketExperimentHandshakeFramesPingAndClose(t *testing.T) {
 	connector.tlsConfig = &tls.Config{InsecureSkipVerify: true} // Test-only local certificate.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	socket, err := dialRealtimeWebSocketExperiment(ctx, connector, endpoint, http.Header{"Authorization": {"Bearer synthetic"}})
+	socket, err := dialRealtimeWebSocket(ctx, connector, endpoint, http.Header{"Authorization": {"Bearer synthetic"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestRealtimeWebSocketExperimentFailsClosedBeforeHandshake(t *testing.T) {
 		dials.Add(1)
 		return nil, fmt.Errorf("unexpected direct dial")
 	}
-	_, err := dialRealtimeWebSocketExperiment(context.Background(), connector, "wss://provider.example/realtime", nil)
+	_, err := dialRealtimeWebSocket(context.Background(), connector, "wss://provider.example/realtime", nil)
 	if err == nil || !strings.Contains(err.Error(), "AI VPN unavailable") {
 		t.Fatalf("fail-closed websocket error=%v", err)
 	}
@@ -135,7 +135,7 @@ func TestRealtimeWebSocketExperimentFailsClosedBeforeHandshake(t *testing.T) {
 func TestRealtimeWebSocketExperimentBoundsFramesAndReadCancellation(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
-	socket := &realtimeWebSocketExperiment{connection: client, reader: bufio.NewReader(client)}
+	socket := &realtimeWebSocket{connection: client, reader: bufio.NewReader(client)}
 	defer socket.Close()
 
 	tooLarge := strings.Repeat("x", realtimeWebSocketMaxFrameBytes+1)
