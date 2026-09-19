@@ -105,8 +105,11 @@ def archive_entries(archive: zipfile.ZipFile) -> dict[str, str]:
     result: dict[str, str] = {}
     for name in archive.namelist():
         base = Path(name).name
-        if base:
-            result[base] = name
+        if not base:
+            continue
+        if base in result:
+            raise RuntimeError(f"archive contains duplicate basename {base!r}")
+        result[base] = name
     return result
 
 
@@ -125,6 +128,9 @@ def materialize_runtime(runtime: dict[str, object], cache: Path) -> None:
     print(f"Archive OK {name}: {actual_archive}")
 
     with zipfile.ZipFile(archive_path) as archive:
+        bad_member = archive.testzip()
+        if bad_member is not None:
+            raise RuntimeError(f"{name} archive CRC failed for {bad_member}")
         entries = archive_entries(archive)
         files = runtime["files"]
         assert isinstance(files, dict)
