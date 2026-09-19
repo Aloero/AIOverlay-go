@@ -200,10 +200,7 @@ func release(o options) error {
 		verificationSummary["race"] = "PASS"
 	}
 	releaseData, _ := json.MarshalIndent(map[string]any{"build": metadata, "verification": verificationSummary, "archives": reports}, "", "  ")
-	if err = verification.publish(); err != nil {
-		return err
-	}
-	if err = atomicfile.Write(filepath.Join(root, "releases", "RELEASE.json"), append(releaseData, '\n'), 0644); err != nil {
+	if err = verification.publish(append(releaseData, '\n')); err != nil {
 		return err
 	}
 	fmt.Print(sums.String())
