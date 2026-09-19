@@ -43,8 +43,11 @@ func (s *simulator) admit(n domain.Node, c *simChain) error {
 		if c.ref.CredentialAlias == "" {
 			c.ref.CredentialAlias = k.ID
 		}
-		if c.provider.Kind == domain.ProviderEmbeddedOpenCode {
+		switch c.provider.Kind {
+		case domain.ProviderEmbeddedOpenCode:
 			c.ref.Transport = "Via OpenCode"
+		case domain.ProviderLocalSTT:
+			c.ref.Transport = "Local STT"
 		}
 		s.emit(domain.TraceEvent{Kind: "attempt_start", NodeID: n.ID, Attempt: c.ref})
 		key := n.ID + "/" + c.model.ProviderID + "/" + c.model.ModelID

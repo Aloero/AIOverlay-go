@@ -21,7 +21,7 @@ func enum[T ~string](v T, values ...T) bool {
 func within(v, min, max int) bool { return v >= min && v <= max }
 func score(v float64) bool        { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 100 }
 func validateProvider(p domain.ProviderConfig) error {
-	if !enum(p.Kind, domain.ProviderOpenAICompatible, domain.ProviderGemini, domain.ProviderEmbeddedOpenCode, domain.ProviderTranscription, domain.ProviderOpenAILive) {
+	if !enum(p.Kind, domain.ProviderOpenAICompatible, domain.ProviderGemini, domain.ProviderEmbeddedOpenCode, domain.ProviderTranscription, domain.ProviderOpenAILive, domain.ProviderLocalSTT) {
 		return fmt.Errorf("provider %s has unsupported protocol", p.ID)
 	}
 	if !enum(p.CredentialPool.Policy, domain.CredentialRoundRobin, domain.CredentialSequential, domain.CredentialSticky, domain.CredentialRandom) {
@@ -30,7 +30,11 @@ func validateProvider(p domain.ProviderConfig) error {
 	if !within(p.CredentialPool.MaxKeysPerRequest, 0, 1000) || !within(p.CredentialPool.RateLimitCooldownS, 0, 86400) {
 		return fmt.Errorf("provider key limits invalid")
 	}
-	if p.BaseURL != "" {
+	if p.Kind == domain.ProviderLocalSTT {
+		if p.BaseURL != "" || p.ModelsURL != "" {
+			return fmt.Errorf("provider %s local STT must not configure network URLs", p.ID)
+		}
+	} else if p.BaseURL != "" {
 		u, err := url.Parse(p.BaseURL)
 		validScheme := enum(u.Scheme, "https", "http")
 		if p.Kind == domain.ProviderOpenAILive {
@@ -57,6 +61,22 @@ func validateProvider(p domain.ProviderConfig) error {
 	} else if p.Realtime != nil {
 		return fmt.Errorf("provider %s realtime settings require openai_live protocol", p.ID)
 	}
+	if p.Kind == domain.ProviderLocalSTT {
+		if p.CatalogProviderID != "" || len(p.Headers) != 0 || len(p.CredentialEnv) != 0 {
+			return fmt.Errorf("provider %s local STT cannot keep remote catalog, header or credential settings", p.ID)
+		}
+		if p.LocalSTT == nil {
+			return fmt.Errorf("provider %s local STT settings are required", p.ID)
+		}
+		if p.AudioInput {
+			return fmt.Errorf("provider %s local STT audio capability is defined by its adapter", p.ID)
+		}
+		if err := validateLocalSTTProvider(p.ID, *p.LocalSTT); err != nil {
+			return err
+		}
+	} else if p.LocalSTT != nil {
+		return fmt.Errorf("provider %s local STT settings require local_stt protocol", p.ID)
+	}
 	for _, name := range p.CredentialEnv {
 		upper := strings.ToUpper(name)
 		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(name) {
@@ -78,6 +98,23 @@ func validateProvider(p domain.ProviderConfig) error {
 	}
 	return nil
 }
+func validateLocalSTTProvider(providerID string, cfg domain.LocalSTTProviderConfig) error {
+	for name, value := range map[string]string{"helper_path": cfg.HelperPath, "model_path": cfg.ModelPath, "model_id": cfg.ModelID} {
+		if strings.TrimSpace(value) == "" || len(value) > 4096 || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("provider %s local STT %s is invalid", providerID, name)
+		}
+	}
+	if len(cfg.Args) > 64 {
+		return fmt.Errorf("provider %s local STT has too many helper arguments", providerID)
+	}
+	for _, arg := range cfg.Args {
+		if len(arg) > 4096 || strings.ContainsRune(arg, 0) {
+			return fmt.Errorf("provider %s local STT helper argument is invalid", providerID)
+		}
+	}
+	return nil
+}
+
 func validateApplication(c domain.Config) error {
 	w := c.ControlCenter.Workspace
 	if w.InspectorWidth != 0 && !within(w.InspectorWidth, 260, 600) {

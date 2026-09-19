@@ -200,8 +200,13 @@ func (s *simulator) pool(n domain.Node, input nodeValue) (nodeValue, domain.Outc
 			}
 		}
 		keys := s.r.engine.orderCredentials(m.ProviderID, pc.CredentialPool)
-		if len(keys) == 0 && pc.Kind == domain.ProviderEmbeddedOpenCode && (pc.OpenCodeProviderID == "opencode" || pc.OpenCodeProviderID == "") {
-			keys = []domain.Credential{{ID: "keyless", Enabled: true}}
+		if len(keys) == 0 {
+			switch {
+			case pc.Kind == domain.ProviderEmbeddedOpenCode && (pc.OpenCodeProviderID == "opencode" || pc.OpenCodeProviderID == ""):
+				keys = []domain.Credential{{ID: "keyless", Enabled: true}}
+			case pc.Kind == domain.ProviderLocalSTT:
+				keys = []domain.Credential{{ID: "local", Enabled: true}}
+			}
 		}
 		maxKeys := pc.CredentialPool.MaxKeysPerRequest
 		if maxKeys <= 0 {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -26,5 +27,23 @@ func TestLFSPointerNeverBecomesReleaseRuntime(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "runtime", "child.exe"), []byte("version https://git-lfs.github.com/spec/v1\noid sha256:123\nsize 123\n"), 0644)
 	if err := Runtimes(root); err == nil {
 		t.Fatal("LFS pointer accepted")
+	}
+}
+
+func TestLocalSTTProductionPathKeepsRawMediaOffDiskAndOffHTTP(t *testing.T) {
+	for _, name := range []string{"local_stt.go", "local_stt_runtime.go"} {
+		raw, err := os.ReadFile(filepath.Join("..", "providers", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		for _, forbidden := range []string{
+			"os.CreateTemp", "os.MkdirTemp", "CreateFormFile", "encoding/base64",
+			"http.ListenAndServe", "net.Listen", ".wav", ".jpg", ".jpeg",
+		} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s reintroduced forbidden local-STT media transport %q", name, forbidden)
+			}
+		}
 	}
 }

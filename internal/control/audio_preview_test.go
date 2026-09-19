@@ -53,3 +53,61 @@ func TestAudioPreviewHandlerBoundsDurationBeforeComputingDeadline(t *testing.T) 
 		})
 	}
 }
+
+type localSTTPreviewBackend struct {
+	*auditBackend
+	sessionBackend
+	providerID string
+	duration   time.Duration
+}
+
+func (backend *localSTTPreviewBackend) PreviewLocalSTT(_ context.Context, _ domain.AudioSourceConfig, providerID string, duration time.Duration) (session.LocalSTTPreview, error) {
+	backend.providerID = providerID
+	backend.duration = duration
+	return session.LocalSTTPreview{
+		ProviderID: providerID, ModelID: "local-model", Text: "локальный текст",
+		SampleRate: 16000, DurationMS: 2000, Peak: .5, RMS: .1,
+	}, nil
+}
+
+func TestLocalSTTPreviewHandlerReturnsTextWithoutRawMedia(t *testing.T) {
+	backend := &localSTTPreviewBackend{auditBackend: &auditBackend{}}
+	server := New("127.0.0.1:0", backend)
+	body := `{"config":{"mode":"system","segment_ms":1000,"silence_ms":200,"minimum_ms":80,"threshold":0.01},"provider_id":"local","duration_ms":2000}`
+	request := httptest.NewRequest(http.MethodPost, "/api/audio/local-stt-preview", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.DesktopHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("HTTP %d: %s", response.Code, response.Body.String())
+	}
+	if backend.providerID != "local" || backend.duration != 2*time.Second {
+		t.Fatalf("provider=%q duration=%v", backend.providerID, backend.duration)
+	}
+	payload := response.Body.String()
+	for _, forbidden := range []string{"pcm16", "wav_base64", "image_base64"} {
+		if strings.Contains(strings.ToLower(payload), forbidden) {
+			t.Fatalf("local STT preview leaked raw media field %q: %s", forbidden, payload)
+		}
+	}
+	for _, required := range []string{"local-model", "локальный текст", "duration_ms", "rms"} {
+		if !strings.Contains(payload, required) {
+			t.Fatalf("preview response missing %q: %s", required, payload)
+		}
+	}
+}
+
+func TestLocalSTTPreviewHandlerRejectsMissingProviderAndInvalidAudio(t *testing.T) {
+	backend := &localSTTPreviewBackend{auditBackend: &auditBackend{}}
+	server := New("127.0.0.1:0", backend)
+	for _, body := range []string{
+		`{"config":{"mode":"system","segment_ms":1000,"silence_ms":200,"minimum_ms":80,"threshold":0.01}}`,
+		`{"provider_id":"local","config":{"mode":"invalid","segment_ms":1000,"silence_ms":200,"minimum_ms":80,"threshold":0.01}}`,
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/api/audio/local-stt-preview", strings.NewReader(body))
+		response := httptest.NewRecorder()
+		server.DesktopHandler().ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("HTTP %d for %s", response.Code, body)
+		}
+	}
+}

@@ -80,6 +80,9 @@ func Validate(cfg domain.Config) error {
 }
 
 func validateCredentials(p domain.ProviderConfig) error {
+	if p.Kind == domain.ProviderLocalSTT && len(p.CredentialPool.Keys) != 0 {
+		return fmt.Errorf("provider %s local STT does not use credentials", p.ID)
+	}
 	ids := map[string]struct{}{}
 	secrets := map[string]bool{}
 	for i, k := range p.CredentialPool.Keys {

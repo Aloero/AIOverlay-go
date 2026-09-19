@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,6 +29,7 @@ type sessionBackend interface {
 	ClearConversation(string) (uint64, error)
 	AudioDevices() ([]paudio.Device, error)
 	PreviewAudio(context.Context, domain.AudioSourceConfig, time.Duration) (session.AudioPreview, error)
+	PreviewLocalSTT(context.Context, domain.AudioSourceConfig, string, time.Duration) (session.LocalSTTPreview, error)
 }
 
 func (s *Server) handleCommandPreview(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +189,47 @@ func (s *Server) handleAudioPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	wav := paudio.WAV(preview.PCM16, preview.SampleRate)
 	writeJSON(w, map[string]any{"sample_rate": preview.SampleRate, "duration_ms": preview.DurationMS, "peak": preview.Peak, "rms": preview.RMS, "wav_base64": base64.StdEncoding.EncodeToString(wav)})
+}
+
+func (s *Server) handleLocalSTTPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	backend, ok := s.backend.(sessionBackend)
+	if !ok {
+		http.Error(w, "local STT preview unavailable", http.StatusNotImplemented)
+		return
+	}
+	var request struct {
+		Config     domain.AudioSourceConfig `json:"config"`
+		ProviderID string                   `json:"provider_id"`
+		DurationMS int                      `json:"duration_ms"`
+	}
+	if err := decodeJSON(r, &request, 16<<10); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(request.ProviderID) == "" {
+		http.Error(w, "provider_id required", http.StatusBadRequest)
+		return
+	}
+	if err := config.ValidateAudio(request.Config); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if request.DurationMS == 0 {
+		request.DurationMS = 2000
+	}
+	request.DurationMS = min(5000, max(250, request.DurationMS))
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(request.DurationMS)*time.Millisecond+60*time.Second)
+	defer cancel()
+	preview, err := backend.PreviewLocalSTT(ctx, request.Config, request.ProviderID, time.Duration(request.DurationMS)*time.Millisecond)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, preview)
 }
 
 func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {

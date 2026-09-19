@@ -1,8 +1,7 @@
 package providers
 
-// This file is an experiment boundary for a future native local STT helper.
-// It is deliberately not registered as a Provider: no whisper.cpp binary or
-// model weights ship with this implementation yet.
+// This file owns the long-lived local STT helper IPC runtime. Provider config
+// and resource selection live in local_stt.go; no raw media is written to disk.
 
 import (
 	"bufio"
@@ -41,9 +40,9 @@ type localSTTWireResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
-// LocalSTTExperiment proves the intended IPC/lifetime contract only. The helper
-// is long-lived, receives raw PCM16 in memory and can receive cancellation by ID.
-type LocalSTTExperiment struct {
+// LocalSTTRuntime owns one long-lived helper process. It receives bounded raw
+// PCM16 in memory and supports cancellation by request ID.
+type LocalSTTRuntime struct {
 	process *childprocess.Process
 	stdin   io.WriteCloser
 
@@ -56,7 +55,7 @@ type LocalSTTExperiment struct {
 	close   sync.Once
 }
 
-func StartLocalSTTExperiment(command *exec.Cmd) (*LocalSTTExperiment, error) {
+func StartLocalSTTRuntime(command *exec.Cmd) (*LocalSTTRuntime, error) {
 	if command == nil {
 		return nil, fmt.Errorf("local STT helper command is required")
 	}
@@ -75,7 +74,7 @@ func StartLocalSTTExperiment(command *exec.Cmd) (*LocalSTTExperiment, error) {
 		return nil, fmt.Errorf("start local STT helper: %w", err)
 	}
 
-	runtime := &LocalSTTExperiment{
+	runtime := &LocalSTTRuntime{
 		process: process, stdin: stdin,
 		writeGate: make(chan struct{}, 1),
 		pending:   map[string]chan localSTTWireResponse{},
@@ -84,11 +83,18 @@ func StartLocalSTTExperiment(command *exec.Cmd) (*LocalSTTExperiment, error) {
 	return runtime, nil
 }
 
-func (runtime *LocalSTTExperiment) Alive() bool {
+// LocalSTTExperiment is kept as an alias for earlier experiment callers.
+type LocalSTTExperiment = LocalSTTRuntime
+
+func StartLocalSTTExperiment(command *exec.Cmd) (*LocalSTTRuntime, error) {
+	return StartLocalSTTRuntime(command)
+}
+
+func (runtime *LocalSTTRuntime) Alive() bool {
 	return runtime != nil && runtime.process != nil && runtime.process.Alive()
 }
 
-func (runtime *LocalSTTExperiment) Transcribe(ctx context.Context, clip domain.AudioClip) (string, error) {
+func (runtime *LocalSTTRuntime) Transcribe(ctx context.Context, clip domain.AudioClip) (string, error) {
 	if err := validateLocalSTTClip(clip); err != nil {
 		return "", err
 	}
@@ -135,7 +141,7 @@ func validateLocalSTTClip(clip domain.AudioClip) error {
 	return nil
 }
 
-func (runtime *LocalSTTExperiment) register(id string, result chan localSTTWireResponse) error {
+func (runtime *LocalSTTRuntime) register(id string, result chan localSTTWireResponse) error {
 	if runtime == nil {
 		return errLocalSTTHelperClosed
 	}
@@ -148,13 +154,13 @@ func (runtime *LocalSTTExperiment) register(id string, result chan localSTTWireR
 	return nil
 }
 
-func (runtime *LocalSTTExperiment) unregister(id string) {
+func (runtime *LocalSTTRuntime) unregister(id string) {
 	runtime.mu.Lock()
 	delete(runtime.pending, id)
 	runtime.mu.Unlock()
 }
 
-func (runtime *LocalSTTExperiment) writeTranscription(ctx context.Context, request localSTTWireRequest, samples []int16) error {
+func (runtime *LocalSTTRuntime) writeTranscription(ctx context.Context, request localSTTWireRequest, samples []int16) error {
 	if err := runtime.acquireWriter(ctx); err != nil {
 		return err
 	}
@@ -172,7 +178,7 @@ func (runtime *LocalSTTExperiment) writeTranscription(ctx context.Context, reque
 	return nil
 }
 
-func (runtime *LocalSTTExperiment) sendCancel(id string) {
+func (runtime *LocalSTTRuntime) sendCancel(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	if err := runtime.acquireWriter(ctx); err != nil {
@@ -182,7 +188,7 @@ func (runtime *LocalSTTExperiment) sendCancel(id string) {
 	_ = runtime.writeJSON(localSTTWireRequest{Type: "cancel", ID: id})
 }
 
-func (runtime *LocalSTTExperiment) acquireWriter(ctx context.Context) error {
+func (runtime *LocalSTTRuntime) acquireWriter(ctx context.Context) error {
 	select {
 	case runtime.writeGate <- struct{}{}:
 		return nil
@@ -191,11 +197,11 @@ func (runtime *LocalSTTExperiment) acquireWriter(ctx context.Context) error {
 	}
 }
 
-func (runtime *LocalSTTExperiment) releaseWriter() {
+func (runtime *LocalSTTRuntime) releaseWriter() {
 	<-runtime.writeGate
 }
 
-func (runtime *LocalSTTExperiment) writeJSON(value localSTTWireRequest) error {
+func (runtime *LocalSTTRuntime) writeJSON(value localSTTWireRequest) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -226,7 +232,7 @@ func writePCM16(ctx context.Context, writer io.Writer, samples []int16) error {
 	return nil
 }
 
-func (runtime *LocalSTTExperiment) readResponses(reader io.Reader) {
+func (runtime *LocalSTTRuntime) readResponses(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), localSTTMaxResponseBytes)
 	for scanner.Scan() {
@@ -248,7 +254,7 @@ func (runtime *LocalSTTExperiment) readResponses(reader io.Reader) {
 	runtime.failPending(errLocalSTTHelperClosed)
 }
 
-func (runtime *LocalSTTExperiment) failPending(err error) {
+func (runtime *LocalSTTRuntime) failPending(err error) {
 	runtime.mu.Lock()
 	pending := runtime.pending
 	runtime.pending = map[string]chan localSTTWireResponse{}
@@ -262,7 +268,7 @@ func (runtime *LocalSTTExperiment) failPending(err error) {
 	}
 }
 
-func (runtime *LocalSTTExperiment) Close() {
+func (runtime *LocalSTTRuntime) Close() {
 	if runtime == nil {
 		return
 	}

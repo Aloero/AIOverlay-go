@@ -90,6 +90,9 @@ func (s *Service) Routes(cfg domain.Config) []Route {
 	out := make([]Route, 0, len(models))
 	runtimeOK := s.runtimePresent()
 	for _, p := range cfg.Providers {
+		if p.Kind == domain.ProviderLocalSTT || p.Kind == domain.ProviderOpenAILive {
+			continue
+		}
 		hasKey := false
 		for _, k := range p.CredentialPool.Keys {
 			if k.Enabled && strings.TrimSpace(k.Secret) != "" {

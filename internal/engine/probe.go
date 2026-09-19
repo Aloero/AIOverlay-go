@@ -25,6 +25,12 @@ func (e *Engine) Probe(ctx context.Context, req ConnectionProbe, opt RunOptions)
 	if !ok || !pc.Enabled {
 		return Result{}, fmt.Errorf("saved connection is missing or disabled")
 	}
+	switch pc.Kind {
+	case domain.ProviderLocalSTT:
+		return Result{}, fmt.Errorf("local STT must be tested through the audio transcription preview")
+	case domain.ProviderOpenAILive:
+		return Result{}, fmt.Errorf("OpenAI Live must be tested through a persistent Live source")
+	}
 	var chosen domain.Credential
 	found := false
 	for _, k := range pc.CredentialPool.Keys {

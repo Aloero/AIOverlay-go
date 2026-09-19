@@ -8,6 +8,7 @@ import (
 	"aioverlay/internal/session"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -106,5 +107,82 @@ func (a *App) SessionStatus() any {
 func (a *App) ClearConversation(id string) (uint64, error) { return a.sessions.ClearContext(id) }
 func (a *App) PreviewAudio(ctx context.Context, cfg domain.AudioSourceConfig, d time.Duration) (session.AudioPreview, error) {
 	return a.sessions.PreviewAudio(ctx, cfg, d)
+}
+func (a *App) PreviewLocalSTT(ctx context.Context, audioConfig domain.AudioSourceConfig, providerID string, duration time.Duration) (session.LocalSTTPreview, error) {
+	if !a.operation.TryRLock() {
+		return session.LocalSTTPreview{}, fmt.Errorf("settings are being saved; try again")
+	}
+	defer a.operation.RUnlock()
+	if a.sessions == nil {
+		return session.LocalSTTPreview{}, fmt.Errorf("session runtime unavailable")
+	}
+	a.mu.RLock()
+	registry := a.registry
+	var providerConfig domain.ProviderConfig
+	found := false
+	for _, configured := range a.cfg.Providers {
+		if configured.ID == providerID && configured.Enabled {
+			providerConfig = configured
+			found = true
+			break
+		}
+	}
+	a.mu.RUnlock()
+	if !found || providerConfig.Kind != domain.ProviderLocalSTT || providerConfig.LocalSTT == nil {
+		return session.LocalSTTPreview{}, fmt.Errorf("enabled local STT provider %q not found", providerID)
+	}
+	adapter, ok := registry.Get(providerID)
+	if !ok {
+		return session.LocalSTTPreview{}, fmt.Errorf("local STT provider %q is not registered", providerID)
+	}
+	preview, err := a.sessions.PreviewAudio(ctx, audioConfig, duration)
+	if err != nil {
+		return session.LocalSTTPreview{}, err
+	}
+	clip := &domain.AudioClip{PCM16: append([]int16(nil), preview.PCM16...), SampleRate: preview.SampleRate, Channels: 1, DurationMS: preview.DurationMS, Final: true}
+	request := providers.Request{
+		Task: "transcribe", ProviderID: providerID, ModelID: providerConfig.LocalSTT.ModelID, Audio: clip,
+		ConnectTimeout:  time.Duration(providerConfig.RequestDefaults.ConnectTimeoutMS) * time.Millisecond,
+		ResponseTimeout: time.Duration(providerConfig.RequestDefaults.ResponseTimeoutMS) * time.Millisecond,
+	}
+	events, errorsCh := adapter.Stream(ctx, request, "")
+	text, err := collectLocalSTTPreview(ctx, events, errorsCh)
+	if err != nil {
+		return session.LocalSTTPreview{}, err
+	}
+	return session.LocalSTTPreview{
+		ProviderID: providerID, ModelID: providerConfig.LocalSTT.ModelID, Text: text,
+		SampleRate: preview.SampleRate, DurationMS: preview.DurationMS, Peak: preview.Peak, RMS: preview.RMS,
+	}, nil
+}
+
+func collectLocalSTTPreview(ctx context.Context, events <-chan providers.Event, errorsCh <-chan error) (string, error) {
+	var text strings.Builder
+	for events != nil || errorsCh != nil {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			if event.Type == providers.EventDelta {
+				if text.Len()+len(event.Text) > 2<<20 {
+					return "", fmt.Errorf("local STT preview response exceeded 2 MiB")
+				}
+				text.WriteString(event.Text)
+			}
+		case streamErr, ok := <-errorsCh:
+			if !ok {
+				errorsCh = nil
+				continue
+			}
+			if streamErr != nil {
+				return "", streamErr
+			}
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return strings.TrimSpace(text.String()), nil
 }
 func (a *App) AudioDevices() ([]audio.Device, error) { return audio.Devices() }

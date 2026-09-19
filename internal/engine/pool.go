@@ -299,8 +299,13 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 		}
 	}
 	keys := r.allowedCredentials(m.ProviderID, r.engine.orderCredentials(m.ProviderID, pc.CredentialPool))
-	if pc.Kind == domain.ProviderEmbeddedOpenCode && (pc.OpenCodeProviderID == "" || pc.OpenCodeProviderID == "opencode") && len(keys) == 0 {
-		keys = []domain.Credential{{ID: "keyless", Enabled: true}}
+	if len(keys) == 0 {
+		switch {
+		case pc.Kind == domain.ProviderEmbeddedOpenCode && (pc.OpenCodeProviderID == "" || pc.OpenCodeProviderID == "opencode"):
+			keys = []domain.Credential{{ID: "keyless", Enabled: true}}
+		case pc.Kind == domain.ProviderLocalSTT:
+			keys = []domain.Credential{{ID: "local", Enabled: true}}
+		}
 	}
 	limit := pc.CredentialPool.MaxKeysPerRequest
 	if limit <= 0 || limit > len(keys) {

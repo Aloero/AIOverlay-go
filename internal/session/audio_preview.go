@@ -114,3 +114,13 @@ func (m *Manager) PreviewAudio(ctx context.Context, cfg domain.AudioSourceConfig
 	out.RMS = math.Sqrt(sum / float64(len(out.PCM16)))
 	return out, nil
 }
+
+type LocalSTTPreview struct {
+	ProviderID string  `json:"provider_id"`
+	ModelID    string  `json:"model_id"`
+	Text       string  `json:"text"`
+	SampleRate int     `json:"sample_rate"`
+	DurationMS int     `json:"duration_ms"`
+	Peak       float64 `json:"peak"`
+	RMS        float64 `json:"rms"`
+}

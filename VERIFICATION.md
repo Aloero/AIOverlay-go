@@ -129,9 +129,16 @@ from the extracted source. Consult the generated report for the checks actually
 completed on that archive's commit.
 
 The acceptance scope for this branch is automated Go/race/UI verification plus
-Windows-target compile/vet. Physical Windows audio/desktop acceptance and a
-shipped/running local STT helper are intentionally out of scope rather than
-pending release gates. OpenAI Live now has an explicit persistent WebSocket
+Windows-target compile/vet. Physical Windows audio/desktop acceptance remains
+out of scope rather than being implied by cross-builds. Local STT now has a
+production keyless provider boundary for an explicitly configured compatible
+helper executable and model resource: one long-lived child process, bounded
+RAM-only PCM16 IPC, per-request cancellation, helper reuse/restart, missing-resource
+status, local transcription preview, sanitized child environment and a release
+guard against temp WAV/JPEG/base64/localhost media transport are automated. The
+repository still does not bundle a whisper.cpp helper binary or model weights,
+and no actual whisper.cpp inference/model-quality or physical Windows resource
+benchmark has been run. OpenAI Live has an explicit persistent WebSocket
 adapter and audio-source lifecycle covered by local TLS fixtures: audio append,
 Responses delegation, shared session budgets, clean-session replacement on
 Clear, fail-closed proxy routing, and opt-in stored WebSocket fork reconnect are

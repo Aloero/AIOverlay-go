@@ -121,6 +121,7 @@ const settingTargets=[
  {label:'Качество и фильтры моделей',keywords:'quality floor free порог',page:'pipelines',tab:'models',field:'sourceFloor'},
  {label:'Инструкции и итоговый prompt',keywords:'system user vision предыдущий',page:'pipelines',tab:'prompts',field:'systemPrompt'},
  {label:'Подключения и API-ключи',keywords:'provider opencode direct ключи',page:'providers',field:'providerSearch'},
+ {label:'Локальное распознавание речи',keywords:'local stt whisper helper model weights распознавание аудио',page:'providers',field:'providerSearch'},
  {label:'AI VPN',keywords:'vless hysteria sing-box сеть туннель',page:'settings',field:'vpnEnabled'},
  {label:'Горячая клавиша снимка',keywords:'hotkey screenshot capture',page:'settings',field:'hotkey_analyze'},
  {label:'Показать / скрыть оверлей',keywords:'visibility hide overlay окно',page:'settings',field:'hotkey_visibility'},

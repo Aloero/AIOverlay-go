@@ -15,6 +15,7 @@ const (
 	ProviderTranscription    ProviderKind = "audio_transcription"
 	ProviderEmbeddedOpenCode ProviderKind = "embedded_opencode"
 	ProviderOpenAILive       ProviderKind = "openai_live"
+	ProviderLocalSTT         ProviderKind = "local_stt"
 )
 
 type CredentialPolicy string
@@ -109,6 +110,15 @@ type ProviderConfig struct {
 	CredentialPool     CredentialPool             `json:"credential_pool"`
 	RequestDefaults    RequestDefaults            `json:"request_defaults"`
 	Realtime           *RealtimeProviderConfig    `json:"realtime,omitempty"`
+	LocalSTT           *LocalSTTProviderConfig    `json:"local_stt,omitempty"`
+}
+
+type LocalSTTProviderConfig struct {
+	Extra      map[string]json.RawMessage `json:"-"`
+	HelperPath string                     `json:"helper_path"`
+	ModelPath  string                     `json:"model_path"`
+	ModelID    string                     `json:"model_id"`
+	Args       []string                   `json:"args,omitempty"`
 }
 
 type RealtimeProviderConfig struct {

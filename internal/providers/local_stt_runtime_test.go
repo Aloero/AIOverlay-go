@@ -17,8 +17,8 @@ import (
 	"aioverlay/internal/domain"
 )
 
-func TestLocalSTTExperimentHelperProcess(t *testing.T) {
-	if os.Getenv("AIO_LOCAL_STT_HELPER") != "1" {
+func TestLocalSTTRuntimeHelperProcess(t *testing.T) {
+	if os.Getenv("AIO_LOCAL_STT_HELPER") != "1" && os.Getenv("AIO_STT_PROTOCOL") != localSTTProtocol {
 		return
 	}
 	if err := runSyntheticLocalSTTHelper(os.Stdin, os.Stdout); err != nil {
@@ -26,7 +26,7 @@ func TestLocalSTTExperimentHelperProcess(t *testing.T) {
 	}
 }
 
-func TestLocalSTTExperimentReusesHelperAndCancelsByRequestID(t *testing.T) {
+func TestLocalSTTRuntimeReusesHelperAndCancelsByRequestID(t *testing.T) {
 	runtime := startSyntheticLocalSTT(t)
 	defer runtime.Close()
 
@@ -61,7 +61,7 @@ func TestLocalSTTExperimentReusesHelperAndCancelsByRequestID(t *testing.T) {
 	}
 }
 
-func TestLocalSTTExperimentRejectsInvalidAndOversizedPCM(t *testing.T) {
+func TestLocalSTTRuntimeRejectsInvalidAndOversizedPCM(t *testing.T) {
 	if err := validateLocalSTTClip(domain.AudioClip{PCM16: []int16{1}, SampleRate: 16000, Channels: 2}); err == nil {
 		t.Fatal("multichannel local STT input accepted")
 	}
@@ -71,11 +71,11 @@ func TestLocalSTTExperimentRejectsInvalidAndOversizedPCM(t *testing.T) {
 	}
 }
 
-func startSyntheticLocalSTT(t *testing.T) *LocalSTTExperiment {
+func startSyntheticLocalSTT(t *testing.T) *LocalSTTRuntime {
 	t.Helper()
-	command := exec.Command(os.Args[0], "-test.run=^TestLocalSTTExperimentHelperProcess$")
+	command := exec.Command(os.Args[0], "-test.run=^TestLocalSTTRuntimeHelperProcess$")
 	command.Env = append(os.Environ(), "AIO_LOCAL_STT_HELPER=1")
-	runtime, err := StartLocalSTTExperiment(command)
+	runtime, err := StartLocalSTTRuntime(command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func (helper *syntheticHelper) writeResponse(response localSTTWireResponse) {
 	helper.writeMu.Unlock()
 }
 
-func TestLocalSTTExperimentConcurrentSoakLeavesNoPendingRequests(t *testing.T) {
+func TestLocalSTTRuntimeConcurrentSoakLeavesNoPendingRequests(t *testing.T) {
 	runtime := startSyntheticLocalSTT(t)
 
 	const workers = 8

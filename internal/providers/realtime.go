@@ -124,11 +124,12 @@ type RealtimeOpenRequest struct {
 }
 
 type AdapterCapabilities struct {
-	ProviderID string               `json:"provider_id"`
-	Label      string               `json:"label"`
-	Kind       domain.ProviderKind  `json:"kind"`
-	Media      MediaCapabilities    `json:"media"`
-	Realtime   RealtimeCapabilities `json:"realtime"`
+	ProviderID string                  `json:"provider_id"`
+	Label      string                  `json:"label"`
+	Kind       domain.ProviderKind     `json:"kind"`
+	Media      MediaCapabilities       `json:"media"`
+	Realtime   RealtimeCapabilities    `json:"realtime"`
+	LocalSTT   *LocalSTTResourceStatus `json:"local_stt,omitempty"`
 }
 
 func adapterCapabilities(config domain.ProviderConfig, adapter Provider) AdapterCapabilities {
@@ -141,13 +142,18 @@ func adapterCapabilities(config domain.ProviderConfig, adapter Provider) Adapter
 			}
 		}
 	}
-	return AdapterCapabilities{
+	capabilities := AdapterCapabilities{
 		ProviderID: config.ID,
 		Label:      config.Label,
 		Kind:       config.Kind,
 		Media:      Media(config),
 		Realtime:   realtime,
 	}
+	if config.Kind == domain.ProviderLocalSTT {
+		status := localSTTResourceStatus(config)
+		capabilities.LocalSTT = &status
+	}
+	return capabilities
 }
 
 func openRealtime(ctx context.Context, adapter Provider, request RealtimeOpenRequest) (RealtimeSession, error) {

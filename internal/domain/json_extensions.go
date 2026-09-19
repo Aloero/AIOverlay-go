@@ -106,6 +106,22 @@ func (v *ProviderConfig) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+func (v LocalSTTProviderConfig) MarshalJSON() ([]byte, error) {
+	type plain LocalSTTProviderConfig
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *LocalSTTProviderConfig) UnmarshalJSON(raw []byte) error {
+	type plain LocalSTTProviderConfig
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = LocalSTTProviderConfig(p)
+	v.Extra = extra
+	return nil
+}
+
 func (v RealtimeProviderConfig) MarshalJSON() ([]byte, error) {
 	type plain RealtimeProviderConfig
 	return marshalExt(plain(v), v.Extra)

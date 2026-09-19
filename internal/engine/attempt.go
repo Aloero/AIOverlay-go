@@ -72,8 +72,13 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 		}
 	}()
 	attempt := &domain.AttemptRef{ID: attemptID, SlotID: m.ID, ProviderID: m.ProviderID, ModelID: m.ModelID, CredentialID: key.ID, CredentialAlias: key.Label, Transport: "Direct"}
-	if pc, ok := findProvider(r.engine.cfg, m.ProviderID); ok && pc.Kind == domain.ProviderEmbeddedOpenCode {
-		attempt.Transport = "Via OpenCode"
+	if pc, ok := findProvider(r.engine.cfg, m.ProviderID); ok {
+		switch pc.Kind {
+		case domain.ProviderEmbeddedOpenCode:
+			attempt.Transport = "Via OpenCode"
+		case domain.ProviderLocalSTT:
+			attempt.Transport = "Local STT"
+		}
 	}
 	if attempt.CredentialAlias == "" {
 		attempt.CredentialAlias = key.ID

@@ -17,7 +17,7 @@ func Media(p domain.ProviderConfig) MediaCapabilities {
 	switch p.Kind {
 	case domain.ProviderGemini:
 		return MediaCapabilities{Audio: true, Image: true}
-	case domain.ProviderTranscription:
+	case domain.ProviderTranscription, domain.ProviderLocalSTT:
 		return MediaCapabilities{Audio: true, TranscriptionOnly: true}
 	case domain.ProviderOpenAICompatible:
 		return MediaCapabilities{Audio: p.AudioInput, Image: true}
