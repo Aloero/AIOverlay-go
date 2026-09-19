@@ -74,11 +74,12 @@ func release(o options) error {
 	if err != nil {
 		return err
 	}
-	logDir := filepath.Join(root, "releases", "verification")
-	if err = os.MkdirAll(logDir, 0755); err != nil {
+	verification, err := newVerificationWorkspace(root)
+	if err != nil {
 		return err
 	}
-	runner := commandRunner{root: root, logDir: logDir, goBin: o.goBin}
+	defer verification.cleanup()
+	runner := commandRunner{root: root, logDir: verification.staged, goBin: o.goBin}
 	// Standard build regenerates PE resources and compiled identity from the safe template.
 	if runtime.GOOS == "windows" {
 		err = runner.run("build", nil, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/build.ps1", "-ConfigPath", o.config)
@@ -191,14 +192,17 @@ func release(o options) error {
 	if err = atomicfile.Write(filepath.Join(root, "releases", "SHA256SUMS.txt"), []byte(sums.String()), 0644); err != nil {
 		return err
 	}
-	verification := releaseVerificationSummary(o)
+	verificationSummary := releaseVerificationSummary(o)
 	if o.ui {
-		verification["ui"] = "PASS (DOM, regression and Chromium suites)"
+		verificationSummary["ui"] = "PASS (DOM, regression and Chromium suites)"
 	}
 	if o.race {
-		verification["race"] = "PASS"
+		verificationSummary["race"] = "PASS"
 	}
-	releaseData, _ := json.MarshalIndent(map[string]any{"build": metadata, "verification": verification, "archives": reports}, "", "  ")
+	releaseData, _ := json.MarshalIndent(map[string]any{"build": metadata, "verification": verificationSummary, "archives": reports}, "", "  ")
+	if err = verification.publish(); err != nil {
+		return err
+	}
 	if err = atomicfile.Write(filepath.Join(root, "releases", "RELEASE.json"), append(releaseData, '\n'), 0644); err != nil {
 		return err
 	}
