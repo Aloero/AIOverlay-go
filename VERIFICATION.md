@@ -145,7 +145,11 @@ production keyless provider boundary for an explicitly configured compatible
 helper executable and model resource: one long-lived child process, bounded
 RAM-only PCM16 IPC, per-request cancellation, helper reuse/restart, missing-resource
 status, local transcription preview, sanitized child environment and a release
-guard against temp WAV/JPEG/base64/localhost media transport are automated. The
+guard against temp WAV/JPEG/base64/localhost media transport are automated. Local
+resource lifetime is explicit rather than hidden: `keep_warm` is the backward-compatible
+default, while `unload_on_pause` unloads only after the last active transcription;
+resume before completion cancels a pending unload, and provider hot-swap inherits
+the current background paused state. The
 repository still does not bundle a whisper.cpp helper binary or model weights,
 and no actual whisper.cpp inference/model-quality or physical Windows resource
 benchmark has been run. OpenAI Live has an explicit persistent WebSocket

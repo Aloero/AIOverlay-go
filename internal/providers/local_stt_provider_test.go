@@ -134,6 +134,9 @@ func TestLocalSTTCapabilitiesReportResourcesWithoutStartingHelper(t *testing.T) 
 	if capabilities.LocalSTT == nil || !capabilities.LocalSTT.HelperPresent || !capabilities.LocalSTT.ModelPresent {
 		t.Fatalf("local STT capabilities=%+v", capabilities.LocalSTT)
 	}
+	if capabilities.LocalSTT.ResourcePolicy != "keep_warm" || capabilities.LocalSTT.Warm || capabilities.LocalSTT.ActiveRequests != 0 {
+		t.Fatalf("cold default lifecycle status=%+v", capabilities.LocalSTT)
+	}
 	provider.mu.Lock()
 	runtime := provider.runtime
 	provider.mu.Unlock()
@@ -142,5 +145,147 @@ func TestLocalSTTCapabilitiesReportResourcesWithoutStartingHelper(t *testing.T) 
 	}
 	if !capabilities.Media.Audio || !capabilities.Media.TranscriptionOnly || capabilities.Media.Image {
 		t.Fatalf("local STT media capabilities=%+v", capabilities.Media)
+	}
+}
+
+func TestLocalSTTKeepWarmIgnoresBackgroundPause(t *testing.T) {
+	provider := localSTTProviderFixture(t)
+	provider.cfg.LocalSTT.ResourcePolicy = "keep_warm"
+	clip := &domain.AudioClip{PCM16: make([]int16, 160), SampleRate: 16000, Channels: 1}
+	if _, err := collectLocalSTTProviderText(context.Background(), provider, clip); err != nil {
+		t.Fatal(err)
+	}
+	provider.mu.Lock()
+	warm := provider.runtime
+	provider.mu.Unlock()
+	provider.SetBackgroundPaused(true)
+	provider.mu.Lock()
+	stillWarm := provider.runtime
+	paused := provider.backgroundPaused
+	provider.mu.Unlock()
+	if !paused || warm == nil || stillWarm != warm || !warm.Alive() {
+		t.Fatalf("keep-warm policy unloaded helper: warm=%p current=%p paused=%v", warm, stillWarm, paused)
+	}
+}
+
+func TestLocalSTTUnloadOnPauseWaitsForActiveRequest(t *testing.T) {
+	provider := localSTTProviderFixture(t)
+	provider.cfg.LocalSTT.ResourcePolicy = "unload_on_pause"
+	clip := &domain.AudioClip{PCM16: make([]int16, 160), SampleRate: 16000, Channels: 1}
+	clip.PCM16[0] = 8888
+	result := make(chan error, 1)
+	go func() {
+		_, err := collectLocalSTTProviderText(context.Background(), provider, clip)
+		result <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		provider.mu.Lock()
+		active, runtime := provider.activeRequests, provider.runtime
+		provider.mu.Unlock()
+		if active == 1 && runtime != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("local STT request never became active")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	provider.SetBackgroundPaused(true)
+	provider.mu.Lock()
+	during := provider.runtime
+	pending := provider.unloadPending
+	active := provider.activeRequests
+	provider.mu.Unlock()
+	if during == nil || !during.Alive() || !pending || active != 1 {
+		t.Fatalf("pause killed active request: runtime=%p pending=%v active=%d", during, pending, active)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	provider.mu.Lock()
+	after := provider.runtime
+	active = provider.activeRequests
+	pending = provider.unloadPending
+	provider.mu.Unlock()
+	if after != nil || active != 0 || pending {
+		t.Fatalf("helper was not unloaded after last active request: runtime=%p active=%d pending=%v", after, active, pending)
+	}
+}
+
+func TestLocalSTTResumeCancelsPendingUnload(t *testing.T) {
+	provider := localSTTProviderFixture(t)
+	provider.cfg.LocalSTT.ResourcePolicy = "unload_on_pause"
+	clip := &domain.AudioClip{PCM16: make([]int16, 160), SampleRate: 16000, Channels: 1}
+	clip.PCM16[0] = 8888
+	result := make(chan error, 1)
+	go func() {
+		_, err := collectLocalSTTProviderText(context.Background(), provider, clip)
+		result <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		provider.mu.Lock()
+		active := provider.activeRequests
+		provider.mu.Unlock()
+		if active == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("local STT request never became active")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	provider.SetBackgroundPaused(true)
+	provider.SetBackgroundPaused(false)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	provider.mu.Lock()
+	runtime := provider.runtime
+	pending := provider.unloadPending
+	paused := provider.backgroundPaused
+	provider.mu.Unlock()
+	if runtime == nil || !runtime.Alive() || pending || paused {
+		t.Fatalf("resume failed to retain warm helper: runtime=%p pending=%v paused=%v", runtime, pending, paused)
+	}
+}
+
+func TestLocalSTTPreviewWhilePausedUnloadsAfterRequest(t *testing.T) {
+	provider := localSTTProviderFixture(t)
+	provider.cfg.LocalSTT.ResourcePolicy = "unload_on_pause"
+	provider.SetBackgroundPaused(true)
+	clip := &domain.AudioClip{PCM16: make([]int16, 160), SampleRate: 16000, Channels: 1}
+	text, err := collectLocalSTTProviderText(context.Background(), provider, clip)
+	if err != nil || text != "samples=160" {
+		t.Fatalf("paused preview text=%q err=%v", text, err)
+	}
+	provider.mu.Lock()
+	runtime := provider.runtime
+	active := provider.activeRequests
+	provider.mu.Unlock()
+	if runtime != nil || active != 0 {
+		t.Fatalf("paused one-shot preview left helper warm: runtime=%p active=%d", runtime, active)
+	}
+}
+
+func TestLocalSTTStatusReportsWarmLifecycleWithoutStartingHelper(t *testing.T) {
+	provider := localSTTProviderFixture(t)
+	provider.cfg.LocalSTT.ResourcePolicy = "unload_on_pause"
+	status := provider.LocalSTTStatus()
+	if status.Warm || status.ActiveRequests != 0 || status.ResourcePolicy != "unload_on_pause" {
+		t.Fatalf("cold status=%+v", status)
+	}
+	if _, err := collectLocalSTTProviderText(context.Background(), provider, &domain.AudioClip{PCM16: make([]int16, 160), SampleRate: 16000, Channels: 1}); err != nil {
+		t.Fatal(err)
+	}
+	status = provider.LocalSTTStatus()
+	if !status.Warm || status.ActiveRequests != 0 || status.BackgroundPaused {
+		t.Fatalf("warm status=%+v", status)
+	}
+	provider.SetBackgroundPaused(true)
+	status = provider.LocalSTTStatus()
+	if status.Warm || !status.BackgroundPaused {
+		t.Fatalf("paused status=%+v", status)
 	}
 }

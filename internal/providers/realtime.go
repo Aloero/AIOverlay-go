@@ -151,6 +151,9 @@ func adapterCapabilities(config domain.ProviderConfig, adapter Provider) Adapter
 	}
 	if config.Kind == domain.ProviderLocalSTT {
 		status := localSTTResourceStatus(config)
+		if statusProvider, ok := adapter.(interface{ LocalSTTStatus() LocalSTTResourceStatus }); ok {
+			status = statusProvider.LocalSTTStatus()
+		}
 		capabilities.LocalSTT = &status
 	}
 	return capabilities

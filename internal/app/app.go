@@ -229,6 +229,9 @@ func (a *App) saveConfigLockedWithSessionPolicy(cfg domain.Config, imported bool
 	a.registry = reg
 	a.tunnel = tun
 	a.mu.Unlock()
+	if networkChanged && a.sessions != nil {
+		reg.SetBackgroundPaused(a.sessions.Paused())
+	}
 	if networkChanged {
 		oldReg.Close()
 		oldTun.Close()

@@ -93,8 +93,25 @@ func (a *App) SetSourceRunning(id string, running bool) error {
 	return a.sessions.SetSourceRunning(id, running)
 }
 func (a *App) PauseBackground(paused bool) {
+	a.operation.RLock()
+	defer a.operation.RUnlock()
+	a.mu.RLock()
+	registry := a.registry
+	a.mu.RUnlock()
+	if paused {
+		if a.sessions != nil {
+			a.sessions.Pause(true)
+		}
+		if registry != nil {
+			registry.SetBackgroundPaused(true)
+		}
+		return
+	}
+	if registry != nil {
+		registry.SetBackgroundPaused(false)
+	}
 	if a.sessions != nil {
-		a.sessions.Pause(paused)
+		a.sessions.Pause(false)
 	}
 }
 func (a *App) BackgroundPaused() bool { return a.sessions != nil && a.sessions.Paused() }

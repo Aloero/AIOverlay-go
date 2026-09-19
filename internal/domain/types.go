@@ -114,11 +114,12 @@ type ProviderConfig struct {
 }
 
 type LocalSTTProviderConfig struct {
-	Extra      map[string]json.RawMessage `json:"-"`
-	HelperPath string                     `json:"helper_path"`
-	ModelPath  string                     `json:"model_path"`
-	ModelID    string                     `json:"model_id"`
-	Args       []string                   `json:"args,omitempty"`
+	Extra          map[string]json.RawMessage `json:"-"`
+	HelperPath     string                     `json:"helper_path"`
+	ModelPath      string                     `json:"model_path"`
+	ModelID        string                     `json:"model_id"`
+	Args           []string                   `json:"args,omitempty"`
+	ResourcePolicy string                     `json:"resource_policy,omitempty"`
 }
 
 type RealtimeProviderConfig struct {

@@ -128,12 +128,22 @@ func (helper *syntheticHelper) startTranscription(request localSTTWireRequest, p
 
 	go func() {
 		defer helper.removeRequest(request.ID)
-		slow := len(payload) >= 2 && int16(binary.LittleEndian.Uint16(payload[:2])) == 9999
-		if slow {
+		marker := int16(0)
+		if len(payload) >= 2 {
+			marker = int16(binary.LittleEndian.Uint16(payload[:2]))
+		}
+		delay := time.Duration(0)
+		switch marker {
+		case 9999:
+			delay = 5 * time.Second
+		case 8888:
+			delay = 120 * time.Millisecond
+		}
+		if delay > 0 {
 			select {
 			case <-cancelled:
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(delay):
 			}
 		}
 		helper.writeResponse(localSTTWireResponse{Type: "result", ID: request.ID, Text: fmt.Sprintf("samples=%d", request.Samples)})

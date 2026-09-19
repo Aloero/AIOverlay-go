@@ -20,8 +20,11 @@ const localSTTProtocol = "aio-stt-v1"
 type LocalSTT struct {
 	cfg domain.ProviderConfig
 
-	mu      sync.Mutex
-	runtime *LocalSTTRuntime
+	mu               sync.Mutex
+	runtime          *LocalSTTRuntime
+	activeRequests   int
+	backgroundPaused bool
+	unloadPending    bool
 }
 
 func NewLocalSTT(cfg domain.ProviderConfig) *LocalSTT { return &LocalSTT{cfg: cfg} }
@@ -52,10 +55,11 @@ func (provider *LocalSTT) transcribe(ctx context.Context, request Request, event
 	if request.ModelID != provider.cfg.LocalSTT.ModelID {
 		return &RequestError{Outcome: domain.OutcomeModelUnavailable, Message: "Requested local STT model does not match the configured resource"}
 	}
-	runtime, err := provider.ensureRuntime()
+	runtime, err := provider.acquireRuntime()
 	if err != nil {
 		return err
 	}
+	defer provider.releaseRuntime()
 	text, err := runtime.Transcribe(ctx, *request.Audio)
 	if err != nil {
 		return localSTTRequestError(err)
@@ -69,26 +73,74 @@ func (provider *LocalSTT) transcribe(ctx context.Context, request Request, event
 	return nil
 }
 
-func (provider *LocalSTT) ensureRuntime() (*LocalSTTRuntime, error) {
+func (provider *LocalSTT) acquireRuntime() (*LocalSTTRuntime, error) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if provider.runtime != nil && provider.runtime.Alive() {
-		return provider.runtime, nil
+	if provider.runtime == nil || !provider.runtime.Alive() {
+		if provider.runtime != nil {
+			provider.runtime.Close()
+			provider.runtime = nil
+		}
+		command, err := provider.helperCommand()
+		if err != nil {
+			return nil, err
+		}
+		runtime, err := StartLocalSTTRuntime(command)
+		if err != nil {
+			return nil, &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: err.Error(), Retryable: true}
+		}
+		provider.runtime = runtime
 	}
-	if provider.runtime != nil {
-		provider.runtime.Close()
+	provider.activeRequests++
+	if provider.backgroundPaused && localSTTResourcePolicy(provider.cfg) == "unload_on_pause" {
+		provider.unloadPending = true
+	}
+	return provider.runtime, nil
+}
+
+func (provider *LocalSTT) releaseRuntime() {
+	var unload *LocalSTTRuntime
+	provider.mu.Lock()
+	if provider.activeRequests > 0 {
+		provider.activeRequests--
+	}
+	if provider.activeRequests == 0 && provider.unloadPending {
+		unload = provider.runtime
 		provider.runtime = nil
+		provider.unloadPending = false
 	}
-	command, err := provider.helperCommand()
-	if err != nil {
-		return nil, err
+	provider.mu.Unlock()
+	if unload != nil {
+		unload.Close()
 	}
-	runtime, err := StartLocalSTTRuntime(command)
-	if err != nil {
-		return nil, &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: err.Error(), Retryable: true}
+}
+
+func (provider *LocalSTT) SetBackgroundPaused(paused bool) {
+	var unload *LocalSTTRuntime
+	provider.mu.Lock()
+	provider.backgroundPaused = paused
+	if localSTTResourcePolicy(provider.cfg) == "unload_on_pause" && paused {
+		if provider.activeRequests > 0 {
+			provider.unloadPending = true
+		} else {
+			unload = provider.runtime
+			provider.runtime = nil
+			provider.unloadPending = false
+		}
+	} else if !paused {
+		provider.unloadPending = false
 	}
-	provider.runtime = runtime
-	return runtime, nil
+	provider.mu.Unlock()
+	if unload != nil {
+		unload.Close()
+	}
+}
+
+func localSTTResourcePolicy(cfg domain.ProviderConfig) string {
+	if cfg.LocalSTT == nil || cfg.LocalSTT.ResourcePolicy == "" {
+		return "keep_warm"
+	}
+	return cfg.LocalSTT.ResourcePolicy
 }
 
 func (provider *LocalSTT) helperCommand() (*exec.Cmd, error) {
@@ -162,6 +214,7 @@ func (provider *LocalSTT) Close() {
 	provider.mu.Lock()
 	runtime := provider.runtime
 	provider.runtime = nil
+	provider.unloadPending = false
 	provider.mu.Unlock()
 	if runtime != nil {
 		runtime.Close()
@@ -169,12 +222,26 @@ func (provider *LocalSTT) Close() {
 }
 
 type LocalSTTResourceStatus struct {
-	Configured    bool   `json:"configured"`
-	HelperPresent bool   `json:"helper_present"`
-	ModelPresent  bool   `json:"model_present"`
-	ModelID       string `json:"model_id,omitempty"`
-	ModelBytes    int64  `json:"model_bytes,omitempty"`
-	Reason        string `json:"reason,omitempty"`
+	Configured       bool   `json:"configured"`
+	HelperPresent    bool   `json:"helper_present"`
+	ModelPresent     bool   `json:"model_present"`
+	ModelID          string `json:"model_id,omitempty"`
+	ModelBytes       int64  `json:"model_bytes,omitempty"`
+	ResourcePolicy   string `json:"resource_policy,omitempty"`
+	Warm             bool   `json:"warm"`
+	ActiveRequests   int    `json:"active_requests,omitempty"`
+	BackgroundPaused bool   `json:"background_paused,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+func (provider *LocalSTT) LocalSTTStatus() LocalSTTResourceStatus {
+	status := localSTTResourceStatus(provider.cfg)
+	provider.mu.Lock()
+	status.Warm = provider.runtime != nil && provider.runtime.Alive()
+	status.ActiveRequests = provider.activeRequests
+	status.BackgroundPaused = provider.backgroundPaused
+	provider.mu.Unlock()
+	return status
 }
 
 func localSTTResourceStatus(cfg domain.ProviderConfig) LocalSTTResourceStatus {
@@ -185,6 +252,7 @@ func localSTTResourceStatus(cfg domain.ProviderConfig) LocalSTTResourceStatus {
 	}
 	status.Configured = true
 	status.ModelID = cfg.LocalSTT.ModelID
+	status.ResourcePolicy = localSTTResourcePolicy(cfg)
 	helperPath, err := resolveLocalSTTResource(cfg.LocalSTT.HelperPath, "helper")
 	if err != nil {
 		status.Reason = err.Error()

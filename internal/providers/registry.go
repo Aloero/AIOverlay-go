@@ -74,6 +74,20 @@ func (r *Registry) OpenRealtime(ctx context.Context, request RealtimeOpenRequest
 	return openRealtime(ctx, adapter, request)
 }
 
+func (r *Registry) SetBackgroundPaused(paused bool) {
+	r.mu.RLock()
+	listeners := make([]interface{ SetBackgroundPaused(bool) }, 0, len(r.items))
+	for _, provider := range r.items {
+		if listener, ok := provider.(interface{ SetBackgroundPaused(bool) }); ok {
+			listeners = append(listeners, listener)
+		}
+	}
+	r.mu.RUnlock()
+	for _, listener := range listeners {
+		listener.SetBackgroundPaused(paused)
+	}
+}
+
 func (r *Registry) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

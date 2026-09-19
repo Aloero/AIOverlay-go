@@ -65,3 +65,22 @@ func ProviderConfigForLocalSTTTest() domain.ProviderConfig {
 		LocalSTT:        &domain.LocalSTTProviderConfig{HelperPath: "helper", ModelPath: "model", ModelID: "local-model"},
 	}
 }
+
+func TestLocalSTTResourcePolicyValidation(t *testing.T) {
+	for _, policy := range []string{"", "keep_warm", "unload_on_pause"} {
+		cfg := Default()
+		provider := ProviderConfigForLocalSTTTest()
+		provider.LocalSTT.ResourcePolicy = policy
+		cfg.Providers = append(cfg.Providers, provider)
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("resource policy %q rejected: %v", policy, err)
+		}
+	}
+	cfg := Default()
+	provider := ProviderConfigForLocalSTTTest()
+	provider.LocalSTT.ResourcePolicy = "hidden_magic"
+	cfg.Providers = append(cfg.Providers, provider)
+	if err := Validate(cfg); err == nil {
+		t.Fatal("invalid local STT resource policy accepted")
+	}
+}

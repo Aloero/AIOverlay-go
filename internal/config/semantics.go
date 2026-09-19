@@ -104,6 +104,9 @@ func validateLocalSTTProvider(providerID string, cfg domain.LocalSTTProviderConf
 			return fmt.Errorf("provider %s local STT %s is invalid", providerID, name)
 		}
 	}
+	if cfg.ResourcePolicy != "" && cfg.ResourcePolicy != "keep_warm" && cfg.ResourcePolicy != "unload_on_pause" {
+		return fmt.Errorf("provider %s local STT resource policy is invalid", providerID)
+	}
 	if len(cfg.Args) > 64 {
 		return fmt.Errorf("provider %s local STT has too many helper arguments", providerID)
 	}
