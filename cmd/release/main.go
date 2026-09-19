@@ -64,6 +64,11 @@ func release(o options) error {
 	if err := os.Chdir(root); err != nil {
 		return err
 	}
+	lock, err := acquireReleaseLock(root)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
 	if err := releaseguard.SafeConfig(o.config); err != nil {
 		return err
 	}
@@ -141,16 +146,21 @@ func release(o options) error {
 	if err = atomicfile.Write(filepath.Join("dist", "MANIFEST.sha256"), manifest, 0644); err != nil {
 		return err
 	}
-	sourceTemp := filepath.Join(root, "releases", "AIOverlay-go_Source.zip.tmp")
-	windowsTemp := filepath.Join(root, "releases", "AIOverlay-go_Windows.zip.tmp")
+	sourceTemp, err := newReleaseTempPath(root, ".AIOverlay-go_Source-*.zip.tmp")
+	if err != nil {
+		return err
+	}
+	windowsTemp, err := newReleaseTempPath(root, ".AIOverlay-go_Windows-*.zip.tmp")
+	if err != nil {
+		return err
+	}
 	defer os.Remove(sourceTemp)
 	defer os.Remove(windowsTemp)
+	archiveNames := []string{"AIOverlay-go_Source.zip", "AIOverlay-go_Windows.zip"}
+	temps := []string{sourceTemp, windowsTemp}
 	var reports []releasepack.ArchiveReport
 	for i, payload := range [][]releasepack.File{source, windows} {
-		temp := sourceTemp
-		if i == 1 {
-			temp = windowsTemp
-		}
+		temp := temps[i]
 		if err = releasepack.Write(temp, payload); err != nil {
 			return err
 		}
@@ -174,15 +184,15 @@ func release(o options) error {
 		if cleanupErr != nil {
 			return cleanupErr
 		}
-		report.Archive = strings.TrimSuffix(filepath.Base(temp), ".tmp")
+		report.Archive = archiveNames[i]
 		reports = append(reports, report)
 	}
 	// Publish only after both complete payloads, CRCs, manifests and the extracted
 	// source build have been verified. No local API credentials enter either ZIP.
-	if err = atomicfile.Replace(sourceTemp, strings.TrimSuffix(sourceTemp, ".tmp")); err != nil {
+	if err = atomicfile.Replace(sourceTemp, filepath.Join(root, "releases", archiveNames[0])); err != nil {
 		return err
 	}
-	if err = atomicfile.Replace(windowsTemp, strings.TrimSuffix(windowsTemp, ".tmp")); err != nil {
+	if err = atomicfile.Replace(windowsTemp, filepath.Join(root, "releases", archiveNames[1])); err != nil {
 		return err
 	}
 	var sums strings.Builder
