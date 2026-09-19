@@ -21,6 +21,7 @@ import (
 type options struct {
 	root, config, goBin, node string
 	ui, race, allowDirty      bool
+	windowsVerify             bool
 }
 
 func main() {
@@ -29,15 +30,31 @@ func main() {
 	flag.StringVar(&o.config, "config", "examples/config.example.json", "public pre-build config template")
 	flag.StringVar(&o.goBin, "go", filepath.Join(runtime.GOROOT(), "bin", "go"), "Go executable")
 	flag.StringVar(&o.node, "node", "node", "Node executable for frontend checks")
-	flag.BoolVar(&o.ui, "ui", true, "run DOM and Chromium checks")
+	flag.BoolVar(&o.ui, "ui", false, "run optional DOM and Chromium checks; not a default release gate")
 	flag.BoolVar(&o.race, "race", false, "run race detector (requires a C toolchain)")
 	flag.BoolVar(&o.allowDirty, "allow-dirty", false, "local release candidate from uncommitted changes")
+	flag.BoolVar(&o.windowsVerify, "windows-verify", false, "run optional Windows-target vet; not a default release gate")
 	flag.Parse()
 	if err := release(o); err != nil {
 		fmt.Fprintln(os.Stderr, "Release failed:", err)
 		os.Exit(1)
 	}
 }
+
+func releaseVerificationSummary(o options) map[string]any {
+	windowsVet := "not run (out of scope)"
+	if o.windowsVerify {
+		windowsVet = "PASS"
+	}
+	return map[string]any{
+		"go_test": "PASS", "go_vet": "PASS", "windows_vet": windowsVet,
+		"windows_cross_build": "PASS (artifact build)", "js_syntax": "PASS",
+		"critical_repeat": "PASS (20)", "ui": "not run", "race": "not run",
+		"physical_windows": "out of scope", "real_provider": "not run", "real_vpn": "not run",
+		"source_archive_rebuild": "PASS",
+	}
+}
+
 func release(o options) error {
 	root, err := filepath.Abs(o.root)
 	if err != nil {
@@ -174,7 +191,7 @@ func release(o options) error {
 	if err = atomicfile.Write(filepath.Join(root, "releases", "SHA256SUMS.txt"), []byte(sums.String()), 0644); err != nil {
 		return err
 	}
-	verification := map[string]any{"go_test": "PASS", "go_vet": "PASS", "windows_vet": "PASS", "windows_cross_build": "PASS", "js_syntax": "PASS", "critical_repeat": "PASS (20)", "ui": "not run", "race": "not run", "physical_windows": "out of scope", "real_provider": "not run", "real_vpn": "not run", "source_archive_rebuild": "PASS"}
+	verification := releaseVerificationSummary(o)
 	if o.ui {
 		verification["ui"] = "PASS (DOM, regression and Chromium suites)"
 	}

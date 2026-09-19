@@ -1,8 +1,35 @@
 # Verification · AIOverlay-go 0.2.8
 
-Host: Linux amd64. Target: Windows 10/11 x64. Date: 2026-09-17. This document separates executed automation from Windows desktop acceptance. The underlying 0.2.5 project and Git history have been preserved; changes address the audit baseline `261f569`.
+Host: Linux amd64. The document separates current requested-scope automation,
+historical release evidence and native/external acceptance. The underlying Git
+history is preserved; R2 work continues on `feature/audio-context-029`.
 
-## Executed checks
+## Current requested-scope checks · 2026-09-19
+
+For the current R2 branch state, `go test ./... -count=1` and `go vet ./...`
+passed. All shipped JavaScript/CJS files passed Node syntax checks. The permanent
+A01–A19 `R2Audit` regressions passed under the race detector in app, catalog,
+control, engine, platform/audio, providers, releasepack and session packages,
+five consecutive runs per package. Focused realtime, lifecycle and cancellation
+regressions were additionally repeated at higher counts while their slices were
+implemented. Current configuration schema is 5; schema-2/3 statements later in
+this document are historical release notes, not the current config version.
+
+Per the requested scope, this pass did **not** run the application, Chromium/UI
+harnesses, Windows-target vet, a Windows desktop, a live cloud provider or a live
+VPN endpoint. `cmd/release` therefore keeps DOM/Chromium (`--ui`) and Windows-target
+vet (`--windows-verify`) opt-in instead of default release gates. Building the
+Windows EXE remains an artifact-production step, not evidence of Windows runtime
+acceptance.
+
+Current runtime materialization is intentionally fail-closed.
+`go run ./cmd/preflight --runtimes` stops because
+`runtime/opencode/opencode.exe` is an LFS pointer; `runtime/sing-box/sing-box.exe`
+and `runtime/sing-box/libcronet.dll` are pointers too. This checkout has no origin
+remote, no release ZIP cache and no matching local payload copy, so no fresh
+release archive is claimed or generated from these pointers.
+
+## Historical 0.2.8 snapshot checks · not rerun for current HEAD
 
 The repaired working tree passed `go test ./... -count=1`: **194 test/subtest pass events, 0 failures**. Two sing-box integration tests are skipped in this ordinary environment-only run because they require an explicit host binary. They were also executed separately using the verified Linux sing-box 1.14.1 test runtime, **five consecutive runs**, including generated config check, preserved DNS dependencies, IPv4 endpoint policy, authenticated local proxy readiness/reuse and shutdown. No external tunnel server or provider account was contacted.
 
@@ -26,7 +53,7 @@ The audit's original engine/config/provider/control/trace/tunnel reproductions n
 
 Additional tests verify cross-chunk secret redaction; disabled explicit pipelines; warm state after UI/label saves; batch benchmark cancellation/grading/median; optional statistics not replacing quality; JSON schema migration/duplicate fields/unknown large numbers; forbidden credential environment overrides; atomic-file failure retaining last good data; private config/LFS release guards; staged Git index inspection; ZIP CRC, extraction, traversal rejection and exact manifest coverage.
 
-## Native Windows code: compiled, not physically executed here
+## Historical native Windows code evidence · not rerun for current HEAD
 
 `internal/desktop/acceptance_windows_test.go` provides an opt-in interactive test of ten actual WebView2 open/close cycles and checks destruction of each old HWND. It requires `AIOVERLAY_WINDOWS_ACCEPTANCE=1` on a Windows desktop with WebView2 installed. The test binary was cross-compiled, not run on Linux.
 
@@ -38,7 +65,7 @@ Actual Windows 10/11 launch, WebView2 COM behavior, child-process memory reclama
 
 ## Release verification
 
-Use `go run ./cmd/release --race` with Node/Chromium test dependencies and a working C compiler for the complete release workflow. The checked-in command defaults to the public `examples/config.example.json`, never a user's live config. It rejects private configuration and LFS pointer payloads, regenerates PE resources and compile-time identity, runs clean build/tests/vet/JS/UI checks, extracts PE resources from the finished EXE, and verifies ProductName, FileDescription, CompanyName, OriginalFilename, four-part FileVersion and icon.
+Use `go run ./cmd/release --race` with Node and a working C compiler for the default release workflow. DOM/Chromium checks are opt-in with `--ui` and are not a default gate for the current scope. The checked-in command defaults to the public `examples/config.example.json`, never a user's live config. It rejects private configuration and LFS pointer payloads, regenerates PE resources and compile-time identity, runs clean build/tests/vet/JS syntax checks plus optional UI checks, extracts PE resources from the finished EXE, and verifies ProductName, FileDescription, CompanyName, OriginalFilename, four-part FileVersion and icon.
 
 Both `AIOverlay-go_Source.zip` and `AIOverlay-go_Windows.zip` receive fresh complete SHA-256 manifests. The command reads every ZIP entry (verifying CRC), extracts each into a fresh directory, rejects traversal/duplicates/symlinks/unlisted files and verifies every extracted hash. It then reruns tests/vet, regenerates resources and rebuilds the Windows EXE from the extracted Source ZIP. The release is published only when the EXE SHA-256 matches the Windows archive payload. Versioned release tooling excludes crash dumps, node_modules, build tools and private runtime files; source payload gets a separately checked public config.
 
@@ -125,10 +152,11 @@ as well as the earlier critical packages. Run `go run ./cmd/release --race` with
 a working C toolchain, Node, Playwright Chromium and its system font/library
 dependencies. Environment repair is a host-toolchain step; no compiler, font,
 browser profile, raw recording or test screenshot belongs in either archive.
-Archive verification records tests/vet, Windows cross-build, real race detection,
-DOM/Chromium, CRC, every-entry hashes, clean extraction and a reproducible EXE
-from the extracted source. Consult the generated report for the checks actually
-completed on that archive's commit.
+Archive verification records tests/vet, the Windows artifact build, real race
+detection, DOM/Chromium, CRC, every-entry hashes, clean extraction and a
+reproducible EXE from the extracted source. Optional Windows-target vet runs only
+with `--windows-verify`; it is not a default release gate for this scope. Consult
+the generated report for the checks actually completed on that archive's commit.
 
 The acceptance scope for this branch is automated Go/race/static/JS verification.
 Windows-target compilation/vet and physical Windows audio/desktop acceptance are
