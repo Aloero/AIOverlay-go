@@ -1,9 +1,7 @@
 package providers
 
-// This file models the current OpenAI Live primary-WebSocket protocol as an
-// experiment. It is deliberately not registered as a Provider and does not
-// change the public realtime capability matrix until a real provider/VPN run
-// proves the concrete endpoint, authentication, billing and lifecycle behavior.
+// This file implements the bounded OpenAI Live primary-WebSocket protocol layer.
+// Provider registration and lifecycle policy live in openai_live.go.
 
 import (
 	"context"
@@ -21,7 +19,7 @@ type openAILiveTextSocket interface {
 	Close() error
 }
 
-type openAILiveProtocolExperiment struct {
+type openAILiveProtocol struct {
 	socket             openAILiveTextSocket
 	responsesDelegated bool
 	sequence           atomic.Uint64
@@ -48,11 +46,11 @@ type openAILiveObservation struct {
 	Delta         string
 }
 
-func newOpenAILiveProtocolExperiment(socket openAILiveTextSocket, responsesDelegated bool) *openAILiveProtocolExperiment {
-	return &openAILiveProtocolExperiment{socket: socket, responsesDelegated: responsesDelegated}
+func newOpenAILiveProtocol(socket openAILiveTextSocket, responsesDelegated bool) *openAILiveProtocol {
+	return &openAILiveProtocol{socket: socket, responsesDelegated: responsesDelegated}
 }
 
-func openAILiveVerifiedProtocolOperations() map[RealtimeOperation]bool {
+func openAILiveProtocolOperations() map[RealtimeOperation]bool {
 	return map[RealtimeOperation]bool{
 		RealtimeAppendAudio:     true,
 		RealtimeRequestResponse: true,
@@ -60,9 +58,9 @@ func openAILiveVerifiedProtocolOperations() map[RealtimeOperation]bool {
 	}
 }
 
-func (protocol *openAILiveProtocolExperiment) Start(ctx context.Context, session json.RawMessage) error {
+func (protocol *openAILiveProtocol) Start(ctx context.Context, session json.RawMessage) error {
 	if protocol == nil || protocol.socket == nil {
-		return fmt.Errorf("OpenAI Live experiment socket is unavailable")
+		return fmt.Errorf("OpenAI Live socket is unavailable")
 	}
 	if !validJSONObject(session) {
 		return fmt.Errorf("OpenAI Live session.start requires a JSON object")
@@ -70,7 +68,7 @@ func (protocol *openAILiveProtocolExperiment) Start(ctx context.Context, session
 	protocol.mu.Lock()
 	if protocol.closed {
 		protocol.mu.Unlock()
-		return fmt.Errorf("OpenAI Live experiment is closed")
+		return fmt.Errorf("OpenAI Live is closed")
 	}
 	if protocol.startSent || protocol.started {
 		protocol.mu.Unlock()
@@ -89,19 +87,19 @@ func (protocol *openAILiveProtocolExperiment) Start(ctx context.Context, session
 	return nil
 }
 
-func (protocol *openAILiveProtocolExperiment) AppendAudio(ctx context.Context, audio json.RawMessage) error {
+func (protocol *openAILiveProtocol) AppendAudio(ctx context.Context, audio json.RawMessage) error {
 	if err := protocol.requireStarted(); err != nil {
 		return err
 	}
 	if len(audio) == 0 || !json.Valid(audio) {
-		return fmt.Errorf("OpenAI Live input_audio.append requires valid JSON audio data")
+		return fmt.Errorf("OpenAI Live session.input_audio.append requires valid JSON audio data")
 	}
 	return protocol.writeEvent(ctx, openAILiveEnvelope{
-		Type: "input_audio.append", EventID: protocol.nextEventID(), Audio: cloneRawJSON(audio),
+		Type: "session.input_audio.append", EventID: protocol.nextEventID(), Audio: cloneRawJSON(audio),
 	})
 }
 
-func (protocol *openAILiveProtocolExperiment) RequestResponse(ctx context.Context) error {
+func (protocol *openAILiveProtocol) RequestResponse(ctx context.Context) error {
 	if err := protocol.requireStarted(); err != nil {
 		return err
 	}
@@ -111,7 +109,7 @@ func (protocol *openAILiveProtocolExperiment) RequestResponse(ctx context.Contex
 	return protocol.writeEvent(ctx, openAILiveEnvelope{Type: "response.create", EventID: protocol.nextEventID()})
 }
 
-func (protocol *openAILiveProtocolExperiment) CloseSession(ctx context.Context) error {
+func (protocol *openAILiveProtocol) CloseSession(ctx context.Context) error {
 	protocol.mu.Lock()
 	if protocol.closed {
 		protocol.mu.Unlock()
@@ -125,9 +123,9 @@ func (protocol *openAILiveProtocolExperiment) CloseSession(ctx context.Context) 
 	return protocol.writeEvent(ctx, openAILiveEnvelope{Type: "session.close", EventID: protocol.nextEventID()})
 }
 
-func (protocol *openAILiveProtocolExperiment) NextServerEvent(ctx context.Context) (openAILiveObservation, error) {
+func (protocol *openAILiveProtocol) NextServerEvent(ctx context.Context) (openAILiveObservation, error) {
 	if protocol == nil || protocol.socket == nil {
-		return openAILiveObservation{}, fmt.Errorf("OpenAI Live experiment socket is unavailable")
+		return openAILiveObservation{}, fmt.Errorf("OpenAI Live socket is unavailable")
 	}
 	raw, err := protocol.socket.ReadText(ctx)
 	if err != nil {
@@ -160,13 +158,13 @@ func (protocol *openAILiveProtocolExperiment) NextServerEvent(ctx context.Contex
 	return observation, nil
 }
 
-func (protocol *openAILiveProtocolExperiment) Started() bool {
+func (protocol *openAILiveProtocol) Started() bool {
 	protocol.mu.Lock()
 	defer protocol.mu.Unlock()
 	return protocol.started
 }
 
-func (protocol *openAILiveProtocolExperiment) Close() error {
+func (protocol *openAILiveProtocol) Close() error {
 	if protocol == nil || protocol.socket == nil {
 		return nil
 	}
@@ -176,11 +174,11 @@ func (protocol *openAILiveProtocolExperiment) Close() error {
 	return protocol.socket.Close()
 }
 
-func (protocol *openAILiveProtocolExperiment) requireStarted() error {
+func (protocol *openAILiveProtocol) requireStarted() error {
 	protocol.mu.Lock()
 	defer protocol.mu.Unlock()
 	if protocol.closed {
-		return fmt.Errorf("OpenAI Live experiment is closed")
+		return fmt.Errorf("OpenAI Live is closed")
 	}
 	if !protocol.started {
 		return fmt.Errorf("OpenAI Live session.started has not been received")
@@ -188,7 +186,7 @@ func (protocol *openAILiveProtocolExperiment) requireStarted() error {
 	return nil
 }
 
-func (protocol *openAILiveProtocolExperiment) writeEvent(ctx context.Context, event openAILiveEnvelope) error {
+func (protocol *openAILiveProtocol) writeEvent(ctx context.Context, event openAILiveEnvelope) error {
 	raw, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -199,7 +197,7 @@ func (protocol *openAILiveProtocolExperiment) writeEvent(ctx context.Context, ev
 	return protocol.socket.WriteText(ctx, string(raw))
 }
 
-func (protocol *openAILiveProtocolExperiment) nextEventID() string {
+func (protocol *openAILiveProtocol) nextEventID() string {
 	return fmt.Sprintf("aio-live-exp-%d", protocol.sequence.Add(1))
 }
 

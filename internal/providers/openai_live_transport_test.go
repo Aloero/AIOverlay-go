@@ -84,7 +84,7 @@ func TestOpenAILiveTransportExperimentUsesExplicitEndpointAuthAndSessionStart(t 
 	connector.tlsConfig = &tls.Config{InsecureSkipVerify: true} // Test-only local certificate.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	protocol, err := dialOpenAILiveTransportExperiment(ctx, connector, openAILiveTransportExperimentConfig{
+	protocol, err := dialOpenAILiveTransport(ctx, connector, openAILiveTransportConfig{
 		Endpoint: endpoint, APIKey: "TEST_ONLY_LIVE_KEY",
 		Session: json.RawMessage(`{"model":"gpt-live-1"}`), ResponsesDelegated: true,
 	})
@@ -116,7 +116,7 @@ func TestOpenAILiveTransportExperimentFailsClosedBeforeWebSocketDial(t *testing.
 		dials.Add(1)
 		return nil, fmt.Errorf("unexpected direct dial")
 	}
-	_, err := dialOpenAILiveTransportExperiment(context.Background(), connector, openAILiveTransportExperimentConfig{
+	_, err := dialOpenAILiveTransport(context.Background(), connector, openAILiveTransportConfig{
 		Endpoint: "wss://provider.example/live", APIKey: "TEST_ONLY_LIVE_KEY",
 		Session: json.RawMessage(`{"model":"gpt-live-1"}`),
 	})
@@ -136,14 +136,14 @@ func TestOpenAILiveTransportExperimentRejectsCredentialInURLAndMissingKeyBeforeD
 		return nil, fmt.Errorf("should not dial")
 	}
 
-	_, err := dialOpenAILiveTransportExperiment(context.Background(), connector, openAILiveTransportExperimentConfig{
+	_, err := dialOpenAILiveTransport(context.Background(), connector, openAILiveTransportConfig{
 		Endpoint: "wss://secret@provider.example/live", APIKey: "TEST_ONLY_LIVE_KEY",
 		Session: json.RawMessage(`{"model":"gpt-live-1"}`),
 	})
 	if err == nil || !strings.Contains(err.Error(), "credential-free wss URL") {
 		t.Fatalf("credentialed Live endpoint error=%v", err)
 	}
-	_, err = dialOpenAILiveTransportExperiment(context.Background(), connector, openAILiveTransportExperimentConfig{
+	_, err = dialOpenAILiveTransport(context.Background(), connector, openAILiveTransportConfig{
 		Endpoint: "wss://provider.example/live", Session: json.RawMessage(`{"model":"gpt-live-1"}`),
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires an API key") {

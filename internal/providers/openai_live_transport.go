@@ -8,24 +8,24 @@ import (
 	"strings"
 )
 
-// openAILiveTransportExperimentConfig intentionally requires an explicit Live
-// primary-WebSocket URL. The experiment must not guess a production endpoint.
-type openAILiveTransportExperimentConfig struct {
+// openAILiveTransportConfig requires an explicit Live primary-WebSocket URL.
+// The transport never guesses or rewrites a production endpoint.
+type openAILiveTransportConfig struct {
 	Endpoint           string
 	APIKey             string
 	Session            json.RawMessage
 	ResponsesDelegated bool
 }
 
-func dialOpenAILiveTransportExperiment(ctx context.Context, connector realtimeConnector, config openAILiveTransportExperimentConfig) (*openAILiveProtocolExperiment, error) {
+func dialOpenAILiveTransport(ctx context.Context, connector realtimeConnector, config openAILiveTransportConfig) (*openAILiveProtocol, error) {
 	if strings.TrimSpace(config.APIKey) == "" {
-		return nil, fmt.Errorf("OpenAI Live experiment requires an API key")
+		return nil, fmt.Errorf("OpenAI Live requires an API key")
 	}
 	if _, err := parseRealtimeEndpoint(config.Endpoint); err != nil {
 		return nil, err
 	}
 	if !validJSONObject(config.Session) {
-		return nil, fmt.Errorf("OpenAI Live experiment requires a session JSON object")
+		return nil, fmt.Errorf("OpenAI Live requires a session JSON object")
 	}
 
 	headers := make(http.Header)
@@ -34,7 +34,7 @@ func dialOpenAILiveTransportExperiment(ctx context.Context, connector realtimeCo
 	if err != nil {
 		return nil, err
 	}
-	protocol := newOpenAILiveProtocolExperiment(socket, config.ResponsesDelegated)
+	protocol := newOpenAILiveProtocol(socket, config.ResponsesDelegated)
 	if err := protocol.Start(ctx, config.Session); err != nil {
 		_ = protocol.Close()
 		return nil, err

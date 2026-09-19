@@ -23,6 +23,8 @@ func Media(p domain.ProviderConfig) MediaCapabilities {
 		return MediaCapabilities{Audio: p.AudioInput, Image: true}
 	case domain.ProviderEmbeddedOpenCode:
 		return MediaCapabilities{Image: true}
+	case domain.ProviderOpenAILive:
+		return MediaCapabilities{Audio: true}
 	default:
 		return MediaCapabilities{}
 	}

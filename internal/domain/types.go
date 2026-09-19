@@ -14,6 +14,7 @@ const (
 	ProviderGemini           ProviderKind = "gemini"
 	ProviderTranscription    ProviderKind = "audio_transcription"
 	ProviderEmbeddedOpenCode ProviderKind = "embedded_opencode"
+	ProviderOpenAILive       ProviderKind = "openai_live"
 )
 
 type CredentialPolicy string
@@ -107,6 +108,13 @@ type ProviderConfig struct {
 	Headers            map[string]string          `json:"headers,omitempty"`
 	CredentialPool     CredentialPool             `json:"credential_pool"`
 	RequestDefaults    RequestDefaults            `json:"request_defaults"`
+	Realtime           *RealtimeProviderConfig    `json:"realtime,omitempty"`
+}
+
+type RealtimeProviderConfig struct {
+	Extra          map[string]json.RawMessage `json:"-"`
+	ResponsesModel string                     `json:"responses_model,omitempty"`
+	Instructions   string                     `json:"instructions,omitempty"`
 }
 
 type RequestDefaults struct {

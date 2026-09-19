@@ -21,7 +21,7 @@ func enum[T ~string](v T, values ...T) bool {
 func within(v, min, max int) bool { return v >= min && v <= max }
 func score(v float64) bool        { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 100 }
 func validateProvider(p domain.ProviderConfig) error {
-	if !enum(p.Kind, domain.ProviderOpenAICompatible, domain.ProviderGemini, domain.ProviderEmbeddedOpenCode, domain.ProviderTranscription) {
+	if !enum(p.Kind, domain.ProviderOpenAICompatible, domain.ProviderGemini, domain.ProviderEmbeddedOpenCode, domain.ProviderTranscription, domain.ProviderOpenAILive) {
 		return fmt.Errorf("provider %s has unsupported protocol", p.ID)
 	}
 	if !enum(p.CredentialPool.Policy, domain.CredentialRoundRobin, domain.CredentialSequential, domain.CredentialSticky, domain.CredentialRandom) {
@@ -32,11 +32,30 @@ func validateProvider(p domain.ProviderConfig) error {
 	}
 	if p.BaseURL != "" {
 		u, err := url.Parse(p.BaseURL)
-		if err != nil || u.Hostname() == "" || !enum(u.Scheme, "https", "http") || u.User != nil || u.Fragment != "" {
+		validScheme := enum(u.Scheme, "https", "http")
+		if p.Kind == domain.ProviderOpenAILive {
+			validScheme = u.Scheme == "wss" && u.RawQuery == ""
+		}
+		if err != nil || u.Hostname() == "" || !validScheme || u.User != nil || u.Fragment != "" {
 			return fmt.Errorf("provider %s has invalid base URL", p.ID)
 		}
 	} else if p.Kind != domain.ProviderEmbeddedOpenCode && p.Enabled {
 		return fmt.Errorf("provider %s requires base URL", p.ID)
+	}
+	if p.Kind == domain.ProviderOpenAILive {
+		if p.AudioInput {
+			return fmt.Errorf("provider %s live audio capability is defined by its adapter, not audio_input", p.ID)
+		}
+		if p.Realtime != nil {
+			if len(p.Realtime.ResponsesModel) > 2048 || strings.ContainsRune(p.Realtime.ResponsesModel, 0) {
+				return fmt.Errorf("provider %s has invalid Live Responses model", p.ID)
+			}
+			if len(p.Realtime.Instructions) > 32768 || strings.ContainsRune(p.Realtime.Instructions, 0) {
+				return fmt.Errorf("provider %s Live instructions exceed bounds", p.ID)
+			}
+		}
+	} else if p.Realtime != nil {
+		return fmt.Errorf("provider %s realtime settings require openai_live protocol", p.ID)
 	}
 	for _, name := range p.CredentialEnv {
 		upper := strings.ToUpper(name)

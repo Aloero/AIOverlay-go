@@ -33,6 +33,8 @@ func NewRegistry(cfg domain.Config, resolver ...ProxyResolver) (*Registry, error
 			impl = NewGemini(p, proxy)
 		case domain.ProviderEmbeddedOpenCode:
 			impl = NewEmbeddedOpenCode(p, proxy)
+		case domain.ProviderOpenAILive:
+			impl = NewOpenAILive(p, proxy)
 		default:
 			return nil, fmt.Errorf("provider %s: unsupported kind %s", p.ID, p.Kind)
 		}

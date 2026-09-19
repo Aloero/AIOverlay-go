@@ -72,7 +72,7 @@ func (socket *openAILiveSocketFixture) writtenEvents(t *testing.T) []openAILiveE
 
 func TestOpenAILiveExperimentRequiresSessionStartedBeforeCommands(t *testing.T) {
 	socket := newOpenAILiveSocketFixture()
-	protocol := newOpenAILiveProtocolExperiment(socket, true)
+	protocol := newOpenAILiveProtocol(socket, true)
 	if err := protocol.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestOpenAILiveExperimentRequiresSessionStartedBeforeCommands(t *testing.T) 
 
 func TestOpenAILiveExperimentAudioAppendDoesNotCreateResponse(t *testing.T) {
 	socket := newOpenAILiveSocketFixture()
-	protocol := newOpenAILiveProtocolExperiment(socket, true)
+	protocol := newOpenAILiveProtocol(socket, true)
 	if err := protocol.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestOpenAILiveExperimentAudioAppendDoesNotCreateResponse(t *testing.T) {
 	}
 
 	events := socket.writtenEvents(t)
-	if len(events) != 2 || events[0].Type != "session.start" || events[1].Type != "input_audio.append" {
+	if len(events) != 2 || events[0].Type != "session.start" || events[1].Type != "session.input_audio.append" {
 		t.Fatalf("client events=%+v", events)
 	}
 	if string(events[1].Audio) != `"AQID"` {
@@ -116,13 +116,13 @@ func TestOpenAILiveExperimentAudioAppendDoesNotCreateResponse(t *testing.T) {
 	}
 	for _, event := range events {
 		if event.Type == "response.create" {
-			t.Fatal("input_audio.append implicitly created a response")
+			t.Fatal("session.input_audio.append implicitly created a response")
 		}
 	}
 }
 
 func TestOpenAILiveExperimentExplicitResponseRequiresDelegationAndParsesNestedText(t *testing.T) {
-	withoutDelegation := newOpenAILiveProtocolExperiment(newOpenAILiveSocketFixture(), false)
+	withoutDelegation := newOpenAILiveProtocol(newOpenAILiveSocketFixture(), false)
 	if err := withoutDelegation.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestOpenAILiveExperimentExplicitResponseRequiresDelegationAndParsesNestedTe
 	}
 
 	socket := newOpenAILiveSocketFixture()
-	protocol := newOpenAILiveProtocolExperiment(socket, true)
+	protocol := newOpenAILiveProtocol(socket, true)
 	if err := protocol.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestOpenAILiveExperimentExplicitResponseRequiresDelegationAndParsesNestedTe
 }
 
 func TestOpenAILiveExperimentKeepsUnverifiedOperationsUnsupported(t *testing.T) {
-	verified := openAILiveVerifiedProtocolOperations()
+	verified := openAILiveProtocolOperations()
 	for _, operation := range []RealtimeOperation{RealtimeAppendAudio, RealtimeRequestResponse, RealtimeTextOutput} {
 		if !verified[operation] {
 			t.Fatalf("verified OpenAI Live operation missing: %s", operation)
@@ -177,7 +177,7 @@ func TestOpenAILiveExperimentKeepsUnverifiedOperationsUnsupported(t *testing.T) 
 
 func TestOpenAILiveExperimentRejectsSessionStartedBeforeSessionStart(t *testing.T) {
 	socket := newOpenAILiveSocketFixture()
-	protocol := newOpenAILiveProtocolExperiment(socket, false)
+	protocol := newOpenAILiveProtocol(socket, false)
 	socket.reads <- `{"type":"session.started"}`
 	if _, err := protocol.NextServerEvent(context.Background()); err == nil {
 		t.Fatal("out-of-order session.started activated Live experiment")
@@ -189,7 +189,7 @@ func TestOpenAILiveExperimentRejectsSessionStartedBeforeSessionStart(t *testing.
 
 func TestOpenAILiveExperimentClosesOnlyAfterProtocolCloseAndBoundsEvents(t *testing.T) {
 	socket := newOpenAILiveSocketFixture()
-	protocol := newOpenAILiveProtocolExperiment(socket, false)
+	protocol := newOpenAILiveProtocol(socket, false)
 	if err := protocol.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestOpenAILiveExperimentClosesOnlyAfterProtocolCloseAndBoundsEvents(t *test
 	}
 
 	boundedSocket := newOpenAILiveSocketFixture()
-	bounded := newOpenAILiveProtocolExperiment(boundedSocket, false)
+	bounded := newOpenAILiveProtocol(boundedSocket, false)
 	if err := bounded.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestOpenAILiveExperimentClosesOnlyAfterProtocolCloseAndBoundsEvents(t *test
 		t.Fatalf("oversized Live event reached socket: %+v", events)
 	}
 
-	blocked := newOpenAILiveProtocolExperiment(newOpenAILiveSocketFixture(), false)
+	blocked := newOpenAILiveProtocol(newOpenAILiveSocketFixture(), false)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	if _, err := blocked.NextServerEvent(ctx); !errors.Is(err, context.DeadlineExceeded) {
