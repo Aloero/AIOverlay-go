@@ -4,11 +4,34 @@ import (
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
 	"aioverlay/internal/platform/audio"
+	"aioverlay/internal/providers"
 	"aioverlay/internal/session"
 	"context"
 	"fmt"
 	"time"
 )
+
+func (a *App) openRealtimeSession(ctx context.Context, providerID, modelID string) (providers.RealtimeSession, error) {
+	a.mu.RLock()
+	registry := a.registry
+	eng := a.engine
+	a.mu.RUnlock()
+	if registry == nil || eng == nil {
+		return nil, fmt.Errorf("realtime provider runtime unavailable")
+	}
+	credential, err := eng.SelectSessionCredential(providerID)
+	if err != nil {
+		return nil, err
+	}
+	realtime, err := registry.OpenRealtime(ctx, providers.RealtimeOpenRequest{
+		ProviderID: providerID, ModelID: modelID, Credential: credential.Secret,
+	})
+	eng.RecordSessionCredential(providerID, credential, providers.OutcomeOf(err))
+	if err != nil {
+		return nil, err
+	}
+	return realtime, nil
+}
 
 func (a *App) StartSessions(ctx context.Context) {
 	if a.sessions != nil {
@@ -55,6 +78,13 @@ func (a *App) RecordCommandResult(prepared session.PreparedCommand, result engin
 	}
 	return a.sessions.RecordCommandResult(prepared, result)
 }
+func (a *App) RequestRealtimeResponse(ctx context.Context, sourceID string) (engine.Result, error) {
+	if a.sessions == nil {
+		return engine.Result{}, fmt.Errorf("session runtime unavailable")
+	}
+	return a.sessions.RequestRealtimeResponse(ctx, sourceID)
+}
+
 func (a *App) SetSourceRunning(id string, running bool) error {
 	if a.sessions == nil {
 		return nil

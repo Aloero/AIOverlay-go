@@ -36,20 +36,23 @@ type BehaviorScreenPolicy struct {
 }
 
 type BehaviorTrigger struct {
-	ID          string                `json:"id"`
-	Name        string                `json:"name"`
-	Kind        string                `json:"kind"`
-	Capture     string                `json:"capture"`
-	Intent      domain.CommandIntent  `json:"intent"`
-	ContextID   string                `json:"context_id,omitempty"`
-	ContextName string                `json:"context_name,omitempty"`
-	ContextRole string                `json:"context_role,omitempty"`
-	EntryNodeID string                `json:"entry_node_id"`
-	AutoStart   bool                  `json:"auto_start,omitempty"`
-	UsesAI      bool                  `json:"uses_ai"`
-	Reachable   []BehaviorNode        `json:"reachable"`
-	AIStages    []BehaviorAIStage     `json:"ai_stages,omitempty"`
-	Screen      *BehaviorScreenPolicy `json:"screen,omitempty"`
+	ID                     string                `json:"id"`
+	Name                   string                `json:"name"`
+	Kind                   string                `json:"kind"`
+	Capture                string                `json:"capture"`
+	Intent                 domain.CommandIntent  `json:"intent"`
+	ContextID              string                `json:"context_id,omitempty"`
+	ContextName            string                `json:"context_name,omitempty"`
+	ContextRole            string                `json:"context_role,omitempty"`
+	EntryNodeID            string                `json:"entry_node_id"`
+	AutoStart              bool                  `json:"auto_start,omitempty"`
+	UsesAI                 bool                  `json:"uses_ai"`
+	Reachable              []BehaviorNode        `json:"reachable"`
+	AIStages               []BehaviorAIStage     `json:"ai_stages,omitempty"`
+	Screen                 *BehaviorScreenPolicy `json:"screen,omitempty"`
+	RealtimeProviderID     string                `json:"realtime_provider_id,omitempty"`
+	RealtimeModelID        string                `json:"realtime_model_id,omitempty"`
+	RealtimeResponsePolicy string                `json:"realtime_response_policy,omitempty"`
 }
 
 type BehaviorContext struct {
@@ -136,6 +139,21 @@ func behaviorCommand(pipeline domain.Pipeline, command domain.CommandConfig, con
 }
 
 func behaviorSource(pipeline domain.Pipeline, source domain.EventSource, contexts map[string]string) BehaviorTrigger {
+	if source.Realtime != nil {
+		trigger := BehaviorTrigger{
+			ID: source.ID, Name: behaviorName(source.Name, source.ID), Kind: "source",
+			Intent: source.Intent, ContextID: source.ContextID, ContextName: contexts[source.ContextID],
+			ContextRole: behaviorSourceContextRole(source), AutoStart: source.AutoStart, UsesAI: true,
+			Capture: behaviorSourceCapture(source), RealtimeProviderID: source.Realtime.ProviderID,
+			RealtimeModelID: source.Realtime.ModelID, RealtimeResponsePolicy: source.Realtime.ResponsePolicy,
+		}
+		trigger.AIStages = []BehaviorAIStage{{
+			ID: "realtime:" + source.ID, Name: "Persistent Live session", Type: domain.NodeAudio,
+			Task: "realtime", ResultName: "remote_session", ContextMode: "remote",
+			Input: PoolInput{Known: true, Reachable: true, AudioRequired: true, Source: "source:" + source.ID, Sources: []string{"source:" + source.ID}},
+		}}
+		return trigger
+	}
 	skipRun := source.Kind == domain.SourceScreenTimer && source.Intent == domain.IntentContext
 	start := sourceInputState(pipeline, source)
 	trigger := BehaviorTrigger{

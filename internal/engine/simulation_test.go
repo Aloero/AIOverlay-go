@@ -202,3 +202,26 @@ func TestSimulationContextCommandStopsWithoutModelCall(t *testing.T) {
 		t.Fatalf("report=%+v err=%v", report, err)
 	}
 }
+
+func TestSimulationRealtimeSourceUsesNoNetworkAndExplicitResponseOutcome(t *testing.T) {
+	cfg := mixedSimulationConfig()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Sources = []domain.EventSource{{
+		ID: "live", Name: "Live", Kind: domain.SourceAudio, Enabled: true, Intent: domain.IntentContext,
+		Audio:    &domain.AudioSourceConfig{Mode: "system", SegmentMS: 1000, SilenceMS: 200, MinimumMS: 80, Threshold: .01},
+		Realtime: &domain.RealtimeSourceConfig{ProviderID: "live-provider", ModelID: "gpt-live-1", ResponsePolicy: "manual"},
+	}}
+	report, err := Simulate(context.Background(), SimulationRequest{Config: cfg, PipelineID: pipeline.ID, TriggerID: "live"}, nil)
+	if err != nil || report.Calls != 0 || report.Trace.Outcome != domain.OutcomeContextOnly {
+		t.Fatalf("manual realtime simulation=%+v err=%v", report, err)
+	}
+	pipeline.Sources[0].Realtime.ResponsePolicy = "each_segment"
+	pipeline.Sources[0].Intent = domain.IntentRespond
+	report, err = Simulate(context.Background(), SimulationRequest{
+		Config: cfg, PipelineID: pipeline.ID, TriggerID: "live",
+		Outcomes: []SimulationOutcome{{NodeID: "realtime:live", ProviderID: "live-provider", ModelID: "gpt-live-1", Outcome: domain.OutcomeSuccess, DurationMS: 250, Text: "answer"}},
+	}, nil)
+	if err != nil || report.Calls != 1 || report.Text != "answer" || report.ElapsedMS != 250 || report.Trace.Outcome != domain.OutcomeRespond {
+		t.Fatalf("automatic realtime simulation=%+v err=%v", report, err)
+	}
+}

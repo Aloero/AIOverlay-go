@@ -79,6 +79,11 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 	if !ok {
 		return SimulationReport{}, fmt.Errorf("simulation pipeline missing or disabled")
 	}
+	if req.TriggerID != "" {
+		if source, found := simulationSource(&p, req.TriggerID); found && source.Realtime != nil {
+			return simulateRealtimeSource(req, p, source), nil
+		}
+	}
 	// Safety is separate from the real budget and reported explicitly.
 	if p.Budget.MaxParallelCalls < 1 || p.Budget.MaxParallelCalls > 64 || p.Budget.MaxModelCalls < 1 || p.Budget.MaxWallTimeMS < 1 {
 		return SimulationReport{}, fmt.Errorf("invalid simulation budget")
@@ -147,6 +152,62 @@ func Simulate(ctx context.Context, req SimulationRequest, cat *catalog.Service) 
 	s.report.Trace = tr
 	s.finish()
 	return s.report, nil
+}
+
+func simulateRealtimeSource(request SimulationRequest, pipeline domain.Pipeline, source domain.EventSource) SimulationReport {
+	trace := domain.ExecutionTrace{
+		ID: "simulation", PipelineID: pipeline.ID, PipelineName: pipeline.Name,
+		Budget: pipeline.Budget, Purpose: "simulation", SourceID: source.ID,
+		Intent: string(source.Intent), StartedAt: time.Unix(0, 0),
+	}
+	report := SimulationReport{Simulated: true, Trace: trace}
+	stageID := "realtime:" + source.ID
+	trace.Events = append(trace.Events, domain.TraceEvent{
+		Kind: "realtime_append", NodeID: stageID, Outcome: domain.OutcomeSuccess,
+		Message: "Synthetic audio appended to persistent remote session; no socket was opened",
+	})
+	if source.Realtime.ResponsePolicy == "manual" {
+		trace.Outcome = domain.OutcomeContextOnly
+		trace.FinishedAt = trace.StartedAt
+		report.Trace = trace
+		report.Remaining = len(request.Outcomes)
+		return report
+	}
+	var selected *SimulationOutcome
+	for index := range request.Outcomes {
+		outcome := &request.Outcomes[index]
+		if outcome.NodeID == stageID && (outcome.ProviderID == "" || outcome.ProviderID == source.Realtime.ProviderID) && (outcome.ModelID == "" || outcome.ModelID == source.Realtime.ModelID) {
+			selected = outcome
+			break
+		}
+	}
+	if selected == nil {
+		report.Error = "Missing simulated delegated response outcome for realtime source"
+		trace.Outcome = domain.OutcomeInvalidResponse
+		trace.FinishedAt = trace.StartedAt
+		report.Trace = trace
+		report.Remaining = len(request.Outcomes)
+		return report
+	}
+	report.Calls = 1
+	report.ElapsedMS = int64(selected.DurationMS)
+	report.Remaining = max(0, len(request.Outcomes)-1)
+	attempt := &domain.AttemptRef{ID: "simulation-realtime", ProviderID: source.Realtime.ProviderID, ModelID: source.Realtime.ModelID, Transport: "OpenAI Live"}
+	trace.Events = append(trace.Events,
+		domain.TraceEvent{Kind: "attempt_start", NodeID: stageID, Attempt: attempt, AtMS: 0},
+		domain.TraceEvent{Kind: "attempt_end", NodeID: stageID, Attempt: attempt, AtMS: int64(selected.DurationMS), Outcome: selected.Outcome},
+	)
+	trace.Outcome = selected.Outcome
+	trace.FinishedAt = trace.StartedAt.Add(time.Duration(selected.DurationMS) * time.Millisecond)
+	if selected.Outcome == domain.OutcomeSuccess || selected.Outcome == domain.OutcomeRespond {
+		report.Text = selected.Text
+		trace.Outcome = domain.OutcomeRespond
+		trace.Winner = attempt
+	} else {
+		report.Error = "Simulated realtime response outcome: " + string(selected.Outcome)
+	}
+	report.Trace = trace
+	return report
 }
 
 func (s *simulator) finish() {

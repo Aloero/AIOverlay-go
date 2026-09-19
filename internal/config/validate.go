@@ -16,7 +16,7 @@ func Validate(cfg domain.Config) error {
 	if strings.TrimSpace(cfg.ActivePipelineID) == "" {
 		return fmt.Errorf("active_pipeline_id is required")
 	}
-	providers := map[string]domain.ProviderKind{}
+	providers := map[string]domain.ProviderConfig{}
 	for i, p := range cfg.Providers {
 		if strings.TrimSpace(p.ID) == "" {
 			return fmt.Errorf("providers[%d].id is required", i)
@@ -24,7 +24,7 @@ func Validate(cfg domain.Config) error {
 		if _, dup := providers[p.ID]; dup {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
-		providers[p.ID] = p.Kind
+		providers[p.ID] = p
 		if err := validateProvider(p); err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func validateCredentials(p domain.ProviderConfig) error {
 	return nil
 }
 
-func validatePipeline(index int, p domain.Pipeline, providers map[string]domain.ProviderKind) error {
+func validatePipeline(index int, p domain.Pipeline, providers map[string]domain.ProviderConfig) error {
 	if strings.TrimSpace(p.ID) == "" {
 		return fmt.Errorf("pipelines[%d].id is required", index)
 	}
@@ -163,7 +163,7 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]domain.
 	if nodes[p.OutputNodeID].Type != domain.NodeOutput {
 		return fmt.Errorf("pipeline output node must have output type")
 	}
-	if err := validateSources(p, nodes); err != nil {
+	if err := validateSources(p, nodes, providers); err != nil {
 		return err
 	}
 	if !reachable(p) {
@@ -175,7 +175,7 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]domain.
 		}
 	}
 	for _, src := range p.Sources {
-		if !src.Enabled {
+		if !src.Enabled || src.Realtime != nil {
 			continue
 		}
 		if !entryHasTerminal(p, nodes, src.EntryNodeID, src.Intent) {
@@ -185,7 +185,7 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]domain.
 	return nil
 }
 
-func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, providers map[string]domain.ProviderKind) error {
+func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, providers map[string]domain.ProviderConfig) error {
 	if (strings.HasSuffix(nodeID, ".vision_preprocessor") || strings.HasSuffix(nodeID, ".audio_preprocessor")) && (pool.VisionPreprocessor != nil || pool.AudioPreprocessor != nil) {
 		return fmt.Errorf("pool %s preprocessor cannot contain another media preprocessor", nodeID)
 	}
@@ -215,7 +215,7 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 			if !ok {
 				return fmt.Errorf("pool %s catalog references unknown provider %q", nodeID, id)
 			}
-			if kind == domain.ProviderOpenAILive {
+			if kind.Kind == domain.ProviderOpenAILive {
 				return fmt.Errorf("pool %s cannot use persistent OpenAI Live as a stateless catalog route", nodeID)
 			}
 			if seenProviders[id] {
@@ -243,7 +243,7 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 		if !ok {
 			return fmt.Errorf("pipeline %s pool %s references unknown provider %q", pipelineID, nodeID, m.ProviderID)
 		}
-		if kind == domain.ProviderOpenAILive {
+		if kind.Kind == domain.ProviderOpenAILive {
 			return fmt.Errorf("pipeline %s pool %s cannot use persistent OpenAI Live as an ordinary model call", pipelineID, nodeID)
 		}
 		if strings.TrimSpace(m.ModelID) == "" {

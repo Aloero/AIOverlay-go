@@ -7,9 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -223,4 +225,188 @@ func readLiveClientEvent(reader *bufio.Reader) (openAILiveEnvelope, error) {
 		return openAILiveEnvelope{}, err
 	}
 	return event, nil
+}
+
+func TestOpenAILiveStoredSessionReconnectsThroughWebSocketFork(t *testing.T) {
+	var primarySeen, forkSeen atomic.Int32
+	serverErrors := make(chan error, 2)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/live/sessions":
+			primarySeen.Add(1)
+			serveStoredLivePrimary(writer, request, serverErrors)
+		case "/v1/live/sessions/source-session/fork":
+			forkSeen.Add(1)
+			serveStoredLiveFork(writer, request, serverErrors)
+		default:
+			serverErrors <- fmt.Errorf("unexpected reconnect path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewOpenAILive(domain.ProviderConfig{
+		ID: "live", Kind: domain.ProviderOpenAILive, Enabled: true,
+		BaseURL:  strings.Replace(server.URL, "https://", "wss://", 1) + "/v1/live/sessions",
+		Realtime: &domain.RealtimeProviderConfig{Store: true, ResponsesModel: "gpt-5.6-luna"},
+	}, nil)
+	provider.connector.tlsConfig = &tls.Config{InsecureSkipVerify: true} // Local test certificate only.
+	if !provider.RealtimeCapabilities().Supports(RealtimeReconnect) {
+		t.Fatal("stored Live provider did not advertise bounded reconnect")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	realtime, err := provider.OpenRealtime(ctx, RealtimeOpenRequest{ProviderID: "live", ModelID: "gpt-live-1", Credential: "TEST_ONLY_LIVE_KEY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnector := realtime.(RealtimeReconnector)
+	if err := reconnector.Reconnect(ctx); err != nil {
+		_ = realtime.Close()
+		t.Fatal(err)
+	}
+	if err := realtime.(RealtimeAudioAppender).AppendAudio(ctx, &domain.AudioClip{PCM16: make([]int16, 240), SampleRate: 24000, Channels: 1, DurationMS: 10}); err != nil {
+		_ = realtime.Close()
+		t.Fatal(err)
+	}
+	if err := realtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if primarySeen.Load() != 1 || forkSeen.Load() != 1 {
+		t.Fatalf("primary=%d fork=%d", primarySeen.Load(), forkSeen.Load())
+	}
+	close(serverErrors)
+	for err := range serverErrors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func serveStoredLivePrimary(writer http.ResponseWriter, request *http.Request, errors chan<- error) {
+	connection, rw, err := hijackLiveTestConnection(writer, request)
+	if err != nil {
+		errors <- err
+		return
+	}
+	defer connection.Close()
+	start, err := readLiveClientEvent(rw.Reader)
+	if err != nil {
+		errors <- err
+		return
+	}
+	var config struct {
+		Store bool `json:"store"`
+	}
+	if json.Unmarshal(start.Session, &config) != nil || !config.Store {
+		errors <- fmt.Errorf("primary Live session did not enable explicit storage: %s", start.Session)
+		return
+	}
+	if err := writeServerFrame(rw.Writer, 0x1, []byte(`{"type":"session.started","session":{"id":"source-session"}}`)); err == nil {
+		err = rw.Flush()
+	}
+	if err != nil {
+		errors <- err
+		return
+	}
+	frame, err := readMaskedClientFrame(rw.Reader)
+	if err != nil || frame.opcode != 0x8 {
+		errors <- fmt.Errorf("primary reconnect close frame=%+v err=%v", frame, err)
+	}
+}
+
+func serveStoredLiveFork(writer http.ResponseWriter, request *http.Request, errors chan<- error) {
+	connection, rw, err := hijackLiveTestConnection(writer, request)
+	if err != nil {
+		errors <- err
+		return
+	}
+	defer connection.Close()
+	start, err := readLiveClientEvent(rw.Reader)
+	if err != nil {
+		errors <- err
+		return
+	}
+	var config map[string]json.RawMessage
+	if json.Unmarshal(start.Session, &config) != nil || config["model"] != nil || config["audio"] == nil {
+		errors <- fmt.Errorf("fork config must inherit model and set WebSocket audio only: %s", start.Session)
+		return
+	}
+	if err := writeServerFrame(rw.Writer, 0x1, []byte(`{"type":"session.started","session":{"id":"fork-session"}}`)); err == nil {
+		err = rw.Flush()
+	}
+	if err != nil {
+		errors <- err
+		return
+	}
+	audio, err := readLiveClientEvent(rw.Reader)
+	if err != nil || audio.Type != "session.input_audio.append" {
+		errors <- fmt.Errorf("fork audio event=%+v err=%v", audio, err)
+		return
+	}
+	closeEvent, err := readLiveClientEvent(rw.Reader)
+	if err != nil || closeEvent.Type != "session.close" {
+		errors <- fmt.Errorf("fork close event=%+v err=%v", closeEvent, err)
+		return
+	}
+	if err := writeServerFrame(rw.Writer, 0x1, []byte(`{"type":"session.closed"}`)); err == nil {
+		err = rw.Flush()
+	}
+	if err != nil {
+		errors <- err
+		return
+	}
+	frame, err := readMaskedClientFrame(rw.Reader)
+	if err != nil || frame.opcode != 0x8 {
+		errors <- fmt.Errorf("fork websocket close frame=%+v err=%v", frame, err)
+	}
+}
+
+func hijackLiveTestConnection(writer http.ResponseWriter, request *http.Request) (net.Conn, *bufio.ReadWriter, error) {
+	if request.Header.Get("Authorization") != "Bearer TEST_ONLY_LIVE_KEY" {
+		return nil, nil, fmt.Errorf("authorization header missing")
+	}
+	hijacker, ok := writer.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("server cannot hijack")
+	}
+	connection, rw, err := hijacker.Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err = fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", websocketAccept(request.Header.Get("Sec-WebSocket-Key"))); err == nil {
+		err = rw.Flush()
+	}
+	if err != nil {
+		connection.Close()
+		return nil, nil, err
+	}
+	return connection, rw, nil
+}
+
+func TestOpenAILiveStoredSessionRejectsMissingServerSessionID(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, rw, err := hijackLiveTestConnection(writer, request)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		if _, err := readLiveClientEvent(rw.Reader); err != nil {
+			return
+		}
+		_ = writeServerFrame(rw.Writer, 0x1, []byte(`{"type":"session.started"}`))
+		_ = rw.Flush()
+	}))
+	defer server.Close()
+	provider := NewOpenAILive(domain.ProviderConfig{
+		ID: "live", Kind: domain.ProviderOpenAILive, Enabled: true,
+		BaseURL:  strings.Replace(server.URL, "https://", "wss://", 1),
+		Realtime: &domain.RealtimeProviderConfig{Store: true},
+	}, nil)
+	provider.connector.tlsConfig = &tls.Config{InsecureSkipVerify: true} // Local test certificate only.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := provider.OpenRealtime(ctx, RealtimeOpenRequest{ProviderID: "live", ModelID: "gpt-live-1", Credential: "TEST_ONLY_LIVE_KEY"})
+	if err == nil || OutcomeOf(err) != domain.OutcomeInvalidResponse {
+		t.Fatalf("stored session without ID accepted: %v", err)
+	}
 }

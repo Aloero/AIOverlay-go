@@ -113,8 +113,10 @@ Clear and checks that a fresh manual command still succeeds afterward.
 R2 regressions now also cover bounded long-speech overlap with time-scoped
 transcript deduplication, synthetic silence/noise/short-negation/number fixtures,
 one active plus one pending manual command with separately pinned screenshots,
-permission-generation fencing for late screen actions, and proxy-credential
-redaction on realtime fail-closed errors.
+permission-generation fencing for late screen actions, proxy-credential
+redaction on realtime fail-closed errors, per-stage context snapshots, independent
+screen capture/context/AI cadence, parallel VLM+STT preprocessing with provenance,
+and bounded OpenAI Live session/reconnect lifecycle.
 
 The release command now repeats `internal/session` and `internal/platform/audio`
 as well as the earlier critical packages. Run `go run ./cmd/release --race` with
@@ -129,7 +131,13 @@ completed on that archive's commit.
 The acceptance scope for this branch is automated Go/race/UI verification plus
 Windows-target compile/vet. Physical Windows audio/desktop acceptance and a
 shipped/running local STT helper are intentionally out of scope rather than
-pending release gates. Persistent realtime remains an experiment until a
-production adapter is explicitly selected. Real cloud inference and real VPN
-packet-trace verification are reported separately when they are actually run;
-no hardware-readiness claim follows from mocks or a Windows-target compilation.
+pending release gates. OpenAI Live now has an explicit persistent WebSocket
+adapter and audio-source lifecycle covered by local TLS fixtures: audio append,
+Responses delegation, shared session budgets, clean-session replacement on
+Clear, fail-closed proxy routing, and opt-in stored WebSocket fork reconnect are
+automated. Image input, semantic no_action and remote interrupt remain explicitly
+unsupported for this adapter. Stored-session reconnect never replays an
+ambiguous last audio/response event and is disabled unless remote storage is
+explicitly enabled. Real cloud inference and real VPN packet-trace verification
+remain `not run`; no real-provider or hardware-readiness claim follows from local
+fixtures, mocks, or a Windows-target compilation.

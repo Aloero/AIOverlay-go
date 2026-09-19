@@ -44,6 +44,7 @@ type openAILiveObservation struct {
 	ClientEventID string
 	NestedType    string
 	Delta         string
+	SessionID     string
 }
 
 func newOpenAILiveProtocol(socket openAILiveTextSocket, responsesDelegated bool) *openAILiveProtocol {
@@ -148,6 +149,12 @@ func (protocol *openAILiveProtocol) NextServerEvent(ctx context.Context) (openAI
 		}
 		protocol.started = true
 		protocol.mu.Unlock()
+		var session struct {
+			ID string `json:"id"`
+		}
+		if len(event.Session) > 0 && json.Unmarshal(event.Session, &session) == nil {
+			observation.SessionID = session.ID
+		}
 	case "session.closed":
 		protocol.mu.Lock()
 		protocol.closed = true

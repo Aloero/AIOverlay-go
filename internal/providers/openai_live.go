@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"math"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -47,9 +48,14 @@ func (provider *OpenAILive) RealtimeCapabilities() RealtimeCapabilities {
 	capabilities.Available = true
 	capabilities.Operations[RealtimeAppendAudio] = true
 	capabilities.Operations[RealtimeVPNFailClosed] = true
-	if provider.cfg.Realtime != nil && strings.TrimSpace(provider.cfg.Realtime.ResponsesModel) != "" {
-		capabilities.Operations[RealtimeRequestResponse] = true
-		capabilities.Operations[RealtimeTextOutput] = true
+	if provider.cfg.Realtime != nil {
+		if strings.TrimSpace(provider.cfg.Realtime.ResponsesModel) != "" {
+			capabilities.Operations[RealtimeRequestResponse] = true
+			capabilities.Operations[RealtimeTextOutput] = true
+		}
+		if provider.cfg.Realtime.Store {
+			capabilities.Operations[RealtimeReconnect] = true
+		}
 	}
 	return capabilities
 }
@@ -72,16 +78,26 @@ func (provider *OpenAILive) OpenRealtime(ctx context.Context, request RealtimeOp
 	if err != nil {
 		return nil, networkOutcome(err)
 	}
-	if err := waitForOpenAILiveStart(ctx, protocol); err != nil {
+	sessionID, err := waitForOpenAILiveStart(ctx, protocol)
+	if err != nil {
 		_ = protocol.Close()
 		return nil, err
 	}
+	store := provider.cfg.Realtime != nil && provider.cfg.Realtime.Store
+	if store && strings.TrimSpace(sessionID) == "" {
+		_ = protocol.Close()
+		return nil, &RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "OpenAI Live stored session did not provide a session ID"}
+	}
 	lifetime, cancel := context.WithCancel(context.Background())
+	readDone := make(chan struct{})
+	serverClosed := make(chan struct{})
 	session := &openAILiveSession{
 		protocol: protocol, capabilities: provider.RealtimeCapabilities(),
-		ctx: lifetime, cancel: cancel, readDone: make(chan struct{}), serverClosed: make(chan struct{}),
+		ctx: lifetime, cancel: cancel, readDone: readDone, serverClosed: serverClosed,
+		connector: provider.connector, primaryEndpoint: provider.cfg.BaseURL, apiKey: request.Credential,
+		responsesDelegated: delegated, store: store, sessionID: sessionID,
 	}
-	go session.readLoop()
+	go session.readLoop(protocol, readDone, serverClosed)
 	return session, nil
 }
 
@@ -91,6 +107,9 @@ func (provider *OpenAILive) sessionConfig(model string) (json.RawMessage, bool, 
 		"audio": map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": openAILiveSampleRate}},
 	}
 	if provider.cfg.Realtime != nil {
+		if provider.cfg.Realtime.Store {
+			config["store"] = true
+		}
 		if instructions := strings.TrimSpace(provider.cfg.Realtime.Instructions); instructions != "" {
 			config["instructions"] = instructions
 		}
@@ -110,20 +129,20 @@ func (provider *OpenAILive) sessionConfig(model string) (json.RawMessage, bool, 
 	return raw, delegated, nil
 }
 
-func waitForOpenAILiveStart(ctx context.Context, protocol *openAILiveProtocol) error {
+func waitForOpenAILiveStart(ctx context.Context, protocol *openAILiveProtocol) (string, error) {
 	for events := 0; events < 16; events++ {
 		observation, err := protocol.NextServerEvent(ctx)
 		if err != nil {
-			return networkOutcome(err)
+			return "", networkOutcome(err)
 		}
 		switch observation.Type {
 		case "session.started":
-			return nil
+			return observation.SessionID, nil
 		case "error", "session.closed":
-			return &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live session failed during startup"}
+			return "", &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live session failed during startup"}
 		}
 	}
-	return &RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "OpenAI Live did not acknowledge session.start within the event bound"}
+	return "", &RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "OpenAI Live did not acknowledge session.start within the event bound"}
 }
 
 func networkOutcome(err error) error {
@@ -145,13 +164,22 @@ type openAILiveResponse struct {
 }
 
 type openAILiveSession struct {
-	protocol     *openAILiveProtocol
 	capabilities RealtimeCapabilities
 	ctx          context.Context
 	cancel       context.CancelFunc
-	readDone     chan struct{}
-	serverClosed chan struct{}
 	closeOnce    sync.Once
+	reconnectMu  sync.Mutex
+
+	connectionMu       sync.RWMutex
+	protocol           *openAILiveProtocol
+	readDone           chan struct{}
+	serverClosed       chan struct{}
+	connector          realtimeConnector
+	primaryEndpoint    string
+	apiKey             string
+	responsesDelegated bool
+	store              bool
+	sessionID          string
 
 	mu       sync.Mutex
 	response *openAILiveResponse
@@ -164,10 +192,34 @@ func (session *openAILiveSession) AppendAudio(ctx context.Context, clip *domain.
 	if err != nil {
 		return err
 	}
-	return session.protocol.AppendAudio(ctx, payload)
+	session.reconnectMu.Lock()
+	defer session.reconnectMu.Unlock()
+	protocol, err := session.currentProtocol()
+	if err != nil {
+		return err
+	}
+	if err := protocol.AppendAudio(ctx, payload); err != nil {
+		return networkOutcome(err)
+	}
+	return nil
 }
 
 func (session *openAILiveSession) RequestResponse(ctx context.Context) (<-chan Event, <-chan error) {
+	events, errors, err := session.StartResponse(ctx)
+	if err == nil {
+		return events, errors
+	}
+	fallbackEvents := make(chan Event)
+	fallbackErrors := make(chan error, 1)
+	close(fallbackEvents)
+	fallbackErrors <- err
+	close(fallbackErrors)
+	return fallbackEvents, fallbackErrors
+}
+
+func (session *openAILiveSession) StartResponse(ctx context.Context) (<-chan Event, <-chan error, error) {
+	session.reconnectMu.Lock()
+	defer session.reconnectMu.Unlock()
 	events := make(chan Event, 16)
 	errors := make(chan error, 1)
 	response := &openAILiveResponse{ctx: ctx, events: events, errors: errors}
@@ -175,56 +227,47 @@ func (session *openAILiveSession) RequestResponse(ctx context.Context) (<-chan E
 	session.mu.Lock()
 	if session.response != nil {
 		session.mu.Unlock()
-		errors <- &RequestError{Outcome: domain.OutcomeValidationFailed, Message: "OpenAI Live already has an active delegated response"}
-		close(events)
-		close(errors)
-		return events, errors
+		return nil, nil, &RequestError{Outcome: domain.OutcomeValidationFailed, Message: "OpenAI Live already has an active delegated response"}
 	}
 	select {
 	case <-session.ctx.Done():
 		session.mu.Unlock()
-		errors <- &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live session is closed"}
-		close(events)
-		close(errors)
-		return events, errors
+		return nil, nil, &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live session is closed"}
 	default:
 	}
 	session.response = response
 	session.mu.Unlock()
 
-	if err := session.protocol.RequestResponse(ctx); err != nil {
-		session.finishResponse(response, err, true)
-		return events, errors
+	protocol, err := session.currentProtocol()
+	if err != nil {
+		session.finishResponse(response, err)
+		return nil, nil, err
 	}
-	go session.watchResponseCancellation(response)
-	return events, errors
+	if err := protocol.RequestResponse(ctx); err != nil {
+		err = networkOutcome(err)
+		session.finishResponse(response, err)
+		return nil, nil, err
+	}
+	return events, errors, nil
 }
 
-func (session *openAILiveSession) watchResponseCancellation(response *openAILiveResponse) {
-	select {
-	case <-response.ctx.Done():
-		session.finishResponse(response, response.ctx.Err(), false)
-	case <-session.ctx.Done():
-	}
-}
-
-func (session *openAILiveSession) readLoop() {
-	defer close(session.readDone)
-	defer session.finishActiveResponse(&RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live session ended"}, true)
+func (session *openAILiveSession) readLoop(protocol *openAILiveProtocol, readDone chan struct{}, serverClosed chan struct{}) {
+	defer close(readDone)
+	defer session.finishActiveResponse(&RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live session ended"})
 	for {
-		observation, err := session.protocol.NextServerEvent(session.ctx)
+		observation, err := protocol.NextServerEvent(session.ctx)
 		if err != nil {
 			if session.ctx.Err() == nil {
-				session.finishActiveResponse(networkOutcome(err), true)
+				session.finishActiveResponse(networkOutcome(err))
 			}
 			return
 		}
 		switch observation.Type {
 		case "session.closed":
-			session.closeServerClosed()
+			closeSignal(serverClosed)
 			return
 		case "error":
-			session.finishActiveResponse(&RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live server reported an error"}, true)
+			session.finishActiveResponse(&RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live server reported an error"})
 		case "response.event":
 			session.consumeResponseEvent(observation)
 		}
@@ -258,9 +301,9 @@ func (session *openAILiveSession) consumeResponseEvent(observation openAILiveObs
 			}
 		}
 	case "response.completed":
-		session.finishResponse(response, nil, true)
+		session.finishResponse(response, nil)
 	case "response.failed", "response.incomplete":
-		session.finishResponse(response, &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live delegated response did not complete"}, true)
+		session.finishResponse(response, &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live delegated response did not complete"})
 	}
 }
 
@@ -268,67 +311,184 @@ func realtimeResponseTerminal(eventType string) bool {
 	return eventType == "response.completed" || eventType == "response.failed" || eventType == "response.incomplete"
 }
 
-func (session *openAILiveSession) finishActiveResponse(err error, releaseRemote bool) {
+func (session *openAILiveSession) finishActiveResponse(err error) {
 	session.mu.Lock()
 	response := session.response
 	session.mu.Unlock()
 	if response != nil {
-		session.finishResponse(response, err, releaseRemote)
+		session.finishResponse(response, err)
 	}
 }
 
-// releaseRemote is false on local cancellation: the remote generation has no
-// verified cancel operation, so the session keeps it reserved until a terminal
-// response.event arrives. This prevents overlapping remote generations.
-func (session *openAILiveSession) finishResponse(response *openAILiveResponse, err error, releaseRemote bool) {
+func (session *openAILiveSession) finishResponse(response *openAILiveResponse, err error) {
 	session.mu.Lock()
-	if session.response != response {
-		session.mu.Unlock()
+	defer session.mu.Unlock()
+	if session.response != response || response.closed {
 		return
 	}
-	if !response.closed {
-		response.closed = true
-		if err != nil {
-			select {
-			case response.errors <- err:
-			default:
-			}
+	response.closed = true
+	if err != nil {
+		select {
+		case response.errors <- err:
+		default:
 		}
-		close(response.events)
-		close(response.errors)
 	}
-	if releaseRemote {
-		session.response = nil
+	close(response.events)
+	close(response.errors)
+	session.response = nil
+}
+
+func (session *openAILiveSession) currentProtocol() (*openAILiveProtocol, error) {
+	session.connectionMu.RLock()
+	protocol := session.protocol
+	session.connectionMu.RUnlock()
+	if protocol == nil {
+		return nil, &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live connection is unavailable"}
 	}
+	return protocol, nil
+}
+
+func (session *openAILiveSession) Reconnect(ctx context.Context) error {
+	if !session.store || !session.capabilities.Supports(RealtimeReconnect) {
+		return &RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "OpenAI Live reconnect requires explicit stored-session policy"}
+	}
+	session.reconnectMu.Lock()
+	defer session.reconnectMu.Unlock()
+	select {
+	case <-session.ctx.Done():
+		return &RequestError{Outcome: domain.OutcomeProviderUnavailable, Message: "OpenAI Live session is closed"}
+	default:
+	}
+	session.mu.Lock()
+	activeResponse := session.response != nil
 	session.mu.Unlock()
+	if activeResponse {
+		return &RequestError{Outcome: domain.OutcomeValidationFailed, Message: "OpenAI Live cannot reconnect while a delegated response is active or ambiguous"}
+	}
+
+	session.connectionMu.RLock()
+	oldProtocol, oldReadDone, sourceSessionID := session.protocol, session.readDone, session.sessionID
+	session.connectionMu.RUnlock()
+	if sourceSessionID == "" {
+		return &RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "OpenAI Live did not provide a stored session ID for reconnect"}
+	}
+	if oldProtocol != nil {
+		_ = oldProtocol.Close()
+	}
+	if oldReadDone != nil {
+		select {
+		case <-oldReadDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	endpoint, err := openAILiveForkEndpoint(session.primaryEndpoint, sourceSessionID)
+	if err != nil {
+		return err
+	}
+	forkConfig, err := openAILiveForkConfig(session.store)
+	if err != nil {
+		return err
+	}
+	protocol, err := dialOpenAILiveTransport(ctx, session.connector, openAILiveTransportConfig{
+		Endpoint: endpoint, APIKey: session.apiKey, Session: forkConfig, ResponsesDelegated: session.responsesDelegated,
+	})
+	if err != nil {
+		return networkOutcome(err)
+	}
+	newSessionID, err := waitForOpenAILiveStart(ctx, protocol)
+	if err != nil {
+		_ = protocol.Close()
+		return err
+	}
+	if newSessionID == "" {
+		_ = protocol.Close()
+		return &RequestError{Outcome: domain.OutcomeInvalidResponse, Message: "OpenAI Live fork did not provide a new session ID"}
+	}
+	readDone := make(chan struct{})
+	serverClosed := make(chan struct{})
+	session.connectionMu.Lock()
+	session.protocol = protocol
+	session.readDone = readDone
+	session.serverClosed = serverClosed
+	session.sessionID = newSessionID
+	session.connectionMu.Unlock()
+	go session.readLoop(protocol, readDone, serverClosed)
+	return nil
+}
+
+func openAILiveForkEndpoint(primaryEndpoint, sessionID string) (string, error) {
+	endpoint, err := parseRealtimeEndpoint(primaryEndpoint)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return "", &RequestError{Outcome: domain.OutcomeValidationFailed, Message: "OpenAI Live fork requires a source session ID"}
+	}
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + url.PathEscape(sessionID) + "/fork"
+	endpoint.RawQuery = ""
+	endpoint.Fragment = ""
+	return endpoint.String(), nil
+}
+
+func openAILiveForkConfig(store bool) (json.RawMessage, error) {
+	config := map[string]any{
+		"audio": map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": openAILiveSampleRate}},
+	}
+	if store {
+		config["store"] = true
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return nil, &RequestError{Outcome: domain.OutcomeValidationFailed, Message: "OpenAI Live fork config is invalid"}
+	}
+	return raw, nil
 }
 
 func (session *openAILiveSession) Close() (closeErr error) {
 	session.closeOnce.Do(func() {
+		session.reconnectMu.Lock()
+		defer session.reconnectMu.Unlock()
+		session.connectionMu.RLock()
+		protocol, readDone, serverClosed := session.protocol, session.readDone, session.serverClosed
+		session.connectionMu.RUnlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		if err := session.protocol.CloseSession(ctx); err != nil {
-			closeErr = err
-		} else {
-			select {
-			case <-session.serverClosed:
-			case <-ctx.Done():
+		if protocol != nil {
+			if err := protocol.CloseSession(ctx); err != nil {
+				closeErr = err
+			} else if serverClosed != nil {
+				select {
+				case <-serverClosed:
+				case <-ctx.Done():
+				}
 			}
 		}
 		cancel()
 		session.cancel()
-		if err := session.protocol.Close(); closeErr == nil && err != nil {
-			closeErr = err
+		if protocol != nil {
+			if err := protocol.Close(); closeErr == nil && err != nil {
+				closeErr = err
+			}
 		}
-		<-session.readDone
+		if readDone != nil {
+			<-readDone
+		}
+		session.connectionMu.Lock()
+		session.protocol = nil
+		session.connectionMu.Unlock()
 	})
 	return closeErr
 }
 
-func (session *openAILiveSession) closeServerClosed() {
+func closeSignal(signal chan struct{}) {
+	if signal == nil {
+		return
+	}
 	select {
-	case <-session.serverClosed:
+	case <-signal:
 	default:
-		close(session.serverClosed)
+		close(signal)
 	}
 }
 

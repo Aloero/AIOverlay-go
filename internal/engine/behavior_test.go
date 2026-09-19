@@ -139,3 +139,27 @@ func TestBehaviorReportShowsEffectiveScreenCadenceAndRegion(t *testing.T) {
 		t.Fatalf("screen region=%+v", screen.Region)
 	}
 }
+
+func TestBehaviorReportShowsPersistentRealtimeSourceWithoutFakeGraphRoute(t *testing.T) {
+	cfg := config.Default()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Sources = []domain.EventSource{{
+		ID: "live", Name: "Live", Kind: domain.SourceAudio, Enabled: true, Intent: domain.IntentContext,
+		Audio:    &domain.AudioSourceConfig{Mode: "system", SegmentMS: 1000, SilenceMS: 200, MinimumMS: 80, Threshold: .01},
+		Realtime: &domain.RealtimeSourceConfig{ProviderID: "live-provider", ModelID: "gpt-live-1", ResponsePolicy: "manual"},
+	}}
+	report := DescribePipelineBehavior(*pipeline)
+	if len(report.Sources) != 1 {
+		t.Fatalf("sources=%+v", report.Sources)
+	}
+	source := report.Sources[0]
+	if !source.UsesAI || len(source.Reachable) != 0 || len(source.AIStages) != 1 {
+		t.Fatalf("realtime source=%+v", source)
+	}
+	if source.RealtimeProviderID != "live-provider" || source.RealtimeModelID != "gpt-live-1" || source.RealtimeResponsePolicy != "manual" {
+		t.Fatalf("realtime metadata=%+v", source)
+	}
+	if !source.AIStages[0].Input.AudioRequired || source.AIStages[0].ContextMode != "remote" {
+		t.Fatalf("realtime AI stage=%+v", source.AIStages[0])
+	}
+}

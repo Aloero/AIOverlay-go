@@ -21,13 +21,17 @@ type commandCapturePermission struct {
 }
 
 type sourceCapturePermission struct {
-	ID         string
-	Kind       domain.SourceKind
-	Enabled    bool
-	AutoStart  bool
-	AudioMode  string
-	DeviceID   string
-	DeviceRole string
+	ID                     string
+	Kind                   domain.SourceKind
+	Enabled                bool
+	AutoStart              bool
+	AudioMode              string
+	DeviceID               string
+	DeviceRole             string
+	ContextID              string
+	RealtimeProviderID     string
+	RealtimeModelID        string
+	RealtimeResponsePolicy string
 }
 
 func capturePermissions(cfg domain.Config) capturePermissionPolicy {
@@ -42,11 +46,16 @@ func capturePermissions(cfg domain.Config) capturePermissionPolicy {
 		})
 	}
 	for _, source := range pipeline.Sources {
-		permission := sourceCapturePermission{ID: source.ID, Kind: source.Kind, Enabled: source.Enabled, AutoStart: source.AutoStart}
+		permission := sourceCapturePermission{ID: source.ID, Kind: source.Kind, Enabled: source.Enabled, AutoStart: source.AutoStart, ContextID: source.ContextID}
 		if source.Audio != nil {
 			permission.AudioMode = source.Audio.Mode
 			permission.DeviceID = source.Audio.DeviceID
 			permission.DeviceRole = source.Audio.DeviceRole
+		}
+		if source.Realtime != nil {
+			permission.RealtimeProviderID = source.Realtime.ProviderID
+			permission.RealtimeModelID = source.Realtime.ModelID
+			permission.RealtimeResponsePolicy = source.Realtime.ResponsePolicy
 		}
 		policy.Sources = append(policy.Sources, permission)
 	}
@@ -100,7 +109,16 @@ func commandPermissionAllowed(policy capturePermissionPolicy, command domain.Com
 
 func sourcePermissionAllowed(policy capturePermissionPolicy, source domain.EventSource) bool {
 	for _, allowed := range policy.Sources {
-		if allowed.ID == source.ID && allowed.Kind == source.Kind && allowed.Enabled {
+		if allowed.ID != source.ID || allowed.Kind != source.Kind || !allowed.Enabled || allowed.ContextID != source.ContextID {
+			continue
+		}
+		providerID, modelID, responsePolicy := "", "", ""
+		if source.Realtime != nil {
+			providerID = source.Realtime.ProviderID
+			modelID = source.Realtime.ModelID
+			responsePolicy = source.Realtime.ResponsePolicy
+		}
+		if allowed.RealtimeProviderID == providerID && allowed.RealtimeModelID == modelID && allowed.RealtimeResponsePolicy == responsePolicy {
 			return true
 		}
 	}
@@ -117,20 +135,21 @@ func (m *Manager) FencePermissions(next domain.Config) {
 		m.permissionPolicy = capturePermissions(m.cfg)
 		m.permissionPolicySet = true
 	}
-	if reflect.DeepEqual(m.permissionPolicy, nextPolicy) {
-		m.mu.Unlock()
-		return
+	permissionChanged := !reflect.DeepEqual(m.permissionPolicy, nextPolicy)
+	if permissionChanged {
+		m.permissionGeneration++
+		m.permissionPolicy = nextPolicy
 	}
-	m.permissionGeneration++
-	m.permissionPolicy = nextPolicy
 	var revoked []*sourceRuntime
 	for _, runtime := range m.sources {
-		if !sourcePermissionAllowed(nextPolicy, runtime.cfg) {
+		permissionRevoked := !sourcePermissionAllowed(nextPolicy, runtime.cfg)
+		routeChanged := runtime.realtimeFingerprint != realtimeSourceFingerprint(next, runtime.cfg)
+		if permissionRevoked || routeChanged {
 			revoked = append(revoked, runtime)
 		}
 	}
 	m.mu.Unlock()
 	for _, runtime := range revoked {
-		runtime.cancel()
+		revokeSource(runtime)
 	}
 }

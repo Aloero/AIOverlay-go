@@ -134,6 +134,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/session/status", s.handleSessionStatus)
 	mux.HandleFunc("/api/session/pause", s.handleSessionPause)
 	mux.HandleFunc("/api/session/source", s.handleSessionSource)
+	mux.HandleFunc("/api/session/realtime/respond", s.handleRealtimeResponse)
 	mux.HandleFunc("/api/session/context/clear", s.handleContextClear)
 	mux.HandleFunc("/api/session/command/preview", s.handleCommandPreview)
 	mux.HandleFunc("/api/audio/devices", s.handleAudioDevices)

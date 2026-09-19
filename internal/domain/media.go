@@ -55,6 +55,7 @@ type EventSource struct {
 	MaxWaitMS         int                        `json:"max_wait_ms,omitempty"`
 	ScreenRegion      *ScreenRegionConfig        `json:"screen_region,omitempty"`
 	Audio             *AudioSourceConfig         `json:"audio,omitempty"`
+	Realtime          *RealtimeSourceConfig      `json:"realtime,omitempty"`
 
 	// Command is a schema-4 compatibility field. Schema 5 materializes manual
 	// commands into Pipeline.Commands and leaves this empty.
@@ -67,6 +68,13 @@ type ScreenRegionConfig struct {
 	Y      int                        `json:"y"`
 	Width  int                        `json:"width"`
 	Height int                        `json:"height"`
+}
+
+type RealtimeSourceConfig struct {
+	Extra          map[string]json.RawMessage `json:"-"`
+	ProviderID     string                     `json:"provider_id"`
+	ModelID        string                     `json:"model_id"`
+	ResponsePolicy string                     `json:"response_policy"` // manual, each_segment
 }
 
 type AudioSourceConfig struct {

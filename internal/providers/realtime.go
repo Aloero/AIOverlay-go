@@ -94,6 +94,13 @@ type RealtimeResponseRequester interface {
 	RequestResponse(context.Context) (<-chan Event, <-chan error)
 }
 
+// RealtimeResponseStarter separates synchronous admission/dispatch errors from
+// the asynchronous response stream. Schedulers use it so rejected starts do not
+// consume a committed call budget.
+type RealtimeResponseStarter interface {
+	StartResponse(context.Context) (<-chan Event, <-chan error, error)
+}
+
 type RealtimeInterrupter interface {
 	Interrupt(context.Context) error
 }
@@ -211,6 +218,9 @@ func implementsRealtimeImageUpdater(session RealtimeSession) bool {
 	return ok
 }
 func implementsRealtimeResponseRequester(session RealtimeSession) bool {
+	if _, ok := session.(RealtimeResponseStarter); ok {
+		return true
+	}
 	_, ok := session.(RealtimeResponseRequester)
 	return ok
 }

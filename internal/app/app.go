@@ -66,6 +66,7 @@ func New(configPath, catalogPath string) (*App, error) {
 	a.sessions = session.NewManager(func(ctx context.Context, pipelineID string, input engine.Input, opt engine.RunOptions) (engine.Result, error) {
 		return a.Run(ctx, pipelineID, input, opt)
 	})
+	a.sessions.SetRealtimeOpener(a.openRealtimeSession)
 	// Load session topology without starting any source. Desktop startup calls
 	// StartSessions explicitly after capture/privacy wiring is ready.
 	a.sessions.Apply(cfg)
@@ -143,14 +144,18 @@ func (a *App) saveConfig(cfg domain.Config, imported bool) error {
 	}
 	if !a.operation.TryLock() {
 		if a.sessions != nil {
-			a.sessions.FencePermissions(a.GetConfig())
+			current := a.GetConfig()
+			a.sessions.FencePermissions(current)
+			a.sessions.Apply(current)
 		}
 		return fmt.Errorf("analysis is running; stop it before saving settings")
 	}
 	defer a.operation.Unlock()
 	if err := a.saveConfigLockedWithSessionPolicy(cfg, imported); err != nil {
 		if a.sessions != nil {
-			a.sessions.FencePermissions(a.GetConfig())
+			current := a.GetConfig()
+			a.sessions.FencePermissions(current)
+			a.sessions.Apply(current)
 		}
 		return err
 	}

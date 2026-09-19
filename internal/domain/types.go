@@ -115,6 +115,7 @@ type RealtimeProviderConfig struct {
 	Extra          map[string]json.RawMessage `json:"-"`
 	ResponsesModel string                     `json:"responses_model,omitempty"`
 	Instructions   string                     `json:"instructions,omitempty"`
+	Store          bool                       `json:"store,omitempty"`
 }
 
 type RequestDefaults struct {

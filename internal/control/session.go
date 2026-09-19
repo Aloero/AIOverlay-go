@@ -22,6 +22,7 @@ type sessionBackend interface {
 	RecordCommandResult(session.PreparedCommand, engine.Result) bool
 	PauseBackground(bool)
 	SetSourceRunning(string, bool) error
+	RequestRealtimeResponse(context.Context, string) (engine.Result, error)
 	BackgroundPaused() bool
 	SessionStatus() any
 	ClearConversation(string) (uint64, error)
@@ -99,6 +100,18 @@ func (s *Server) StartCommand(action string) (string, error) {
 		return res, nil, err
 	}
 	return s.jobs.queueTaskPurpose(s.ctx, pipelineID, purpose, prepare, run)
+}
+
+func (s *Server) StartRealtimeResponse(sourceID string) (string, error) {
+	b, ok := s.backend.(sessionBackend)
+	if !ok {
+		return "", fmt.Errorf("session runtime unavailable")
+	}
+	pipelineID := s.backend.GetConfig().ActivePipelineID
+	return s.jobs.queueTaskPurpose(s.ctx, pipelineID, "command", nil, func(ctx context.Context, _ engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
+		result, err := b.RequestRealtimeResponse(ctx, sourceID)
+		return result, nil, err
+	})
 }
 
 func (s *Server) manualCapture(ctx context.Context) ([]byte, error) {
@@ -268,6 +281,26 @@ func (s *Server) BackgroundPublication() session.Publication {
 	s.backgroundMu.Lock()
 	defer s.backgroundMu.Unlock()
 	return s.background
+}
+
+func (s *Server) handleRealtimeResponse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		SourceID string `json:"source_id"`
+	}
+	if err := decodeJSON(r, &req, 4<<10); err != nil || req.SourceID == "" {
+		http.Error(w, "source_id required", http.StatusBadRequest)
+		return
+	}
+	id, err := s.StartRealtimeResponse(req.SourceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, map[string]string{"job_id": id})
 }
 
 func (s *Server) handleSessionSource(w http.ResponseWriter, r *http.Request) {

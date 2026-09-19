@@ -4,6 +4,7 @@ import (
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
 	paudio "aioverlay/internal/platform/audio"
+	"aioverlay/internal/providers"
 	"context"
 	"fmt"
 	"reflect"
@@ -83,6 +84,10 @@ type SourceStatus struct {
 	LastEvent       string  `json:"last_event,omitempty"`
 	LastTranscript  string  `json:"last_transcript,omitempty"`
 	TranscriptLagMS int64   `json:"transcript_lag_ms,omitempty"`
+	RemoteState     string  `json:"remote_state,omitempty"`
+	RemoteProvider  string  `json:"remote_provider,omitempty"`
+	RemoteModel     string  `json:"remote_model,omitempty"`
+	LastRecovery    string  `json:"last_recovery,omitempty"`
 }
 
 type pendingSegment struct {
@@ -106,16 +111,20 @@ type activeBackgroundTurn struct {
 }
 
 type sourceRuntime struct {
-	pipelineID    string
-	cfg           domain.EventSource
-	cancel        context.CancelFunc
-	done          chan struct{}
-	turnDone      chan struct{}
-	mu            sync.RWMutex
-	status        SourceStatus
-	epoch         uint64
-	turns         chan backgroundTurn
-	cooldownUntil time.Time
+	pipelineID          string
+	cfg                 domain.EventSource
+	cancel              context.CancelFunc
+	done                chan struct{}
+	turnDone            chan struct{}
+	mu                  sync.RWMutex
+	status              SourceStatus
+	epoch               uint64
+	turns               chan backgroundTurn
+	cooldownUntil       time.Time
+	realtimeFingerprint [32]byte
+	revoked             bool
+	realtimeMu          sync.Mutex
+	realtime            providers.RealtimeSession
 }
 
 type Manager struct {
@@ -127,6 +136,7 @@ type Manager struct {
 	capture               ScreenCapture
 	backgroundCapture     ScreenCapture
 	audioCapture          paudio.CaptureFunc
+	realtimeOpen          RealtimeOpener
 	captureGate           audioCaptureGate
 	contexts              *ContextStore
 	governor              *Governor
@@ -193,6 +203,11 @@ func (m *Manager) SetAudioCapture(fn paudio.CaptureFunc) {
 	if fn != nil {
 		m.audioCapture = fn
 	}
+	m.mu.Unlock()
+}
+func (m *Manager) SetRealtimeOpener(fn RealtimeOpener) {
+	m.mu.Lock()
+	m.realtimeOpen = fn
 	m.mu.Unlock()
 }
 func (m *Manager) SetPublisher(fn func(Publication)) { m.mu.Lock(); m.publish = fn; m.mu.Unlock() }
@@ -405,8 +420,8 @@ func (m *Manager) reconcile() {
 	var resetRetry []string
 	for id, runtime := range m.sources {
 		next, wantedNow := wanted[id]
-		sameConfig := wantedNow && runtime.pipelineID == activePipelineID(cfg) && sameSource(runtime.cfg, next)
-		if sameConfig && !sourceFinished(runtime) {
+		sameConfig := wantedNow && runtime.pipelineID == activePipelineID(cfg) && sameSource(runtime.cfg, next) && runtime.realtimeFingerprint == realtimeSourceFingerprint(cfg, next)
+		if sameConfig && !sourceRevoked(runtime) && !sourceFinished(runtime) {
 			continue
 		}
 		if !sameConfig {
@@ -443,13 +458,14 @@ func (m *Manager) reconcile() {
 		}
 		ctx, cancel := context.WithCancel(root)
 		r := &sourceRuntime{
-			pipelineID: p.ID,
-			cfg:        src,
-			cancel:     cancel,
-			done:       make(chan struct{}),
-			turnDone:   make(chan struct{}),
-			epoch:      m.sourceSeq.Add(1),
-			turns:      make(chan backgroundTurn, 1),
+			pipelineID:          p.ID,
+			cfg:                 src,
+			realtimeFingerprint: realtimeSourceFingerprint(cfg, src),
+			cancel:              cancel,
+			done:                make(chan struct{}),
+			turnDone:            make(chan struct{}),
+			epoch:               m.sourceSeq.Add(1),
+			turns:               make(chan backgroundTurn, 1),
 			status: SourceStatus{
 				ID: src.ID, Name: src.Name, Kind: string(src.Kind), Running: true,
 				TransportState: initialTransportState(src.Kind), SignalState: initialSignalState(src.Kind),
@@ -1358,6 +1374,7 @@ func (m *Manager) ClearContext(contextID string) (uint64, error) {
 	m.clearPendingBeforeGeneration(p.ID, c.ID, generation)
 	m.cancelContextTurns(p.ID, c.ID, generation)
 	m.clearContextSourceStatus(p.ID, c.ID)
+	m.replaceRealtimeSourcesForContext(p.ID, c.ID)
 	return generation, nil
 }
 func (m *Manager) clearContextSourceStatus(pipelineID, contextID string) {

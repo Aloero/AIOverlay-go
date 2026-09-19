@@ -468,6 +468,22 @@ func (v *ScreenRegionConfig) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+func (v RealtimeSourceConfig) MarshalJSON() ([]byte, error) {
+	type plain RealtimeSourceConfig
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *RealtimeSourceConfig) UnmarshalJSON(raw []byte) error {
+	type plain RealtimeSourceConfig
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = RealtimeSourceConfig(p)
+	v.Extra = extra
+	return nil
+}
+
 func (v AudioSourceConfig) MarshalJSON() ([]byte, error) {
 	type plain AudioSourceConfig
 	return marshalExt(plain(v), v.Extra)

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"aioverlay/internal/domain"
+	"fmt"
 	"time"
 )
 
@@ -37,4 +38,42 @@ func (e *Engine) ConfigRevision() uint64 {
 	e.configMu.RLock()
 	defer e.configMu.RUnlock()
 	return e.revision
+}
+
+// SelectSessionCredential applies the same provider credential policy used by
+// short model attempts, but returns one key for the lifetime of a persistent
+// session. The caller must keep that key pinned until the session is replaced.
+func (e *Engine) SelectSessionCredential(providerID string) (domain.Credential, error) {
+	e.configMu.RLock()
+	var pool domain.CredentialPool
+	found := false
+	for _, provider := range e.cfg.Providers {
+		if provider.ID == providerID && provider.Enabled {
+			pool = provider.CredentialPool
+			found = true
+			break
+		}
+	}
+	e.configMu.RUnlock()
+	if !found {
+		return domain.Credential{}, fmt.Errorf("provider %s is missing or disabled", providerID)
+	}
+	keys := e.orderCredentials(providerID, pool)
+	if len(keys) == 0 {
+		return domain.Credential{}, fmt.Errorf("provider %s has no available credential", providerID)
+	}
+	return keys[0], nil
+}
+
+func (e *Engine) RecordSessionCredential(providerID string, key domain.Credential, outcome domain.Outcome) {
+	e.configMu.RLock()
+	cooldown := 0
+	for _, provider := range e.cfg.Providers {
+		if provider.ID == providerID {
+			cooldown = provider.CredentialPool.RateLimitCooldownS
+			break
+		}
+	}
+	e.configMu.RUnlock()
+	e.markCredential(providerID, key, outcome, cooldown)
 }

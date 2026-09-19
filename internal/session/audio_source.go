@@ -54,7 +54,7 @@ func (m *Manager) enqueueAudioSegment(runtime *sourceRuntime, queue *audioSegmen
 		captured.eventID = fmt.Sprintf("%s-%d", runtime.cfg.ID, m.eventSeq.Add(1))
 	}
 	captured.segment.Clip.SegmentID = captured.eventID
-	if captured.context.config.ID != "" {
+	if captured.context.config.ID != "" && runtime.cfg.Realtime == nil {
 		m.addPending(pendingSegment{pipelineID: captured.context.pipelineID, contextID: captured.context.config.ID, eventID: captured.eventID, generation: captured.context.generation, start: captured.segment.Started, end: captured.segment.Ended})
 	}
 	if err := queue.TryPush(captured); err != nil {
@@ -75,6 +75,12 @@ func (m *Manager) runAudio(ctx context.Context, pipelineID string, runtime *sour
 
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if runtime.cfg.Realtime != nil {
+		if err := m.openRealtimeSource(ctx, runtime); err != nil {
+			return err
+		}
+		defer m.closeRealtimeSource(runtime)
 	}
 	release, err := m.captureGate.acquireSource(runtime.cfg.ID)
 	if err != nil {
@@ -162,7 +168,7 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 		for _, segment := range segmenter.Push(block) {
 			m.enqueueAudioSegment(runtime, queue, capturedAudioSegment{segment: segment, context: captured})
 		}
-		if start, active := segmenter.ActiveStart(); active && captured.config.ID != "" {
+		if start, active := segmenter.ActiveStart(); active && captured.config.ID != "" && runtime.cfg.Realtime == nil {
 			m.addPending(pendingSegment{pipelineID: captured.pipelineID, contextID: captured.config.ID, eventID: capturePendingID, generation: captured.generation, start: start, end: block.At})
 		} else {
 			m.finishPending(capturePendingID)
@@ -226,6 +232,10 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 	}
 	clip.StartedAt = seg.Started
 	clip.EndedAt = seg.Ended
+	if r.cfg.Realtime != nil {
+		m.processRealtimeAudioSegment(parent, pipelineID, r, captured, clip)
+		return
+	}
 	intent := r.cfg.Intent
 	if !clip.Final {
 		intent = domain.IntentContext

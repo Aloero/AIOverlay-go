@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
+func validateSources(p domain.Pipeline, nodes map[string]domain.Node, providers map[string]domain.ProviderConfig) error {
 	if len(p.Sources) > 16 {
 		return fmt.Errorf("pipeline %s has too many background sources", p.ID)
 	}
@@ -109,7 +109,7 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 		if !enum(s.Intent, domain.IntentRespond, domain.IntentDecide, domain.IntentContext) {
 			return fmt.Errorf("source intent must be respond, decide or context")
 		}
-		if !entryOK(s.EntryNodeID) {
+		if s.Realtime == nil && !entryOK(s.EntryNodeID) {
 			return fmt.Errorf("source %s references missing entry", s.ID)
 		}
 		if !contextOK(s.ContextID) {
@@ -117,6 +117,33 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 		}
 		if s.Command != "" {
 			return fmt.Errorf("schema-5 background source cannot own a hotkey command")
+		}
+		if s.Realtime != nil {
+			if s.Kind != domain.SourceAudio {
+				return fmt.Errorf("source %s realtime session requires an audio source", s.ID)
+			}
+			provider, ok := providers[s.Realtime.ProviderID]
+			if !ok || !provider.Enabled || provider.Kind != domain.ProviderOpenAILive {
+				return fmt.Errorf("source %s realtime provider is missing, disabled or not openai_live", s.ID)
+			}
+			if strings.TrimSpace(s.Realtime.ModelID) == "" || len(s.Realtime.ModelID) > 2048 || strings.ContainsRune(s.Realtime.ModelID, 0) {
+				return fmt.Errorf("source %s realtime model is invalid", s.ID)
+			}
+			if !enum(s.Realtime.ResponsePolicy, "manual", "each_segment") {
+				return fmt.Errorf("source %s realtime response policy is invalid", s.ID)
+			}
+			if s.Intent == domain.IntentDecide {
+				return fmt.Errorf("source %s realtime route cannot claim semantic no_action", s.ID)
+			}
+			if s.Realtime.ResponsePolicy == "manual" && s.Intent != domain.IntentContext {
+				return fmt.Errorf("source %s manual realtime policy must use context intent", s.ID)
+			}
+			if s.Realtime.ResponsePolicy == "each_segment" && s.Intent != domain.IntentRespond {
+				return fmt.Errorf("source %s automatic realtime policy must use respond intent", s.ID)
+			}
+			if s.Realtime.ResponsePolicy == "each_segment" && (provider.Realtime == nil || strings.TrimSpace(provider.Realtime.ResponsesModel) == "") {
+				return fmt.Errorf("source %s automatic realtime response requires Responses delegation", s.ID)
+			}
 		}
 		if s.Kind == domain.SourceScreenTimer {
 			if !within(s.IntervalMS, 1000, 600000) {
@@ -160,7 +187,7 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 				return fmt.Errorf("source %s: %w", s.ID, err)
 			}
 		}
-		if s.Intent == domain.IntentContext && s.ContextID == "" {
+		if s.Intent == domain.IntentContext && s.ContextID == "" && s.Realtime == nil {
 			return fmt.Errorf("context-only source requires a context")
 		}
 	}
