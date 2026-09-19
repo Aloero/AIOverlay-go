@@ -35,6 +35,9 @@ func TestPipelineStudioContract(t *testing.T) {
 			t.Errorf("Studio missing contract %q", token)
 		}
 	}
+	if strings.Contains(s, "gpt-live-1") {
+		t.Error("Studio must not hardcode a realtime model ID; the user must select an explicit current model")
+	}
 	for _, token := range []string{"buildExe", "buildProduct", "buildCompany", "buildIcon"} {
 		if strings.Contains(s, token) {
 			t.Errorf("runtime Studio must not expose pre-build field %q", token)
