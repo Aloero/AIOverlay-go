@@ -991,10 +991,10 @@ func TestImportedConfigClearsStartNowOverrideEvenWhenSourceIDMatches(t *testing.
 
 	waitUntil(t, func() bool { return manager.source("a") == nil }, "import preserved running source override")
 	manager.mu.RLock()
-	_, overrideExists := manager.sourceOverrides["a"]
+	override, overrideExists := manager.sourceOverrides["a"]
 	manager.mu.RUnlock()
-	if overrideExists {
-		t.Fatal("import left Start-now override behind")
+	if !overrideExists || override {
+		t.Fatalf("import did not pin source stopped: exists=%v value=%v", overrideExists, override)
 	}
 }
 
@@ -1620,4 +1620,40 @@ func TestCommandPreviewReportsMetadataWithoutCaptureOrContent(t *testing.T) {
 	if strings.Contains(raw, "PRIVATE_PREVIEW_CONTENT") || strings.Contains(raw, "private-screen") {
 		t.Fatalf("metadata preview exposed content: %s", raw)
 	}
+}
+
+func TestApplyImportedSuppressesEnabledAutoStartUntilExplicitStart(t *testing.T) {
+	manager := NewManager(nil)
+	baseline := managerConfig()
+	baseline.Pipelines[0].Sources[0].AutoStart = false
+	imported := managerConfig()
+	imported.Pipelines[0].Sources[0].AutoStart = true
+	var captures atomic.Int32
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		captures.Add(1)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx, baseline)
+	manager.ApplyImported(imported)
+	time.Sleep(20 * time.Millisecond)
+	if runtime := manager.source(imported.Pipelines[0].Sources[0].ID); runtime != nil {
+		t.Fatalf("imported AutoStart source started without explicit consent: %+v", runtime.status)
+	}
+	if captures.Load() != 0 {
+		t.Fatalf("imported source reached native capture %d times", captures.Load())
+	}
+	if err := manager.SetSourceRunning(imported.Pipelines[0].Sources[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for captures.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if captures.Load() != 1 {
+		t.Fatalf("explicit start did not activate imported source: captures=%d", captures.Load())
+	}
+	manager.Close()
 }

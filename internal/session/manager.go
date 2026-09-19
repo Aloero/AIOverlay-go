@@ -268,7 +268,9 @@ func (m *Manager) apply(cfg domain.Config, clearRuntimeOverrides bool) {
 		m.permissionGeneration++
 		m.permissionPolicy = nextPermissions
 	}
-	if clearRuntimeOverrides || pipelineChanged {
+	if clearRuntimeOverrides {
+		m.sourceOverrides = importedSourceStops(cfg)
+	} else if pipelineChanged {
 		m.sourceOverrides = map[string]bool{}
 	} else {
 		m.pruneSourceOverridesLocked(cfg)
@@ -281,6 +283,18 @@ func (m *Manager) apply(cfg domain.Config, clearRuntimeOverrides bool) {
 	if started {
 		m.reconcile()
 	}
+}
+
+func importedSourceStops(cfg domain.Config) map[string]bool {
+	overrides := map[string]bool{}
+	if pipeline := activePipeline(cfg); pipeline != nil {
+		for _, source := range pipeline.Sources {
+			if source.Enabled {
+				overrides[source.ID] = false
+			}
+		}
+	}
+	return overrides
 }
 
 func (m *Manager) pruneSourceOverridesLocked(cfg domain.Config) {
