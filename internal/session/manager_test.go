@@ -1740,3 +1740,52 @@ func TestSafetyPauseStopsAutoSourcesUntilExplicitResume(t *testing.T) {
 	}
 	manager.Close()
 }
+
+func TestStoppedSourceRejectedAtBackgroundAdmissionClearsAudioPending(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	manager.cfg = cfg
+	contextCfg := cfg.Pipelines[0].Contexts[0]
+	generation := manager.contexts.Generation("p", contextCfg.ID)
+	runtime := &sourceRuntime{
+		pipelineID: "p",
+		cfg:        cfg.Pipelines[0].Sources[0],
+		epoch:      7,
+		turns:      make(chan backgroundTurn, 1),
+	}
+	// Runtime is intentionally absent from manager.sources: this models Pause
+	// removing it after audio pending was registered but before queue admission.
+	turn := backgroundTurn{
+		pipelineID: "p",
+		ctxCfg:     contextCfg,
+		generation: generation,
+		input: engine.Input{
+			EventID: "audio-pending",
+			Audio:   &domain.AudioClip{PCM16: []int16{1, 2}, SampleRate: 16000, Channels: 1, Final: true},
+		},
+		at: time.Now(),
+	}
+	manager.addPending(pendingSegment{
+		pipelineID: "p", contextID: contextCfg.ID, eventID: turn.input.EventID,
+		generation: generation, start: turn.at, end: turn.at,
+	})
+
+	manager.enqueueBackgroundTurn(runtime, turn)
+
+	manager.pendingMu.Lock()
+	pending := len(manager.pending)
+	manager.pendingMu.Unlock()
+	if pending != 0 {
+		t.Fatalf("rejected audio admission leaked pending entries: %d", pending)
+	}
+	if len(runtime.turns) != 0 {
+		t.Fatalf("stopped source admitted a queued turn: %d", len(runtime.turns))
+	}
+	snapshot := manager.contexts.Snapshot(contextCfg, "p", time.Now().Add(time.Second))
+	if len(snapshot.Entries) != 1 || !snapshot.Entries[0].Gap {
+		t.Fatalf("rejected audio admission did not record a visible gap: %+v", snapshot.Entries)
+	}
+	if runtime.status.Dropped != 1 || runtime.status.LastDiagnostic == "" {
+		t.Fatalf("rejected admission status=%+v", runtime.status)
+	}
+}

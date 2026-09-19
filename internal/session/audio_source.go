@@ -55,7 +55,7 @@ func (m *Manager) enqueueAudioSegment(runtime *sourceRuntime, queue *audioSegmen
 	}
 	captured.segment.Clip.SegmentID = captured.eventID
 	if captured.context.config.ID != "" && runtime.cfg.Realtime == nil {
-		m.addPending(pendingSegment{pipelineID: captured.context.pipelineID, contextID: captured.context.config.ID, eventID: captured.eventID, generation: captured.context.generation, start: captured.segment.Started, end: captured.segment.Ended})
+		m.addPending(pendingSegment{pipelineID: captured.context.pipelineID, contextID: captured.context.config.ID, eventID: captured.eventID, sourceID: runtime.cfg.ID, generation: captured.context.generation, start: captured.segment.Started, end: captured.segment.Ended})
 	}
 	if err := queue.TryPush(captured); err != nil {
 		m.finishPending(captured.eventID)
@@ -174,7 +174,7 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 			m.enqueueAudioSegment(runtime, queue, capturedAudioSegment{segment: segment, context: captured})
 		}
 		if start, active := segmenter.ActiveStart(); active && captured.config.ID != "" && runtime.cfg.Realtime == nil {
-			m.addPending(pendingSegment{pipelineID: captured.pipelineID, contextID: captured.config.ID, eventID: capturePendingID, generation: captured.generation, start: start, end: block.At})
+			m.addPending(pendingSegment{pipelineID: captured.pipelineID, contextID: captured.config.ID, eventID: capturePendingID, sourceID: runtime.cfg.ID, generation: captured.generation, start: start, end: block.At})
 		} else {
 			m.finishPending(capturePendingID)
 		}
@@ -268,7 +268,7 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 	defaultView := views[r.cfg.ContextID]
 	input := engine.Input{Audio: &clip, ContextText: defaultView.Text, ContextViews: views, DefaultContextID: r.cfg.ContextID, ImageJPEG: append([]byte(nil), defaultView.ImageJPEG...), EntryNodeID: r.cfg.EntryNodeID, Intent: string(intent), SourceID: r.cfg.ID, EventID: clip.SegmentID}
 	if hasCtx {
-		m.addPending(pendingSegment{pipelineID: pipelineID, contextID: ctxCfg.ID, eventID: clip.SegmentID, generation: gen, start: seg.Started, end: seg.Ended})
+		m.addPending(pendingSegment{pipelineID: pipelineID, contextID: ctxCfg.ID, eventID: clip.SegmentID, sourceID: r.cfg.ID, generation: gen, start: seg.Started, end: seg.Ended})
 	}
 	m.enqueueBackgroundTurn(r, backgroundTurn{pipelineID: pipelineID, ctxCfg: ctxCfg, generation: gen, contextGenerations: cloneGenerations(generations), input: input, at: seg.Ended})
 }

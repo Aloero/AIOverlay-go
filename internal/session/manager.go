@@ -94,6 +94,7 @@ type SourceStatus struct {
 
 type pendingSegment struct {
 	pipelineID, contextID, eventID string
+	sourceID                       string
 	generation                     uint64
 	start, end                     time.Time
 }
@@ -474,6 +475,7 @@ func (m *Manager) reconcile() {
 	}
 	for _, runtime := range stopped {
 		waitForSourceStop(runtime, 2*time.Second)
+		m.dropPendingForSource(runtime, "source stopped before pending audio could complete")
 	}
 
 	// Config may have changed while native teardown completed. Recompute desired
@@ -572,6 +574,7 @@ func (m *Manager) stopAll() {
 	m.mu.Unlock()
 	for _, runtime := range list {
 		waitForSourceStop(runtime, 2*time.Second)
+		m.dropPendingForSource(runtime, "source stopped before pending audio could complete")
 	}
 }
 
@@ -797,17 +800,78 @@ func (m *Manager) addPending(p pendingSegment) {
 	m.notifyPendingLocked()
 	m.pendingMu.Unlock()
 }
-func (m *Manager) finishPending(id string) {
+func (m *Manager) finishPending(id string) bool {
 	if id == "" {
-		return
+		return false
 	}
 	m.pendingMu.Lock()
-	if _, ok := m.pending[id]; ok {
+	_, existed := m.pending[id]
+	if existed {
 		delete(m.pending, id)
 		m.notifyPendingLocked()
 	}
 	m.pendingMu.Unlock()
+	return existed
 }
+func (m *Manager) dropPendingForSource(runtime *sourceRuntime, reason string) {
+	if runtime == nil || runtime.cfg.ID == "" {
+		return
+	}
+	m.pendingMu.Lock()
+	dropped := make([]pendingSegment, 0)
+	for id, pending := range m.pending {
+		if pending.sourceID != runtime.cfg.ID {
+			continue
+		}
+		dropped = append(dropped, pending)
+		delete(m.pending, id)
+	}
+	if len(dropped) > 0 {
+		m.notifyPendingLocked()
+	}
+	m.pendingMu.Unlock()
+	if len(dropped) == 0 {
+		return
+	}
+
+	runtime.mu.Lock()
+	runtime.status.Dropped += uint64(len(dropped))
+	runtime.status.LastDiagnostic = reason
+	runtime.mu.Unlock()
+
+	type gapKey struct {
+		pipelineID, contextID string
+		generation            uint64
+	}
+	latest := map[gapKey]time.Time{}
+	for _, pending := range dropped {
+		key := gapKey{pipelineID: pending.pipelineID, contextID: pending.contextID, generation: pending.generation}
+		at := pending.end
+		if at.IsZero() {
+			at = pending.start
+		}
+		if at.IsZero() {
+			at = time.Now()
+		}
+		if current, exists := latest[key]; !exists || at.After(current) {
+			latest[key] = at
+		}
+	}
+	for key, at := range latest {
+		if key.contextID == "" || m.contexts.Generation(key.pipelineID, key.contextID) != key.generation {
+			continue
+		}
+		m.mu.RLock()
+		pipeline := activePipeline(m.cfg)
+		contextCfg, ok := findContext(pipeline, key.contextID)
+		m.mu.RUnlock()
+		if !ok || pipeline == nil || pipeline.ID != key.pipelineID {
+			continue
+		}
+		m.contexts.Append(contextCfg, key.pipelineID, key.generation, ContextEntry{Kind: "gap", Gap: true, At: at, SourceID: runtime.cfg.ID})
+	}
+}
+
 func (m *Manager) waitPending(ctx context.Context, pipelineID, contextID string, generation uint64, cutoff time.Time, limit time.Duration) (bool, error) {
 	if contextID == "" || limit <= 0 {
 		return true, nil
@@ -860,22 +924,29 @@ func clearSourceSuppression(runtime *sourceRuntime) {
 }
 
 func (m *Manager) enqueueBackgroundTurn(r *sourceRuntime, turn backgroundTurn) {
-	if r == nil || !m.sourceCurrent(r.cfg.ID, r.epoch) {
+	if r == nil {
+		return
+	}
+	if !m.sourceCurrent(r.cfg.ID, r.epoch) {
+		m.recordDroppedTurn(r, turn, "source stopped before event admission")
 		return
 	}
 	select {
 	case r.turns <- turn:
+		return
 	default:
-		var old backgroundTurn
-		select {
-		case old = <-r.turns:
-		default:
-		}
+	}
+
+	var old backgroundTurn
+	select {
+	case old = <-r.turns:
 		m.recordCoalescedTurn(r, old)
-		select {
-		case r.turns <- turn:
-		default:
-		}
+	default:
+	}
+	select {
+	case r.turns <- turn:
+	default:
+		m.recordDroppedTurn(r, turn, "automatic event could not enter the bounded source queue")
 	}
 }
 
@@ -884,11 +955,15 @@ func (m *Manager) recordCoalescedTurn(runtime *sourceRuntime, turn backgroundTur
 }
 
 func (m *Manager) recordDroppedTurn(runtime *sourceRuntime, turn backgroundTurn, reason string) {
+	ownedPending := false
 	if turn.input.EventID != "" {
-		if turn.input.Audio != nil && turn.ctxCfg.ID != "" {
+		ownedPending = m.finishPending(turn.input.EventID)
+		if ownedPending && turn.input.Audio != nil && turn.ctxCfg.ID != "" {
 			m.contexts.Append(turn.ctxCfg, turn.pipelineID, turn.generation, ContextEntry{Kind: "gap", Gap: true, At: turn.at, SourceID: runtime.cfg.ID})
 		}
-		m.finishPending(turn.input.EventID)
+	}
+	if turn.input.Audio != nil && turn.ctxCfg.ID != "" && !ownedPending {
+		return
 	}
 	runtime.mu.Lock()
 	runtime.status.Dropped++
