@@ -101,3 +101,23 @@ func TestAIStageContextModeValidation(t *testing.T) {
 		t.Fatal("none mode accepted a named context id")
 	}
 }
+
+func TestScreenSourceRejectsPublishOrTriggerFasterThanCapture(t *testing.T) {
+	cfg := Default()
+	pipeline := &cfg.Pipelines[0]
+	contextCfg := domain.ContextConfig{ID: "screen-context", Name: "Screen", Enabled: true, MaxAgeS: 60, MaxEntries: 10, MaxChars: 1000, KeepLatestScreen: true, ScreenMaxAgeS: 60}
+	pipeline.Contexts = append(pipeline.Contexts, contextCfg)
+	pipeline.Sources = []domain.EventSource{{
+		ID: "screen-source", Name: "Screen", Kind: domain.SourceScreenTimer, Enabled: true,
+		EntryNodeID: pipeline.EntryNodeID, Intent: domain.IntentContext, ContextID: contextCfg.ID,
+		IntervalMS: 3000, ContextIntervalMS: 2000, TriggerIntervalMS: 3000,
+	}}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("context cadence faster than capture accepted")
+	}
+	pipeline.Sources[0].ContextIntervalMS = 3000
+	pipeline.Sources[0].TriggerIntervalMS = 2000
+	if err := Validate(cfg); err == nil {
+		t.Fatal("AI cadence faster than capture accepted")
+	}
+}

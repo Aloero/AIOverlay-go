@@ -53,7 +53,8 @@ function behaviorTriggerMarkup(trigger){
  const contextText=context?`${behaviorContextRoles[trigger.context_role]||'использует context'} «${context}»`:'без local context';
  const capture=behaviorCaptureNames[trigger.capture]||trigger.capture||'без нового capture';
  const autostart=trigger.kind==='source'?`<li><b>AutoStart:</b> ${trigger.auto_start?'включён':'выключен'}</li>`:'';
- return `<section class="behavior-card behavior-report-card"><h3>${esc(trigger.name||trigger.id)}</h3><ul><li><b>Захват:</b> ${esc(capture)}</li><li><b>Local context:</b> ${esc(contextText)}</li>${autostart}<li><b>Маршрут:</b> ${esc(behaviorRouteLabel(trigger))}</li></ul><div class="behavior-ai-stages"><strong>Что получает AI</strong>${behaviorAIStagesMarkup(trigger)}</div></section>`;
+ const screen=trigger.screen?`<li><b>Экран:</b> capture ${trigger.screen.capture_interval_ms} мс · context ${trigger.screen.context_interval_ms} мс · AI не чаще ${trigger.screen.trigger_interval_ms} мс${trigger.screen.changed_only?' · только изменения':''}</li>${trigger.screen.region?`<li><b>Область:</b> ${trigger.screen.region.x},${trigger.screen.region.y} · ${trigger.screen.region.width}×${trigger.screen.region.height}</li>`:''}`:'';
+ return `<section class="behavior-card behavior-report-card"><h3>${esc(trigger.name||trigger.id)}</h3><ul><li><b>Захват:</b> ${esc(capture)}</li><li><b>Local context:</b> ${esc(contextText)}</li>${autostart}${screen}<li><b>Маршрут:</b> ${esc(behaviorRouteLabel(trigger))}</li></ul><div class="behavior-ai-stages"><strong>Что получает AI</strong>${behaviorAIStagesMarkup(trigger)}</div></section>`;
 }
 function behaviorContextMarkup(context){
  const stored=[];

@@ -33,11 +33,11 @@ func newScreenDeliveryClock(source domain.EventSource) screenDeliveryClock {
 		capture = time.Second
 	}
 	contextInterval := time.Duration(source.ContextIntervalMS) * time.Millisecond
-	if contextInterval <= 0 {
+	if contextInterval < capture {
 		contextInterval = capture
 	}
 	triggerInterval := time.Duration(source.TriggerIntervalMS) * time.Millisecond
-	if triggerInterval <= 0 {
+	if triggerInterval < capture {
 		triggerInterval = capture
 	}
 	return screenDeliveryClock{contextInterval: contextInterval, triggerInterval: triggerInterval}

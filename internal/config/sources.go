@@ -128,6 +128,12 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 			if s.TriggerIntervalMS != 0 && !within(s.TriggerIntervalMS, 1000, 600000) {
 				return fmt.Errorf("screen AI trigger interval must be 1..600 seconds or 0 to inherit capture interval")
 			}
+			if s.ContextIntervalMS > 0 && s.ContextIntervalMS < s.IntervalMS {
+				return fmt.Errorf("screen context interval cannot be faster than local capture interval")
+			}
+			if s.TriggerIntervalMS > 0 && s.TriggerIntervalMS < s.IntervalMS {
+				return fmt.Errorf("screen AI trigger interval cannot be faster than local capture interval")
+			}
 			if region := s.ScreenRegion; region != nil {
 				if region.X < 0 || region.Y < 0 || !within(region.Width, 1, 16384) || !within(region.Height, 1, 16384) {
 					return fmt.Errorf("screen region must use non-negative origin and 1..16384 dimensions")

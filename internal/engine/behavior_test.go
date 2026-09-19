@@ -115,3 +115,27 @@ func TestBehaviorReportKeepsLatestContextScreenUnresolvedAcrossSTT(t *testing.T)
 		t.Fatalf("disabled latest-screen context still requires image: %+v", withoutScreen)
 	}
 }
+
+func TestBehaviorReportShowsEffectiveScreenCadenceAndRegion(t *testing.T) {
+	cfg := mixedSimulationConfig()
+	pipeline := cfg.Pipelines[0]
+	pipeline.Contexts = []domain.ContextConfig{{ID: "screen-context", Name: "Screen", Enabled: true, MaxAgeS: 60, MaxEntries: 10, MaxChars: 1000, KeepLatestScreen: true, ScreenMaxAgeS: 60}}
+	pipeline.Sources = []domain.EventSource{{
+		ID: "screen-source", Name: "Screen", Kind: domain.SourceScreenTimer, Enabled: true,
+		EntryNodeID: "context", Intent: domain.IntentContext, ContextID: "screen-context",
+		IntervalMS: 2000, ContextIntervalMS: 4000, TriggerIntervalMS: 8000,
+		ChangedOnly: true, DebounceMS: 500, MaxWaitMS: 5000,
+		ScreenRegion: &domain.ScreenRegionConfig{X: 10, Y: 20, Width: 640, Height: 480},
+	}}
+	report := DescribePipelineBehavior(pipeline)
+	if len(report.Sources) != 1 || report.Sources[0].Screen == nil {
+		t.Fatalf("screen policy missing: %+v", report.Sources)
+	}
+	screen := report.Sources[0].Screen
+	if screen.CaptureIntervalMS != 2000 || screen.ContextIntervalMS != 4000 || screen.TriggerIntervalMS != 8000 || !screen.ChangedOnly {
+		t.Fatalf("screen policy=%+v", screen)
+	}
+	if screen.Region == nil || screen.Region.Width != 640 || screen.Region.Height != 480 {
+		t.Fatalf("screen region=%+v", screen.Region)
+	}
+}

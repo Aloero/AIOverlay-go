@@ -25,20 +25,31 @@ type BehaviorAIStage struct {
 	Input       PoolInput       `json:"input"`
 }
 
+type BehaviorScreenPolicy struct {
+	CaptureIntervalMS int                        `json:"capture_interval_ms"`
+	ContextIntervalMS int                        `json:"context_interval_ms"`
+	TriggerIntervalMS int                        `json:"trigger_interval_ms"`
+	ChangedOnly       bool                       `json:"changed_only"`
+	DebounceMS        int                        `json:"debounce_ms"`
+	MaxWaitMS         int                        `json:"max_wait_ms"`
+	Region            *domain.ScreenRegionConfig `json:"region,omitempty"`
+}
+
 type BehaviorTrigger struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	Kind        string               `json:"kind"`
-	Capture     string               `json:"capture"`
-	Intent      domain.CommandIntent `json:"intent"`
-	ContextID   string               `json:"context_id,omitempty"`
-	ContextName string               `json:"context_name,omitempty"`
-	ContextRole string               `json:"context_role,omitempty"`
-	EntryNodeID string               `json:"entry_node_id"`
-	AutoStart   bool                 `json:"auto_start,omitempty"`
-	UsesAI      bool                 `json:"uses_ai"`
-	Reachable   []BehaviorNode       `json:"reachable"`
-	AIStages    []BehaviorAIStage    `json:"ai_stages,omitempty"`
+	ID          string                `json:"id"`
+	Name        string                `json:"name"`
+	Kind        string                `json:"kind"`
+	Capture     string                `json:"capture"`
+	Intent      domain.CommandIntent  `json:"intent"`
+	ContextID   string                `json:"context_id,omitempty"`
+	ContextName string                `json:"context_name,omitempty"`
+	ContextRole string                `json:"context_role,omitempty"`
+	EntryNodeID string                `json:"entry_node_id"`
+	AutoStart   bool                  `json:"auto_start,omitempty"`
+	UsesAI      bool                  `json:"uses_ai"`
+	Reachable   []BehaviorNode        `json:"reachable"`
+	AIStages    []BehaviorAIStage     `json:"ai_stages,omitempty"`
+	Screen      *BehaviorScreenPolicy `json:"screen,omitempty"`
 }
 
 type BehaviorContext struct {
@@ -135,11 +146,36 @@ func behaviorSource(pipeline domain.Pipeline, source domain.EventSource, context
 		Reachable: reachableBehaviorNodes(pipeline, source.EntryNodeID, source.Intent, skipRun),
 	}
 	trigger.Capture = behaviorSourceCapture(source)
+	if source.Kind == domain.SourceScreenTimer {
+		trigger.Screen = behaviorScreenPolicy(source)
+	}
 	if !skipRun {
 		trigger.AIStages = behaviorAIStages(pipeline, trigger.Reachable, []inputState{start}, source.Intent)
 	}
 	trigger.UsesAI = len(trigger.AIStages) > 0
 	return trigger
+}
+
+func behaviorScreenPolicy(source domain.EventSource) *BehaviorScreenPolicy {
+	capture := max(1000, source.IntervalMS)
+	contextInterval := source.ContextIntervalMS
+	if contextInterval < capture {
+		contextInterval = capture
+	}
+	triggerInterval := source.TriggerIntervalMS
+	if triggerInterval < capture {
+		triggerInterval = capture
+	}
+	var region *domain.ScreenRegionConfig
+	if source.ScreenRegion != nil {
+		copy := *source.ScreenRegion
+		copy.Extra = nil
+		region = &copy
+	}
+	return &BehaviorScreenPolicy{
+		CaptureIntervalMS: capture, ContextIntervalMS: contextInterval, TriggerIntervalMS: triggerInterval,
+		ChangedOnly: source.ChangedOnly, DebounceMS: source.DebounceMS, MaxWaitMS: source.MaxWaitMS, Region: region,
+	}
 }
 
 func behaviorSourceCapture(source domain.EventSource) string {
