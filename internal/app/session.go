@@ -93,6 +93,14 @@ func (a *App) SetSourceRunning(id string, running bool) error {
 	return a.sessions.SetSourceRunning(id, running)
 }
 func (a *App) PauseBackground(paused bool) {
+	a.setBackgroundPaused(paused, "")
+}
+
+func (a *App) SuspendBackground(reason string) {
+	a.setBackgroundPaused(true, reason)
+}
+
+func (a *App) setBackgroundPaused(paused bool, safetyReason string) {
 	a.operation.RLock()
 	defer a.operation.RUnlock()
 	a.mu.RLock()
@@ -100,7 +108,11 @@ func (a *App) PauseBackground(paused bool) {
 	a.mu.RUnlock()
 	if paused {
 		if a.sessions != nil {
-			a.sessions.Pause(true)
+			if safetyReason != "" {
+				a.sessions.PauseForSafety(safetyReason)
+			} else {
+				a.sessions.Pause(true)
+			}
 		}
 		if registry != nil {
 			registry.SetBackgroundPaused(true)

@@ -84,8 +84,8 @@ async function showRuntimeBehavior(pipeline){
 }
 function renderRuntimeStrip(){
  const root=$('#runtimeStrip');if(!root)return;const p=ensurePipelineRuntime(pipe()),cmd=analyzeCommand(p),ctx=(p.contexts||[]).find(c=>c.id===cmd?.context_id),sources=activeRuntimeSources(p),paused=!!state.session?.paused;
- const running=(state.session?.sources||[]).filter(s=>s.running).length;
- root.innerHTML=`<div class="runtime-main"><button class="runtime-chip" id="editRuntimeManual"><span>РУЧНОЙ СНИМОК</span><b>Ответить сейчас${ctx?' · '+esc(ctx.name||ctx.id):' · без истории'}</b></button><button class="runtime-chip ${sources.length?'active':''}" id="editRuntimeBackground"><span>ФОН</span><b>${esc(sources.length?`${paused?'пауза · ':''}${running}/${sources.length} источников`:'выключен')}</b></button><button class="runtime-chip ${p.contexts?.length?'active':''}" id="editRuntimeContext"><span>КОНТЕКСТ</span><b>${esc(p.contexts?.length?p.contexts.map(c=>c.name||c.id).join(', '):'не используется')}</b></button></div><div class="runtime-actions"><button class="button small subtle" id="runtimeExplain">Что произойдёт?</button>${sources.length?`<button class="button small ${paused?'primary':'subtle'}" id="pauseBackground">${paused?'Возобновить фон':'Пауза фона'}</button>`:''}<button class="button small" id="openRuntimeEditor">Источники и контекст</button></div>`;
+ const running=(state.session?.sources||[]).filter(s=>s.running).length,pauseReason=backgroundPauseReasonLabels[state.session?.pause_reason]||state.session?.pause_reason||'пауза';
+ root.innerHTML=`<div class="runtime-main"><button class="runtime-chip" id="editRuntimeManual"><span>РУЧНОЙ СНИМОК</span><b>Ответить сейчас${ctx?' · '+esc(ctx.name||ctx.id):' · без истории'}</b></button><button class="runtime-chip ${sources.length?'active':''}" id="editRuntimeBackground"><span>ФОН</span><b>${esc(sources.length?`${paused?pauseReason+' · ':''}${running}/${sources.length} источников`:'выключен')}</b></button><button class="runtime-chip ${p.contexts?.length?'active':''}" id="editRuntimeContext"><span>КОНТЕКСТ</span><b>${esc(p.contexts?.length?p.contexts.map(c=>c.name||c.id).join(', '):'не используется')}</b></button></div><div class="runtime-actions"><button class="button small subtle" id="runtimeExplain">Что произойдёт?</button>${sources.length?`<button class="button small ${paused?'primary':'subtle'}" id="pauseBackground">${paused?'Возобновить фон':'Пауза фона'}</button>`:''}<button class="button small" id="openRuntimeEditor">Источники и контекст</button></div>`;
  for(const id of ['editRuntimeManual','editRuntimeBackground','editRuntimeContext'])$('#'+id).onclick=()=>openPipelineBehavior(id.replace(/^editRuntime/, '').toLowerCase());$('#openRuntimeEditor').onclick=()=>openPipelineBehavior('manual');
  $('#runtimeExplain').onclick=guarded(()=>showRuntimeBehavior(p));
  if($('#pauseBackground'))$('#pauseBackground').onclick=guarded(async()=>{const result=await api('/api/session/pause','POST',{paused:!paused});state.session={...(state.session||{}),paused:result.paused};await refreshSessionStatus(true);});
@@ -250,6 +250,7 @@ function runtimeOutcomeLabel(outcome){return {no_action:'без ответа п�
 function runtimeSuppressionLabel(reason){return {cooldown_after_auto_answer:'AI на паузе после автоответа',studio_visible_without_capture_exclusion:'кадр пропущен: Studio видима без подтверждённого capture exclusion',studio_capture_safety_timeout:'кадр пропущен: Studio не подтвердила безопасность capture'}[reason]||reason||'';}
 const audioTransportLabels={starting:'transport запускается',alive:'transport жив',recovering:'transport восстанавливается',stopped:'transport остановлен',unavailable:'transport недоступен'};
 const audioSignalLabels={unknown:'сигнал ещё не определён',no_packets:'пакетов сейчас нет',silent:'WASAPI: тишина',data:'аудиоданные поступают'};
+const backgroundPauseReasonLabels={manual:'ручная пауза',windows_suspend:'остановлено после сна Windows · требуется явное возобновление',windows_session_lock:'остановлено после блокировки Windows · требуется явное возобновление'};
 function runtimeAudioStateParts(source){
  const parts=[];
  if(source.transport_state)parts.push(audioTransportLabels[source.transport_state]||source.transport_state);
@@ -273,7 +274,8 @@ function renderRuntimeLiveState(){
  const root=$('#runtimeLiveState');if(!root)return;
  const session=state.session;if(!session){root.textContent='Состояние runtime загружается…';return;}
  const sources=session.sources||[];
- root.textContent=session.paused?'Фон на паузе':sources.length?sources.map(runtimeSourceSummary).join(' · '):'Фоновые источники не запущены';
+ const pauseReason=backgroundPauseReasonLabels[session.pause_reason]||session.pause_reason||'ручная пауза';
+ root.textContent=session.paused?`Фон на паузе · ${pauseReason}`:sources.length?sources.map(runtimeSourceSummary).join(' · '):'Фоновые источники не запущены';
 }
 
 function renderContextBehavior(root,p){

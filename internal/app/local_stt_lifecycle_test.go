@@ -81,3 +81,36 @@ func TestProviderHotSwapInheritsPausedLocalSTTResourceState(t *testing.T) {
 		t.Fatalf("hot-swapped local STT status=%+v", local)
 	}
 }
+
+func TestSafetySuspendPropagatesProviderPauseAndRequiresExplicitResume(t *testing.T) {
+	app := studioTestApp(t)
+	fixture := &backgroundPauseFixture{app: app}
+	app.registry.Set("pause-fixture", fixture)
+
+	app.SuspendBackground("windows_suspend")
+	status, ok := app.SessionStatus().(map[string]any)
+	if !ok || status["paused"] != true || status["pause_reason"] != "windows_suspend" {
+		t.Fatalf("suspend status=%+v", app.SessionStatus())
+	}
+	if len(fixture.observed) != 1 || !fixture.observed[0].pausedArg || !fixture.observed[0].sessionPaused {
+		t.Fatalf("provider suspend propagation=%+v", fixture.observed)
+	}
+
+	app.SuspendBackground("windows_session_lock")
+	status = app.SessionStatus().(map[string]any)
+	if status["pause_reason"] != "windows_session_lock" {
+		t.Fatalf("repeated safety reason not updated: %+v", status)
+	}
+	if len(fixture.observed) != 2 || !fixture.observed[1].pausedArg {
+		t.Fatalf("repeated safety pause provider events=%+v", fixture.observed)
+	}
+
+	app.PauseBackground(false)
+	status = app.SessionStatus().(map[string]any)
+	if status["paused"] != false || status["pause_reason"] != "" {
+		t.Fatalf("explicit resume did not clear safety pause: %+v", status)
+	}
+	if len(fixture.observed) != 3 || fixture.observed[2].pausedArg || !fixture.observed[2].sessionPaused {
+		t.Fatalf("provider resume ordering=%+v", fixture.observed)
+	}
+}

@@ -7,14 +7,15 @@ import (
 )
 
 type Callbacks struct {
-	Command  func(string)
-	Request  func() error
-	Geometry func(domain.OverlayConfig)
-	Capture  func() ([]byte, error)
-	Analyze  func(imageJPEG []byte)
-	Control  func()
-	Cancel   func()
-	Quit     func()
+	Command           func(string)
+	Request           func() error
+	Geometry          func(domain.OverlayConfig)
+	Capture           func() ([]byte, error)
+	Analyze           func(imageJPEG []byte)
+	Control           func()
+	Cancel            func()
+	SuspendBackground func(string)
+	Quit              func()
 }
 
 type Overlay interface {

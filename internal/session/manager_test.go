@@ -1684,3 +1684,59 @@ func TestAudioRuntimeStatusReportsResolvedProcessIdentity(t *testing.T) {
 		t.Fatalf("process runtime status=%+v", runtime.status)
 	}
 }
+
+func TestSafetyPauseStopsAutoSourcesUntilExplicitResume(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	cfg.Pipelines[0].Sources[0].AutoStart = true
+	var captures atomic.Int32
+	started := make(chan struct{}, 4)
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		captures.Add(1)
+		started <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx, cfg)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("autostart source did not start")
+	}
+	generation := manager.contexts.Generation("p", "c")
+	manager.PauseForSafety("windows_session_lock")
+	deadline := time.Now().Add(time.Second)
+	for manager.source("a") != nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if manager.source("a") != nil {
+		t.Fatal("safety pause did not stop source")
+	}
+	status := manager.Status()
+	if status["paused"] != true || status["pause_reason"] != "windows_session_lock" {
+		t.Fatalf("safety pause status=%+v", status)
+	}
+	if manager.contexts.Generation("p", "c") != generation {
+		t.Fatal("safety pause cleared local context generation")
+	}
+	if !manager.cfg.Pipelines[0].Sources[0].AutoStart {
+		t.Fatal("safety pause changed saved AutoStart policy")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if captures.Load() != 1 {
+		t.Fatalf("safety pause restarted source automatically: captures=%d", captures.Load())
+	}
+	manager.Pause(false)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("explicit resume did not restart AutoStart source")
+	}
+	status = manager.Status()
+	if status["paused"] != false || status["pause_reason"] != "" {
+		t.Fatalf("explicit resume status=%+v", status)
+	}
+	manager.Close()
+}

@@ -146,6 +146,7 @@ type Manager struct {
 	cancel                context.CancelFunc
 	started               bool
 	paused                bool
+	pauseReason           string
 	permissionGeneration  uint64
 	permissionPolicy      capturePermissionPolicy
 	permissionPolicySet   bool
@@ -239,6 +240,7 @@ func (m *Manager) Close() {
 	cancel := m.cancel
 	m.started = false
 	m.paused = false
+	m.pauseReason = ""
 	m.sourceOverrides = map[string]bool{}
 	m.mu.Unlock()
 	m.resetAllAudioRestartFailures()
@@ -374,8 +376,27 @@ func findCommand(p *domain.Pipeline, action string) (domain.CommandConfig, bool)
 	return domain.CommandConfig{}, false
 }
 
-func (m *Manager) Pause(paused bool) { m.mu.Lock(); m.paused = paused; m.mu.Unlock(); m.reconcile() }
-func (m *Manager) Paused() bool      { m.mu.RLock(); defer m.mu.RUnlock(); return m.paused }
+func (m *Manager) Pause(paused bool) {
+	m.mu.Lock()
+	m.paused = paused
+	if paused {
+		m.pauseReason = "manual"
+	} else {
+		m.pauseReason = ""
+	}
+	m.mu.Unlock()
+	m.reconcile()
+}
+
+func (m *Manager) PauseForSafety(reason string) {
+	m.mu.Lock()
+	m.paused = true
+	m.pauseReason = reason
+	m.mu.Unlock()
+	m.reconcile()
+}
+
+func (m *Manager) Paused() bool { m.mu.RLock(); defer m.mu.RUnlock(); return m.paused }
 
 func (m *Manager) sourceWantedLocked(src domain.EventSource) bool {
 	if v, ok := m.sourceOverrides[src.ID]; ok {
@@ -1433,6 +1454,7 @@ func (m *Manager) Status() map[string]any {
 	m.mu.RLock()
 	cfg := m.cfg
 	paused := m.paused
+	pauseReason := m.pauseReason
 	list := make([]*sourceRuntime, 0, len(m.sources))
 	for _, r := range m.sources {
 		list = append(list, r)
@@ -1456,5 +1478,5 @@ func (m *Manager) Status() map[string]any {
 	m.mu.RLock()
 	permissionGeneration := m.permissionGeneration
 	m.mu.RUnlock()
-	return map[string]any{"active_pipeline_id": pid, "paused": paused, "permission_generation": permissionGeneration, "sources": rows, "contexts": contexts, "governor": m.governor.Snapshot()}
+	return map[string]any{"active_pipeline_id": pid, "paused": paused, "pause_reason": pauseReason, "permission_generation": permissionGeneration, "sources": rows, "contexts": contexts, "governor": m.governor.Snapshot()}
 }

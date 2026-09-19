@@ -110,7 +110,7 @@ func (o *winOverlay) SetHotkeyEditor(active bool) {
 func (o *winOverlay) Diagnostics() any {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	return map[string]any{"protection": o.protection, "hotkey_error": o.hotkeyError, "ghost": o.ghost, "ghost_transient": o.ghost != o.configGhost, "hotkey_editor": o.suspended.Load(), "user_hidden": o.visibility.hiddenByUser(), "visibility_suppressed": o.visibility.suppressed()}
+	return map[string]any{"protection": o.protection, "hotkey_error": o.hotkeyError, "lifecycle_error": o.lifecycleError, "wts_registered": o.wtsRegistered, "ghost": o.ghost, "ghost_transient": o.ghost != o.configGhost, "hotkey_editor": o.suspended.Load(), "user_hidden": o.visibility.hiddenByUser(), "visibility_suppressed": o.visibility.suppressed()}
 }
 func (o *winOverlay) saveGeometry() {
 	var r rect

@@ -92,51 +92,54 @@ const (
 )
 
 var (
-	user32                         = syscall.NewLazyDLL("user32.dll")
-	gdi32                          = syscall.NewLazyDLL("gdi32.dll")
-	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
-	dwmapi                         = syscall.NewLazyDLL("dwmapi.dll")
-	shell32                        = syscall.NewLazyDLL("shell32.dll")
-	pRegisterClassEx               = user32.NewProc("RegisterClassExW")
-	pCreateWindowEx                = user32.NewProc("CreateWindowExW")
-	pDefWindowProc                 = user32.NewProc("DefWindowProcW")
-	pShowWindow                    = user32.NewProc("ShowWindow")
-	pUpdateWindow                  = user32.NewProc("UpdateWindow")
-	pGetMessage                    = user32.NewProc("GetMessageW")
-	pTranslateMessage              = user32.NewProc("TranslateMessage")
-	pDispatchMessage               = user32.NewProc("DispatchMessageW")
-	pPostQuitMessage               = user32.NewProc("PostQuitMessage")
-	pRegisterHotKey                = user32.NewProc("RegisterHotKey")
-	pUnregisterHotKey              = user32.NewProc("UnregisterHotKey")
-	pSetWindowLongPtr              = user32.NewProc("SetWindowLongPtrW")
-	pGetWindowLongPtr              = user32.NewProc("GetWindowLongPtrW")
-	pSetWindowPos                  = user32.NewProc("SetWindowPos")
-	pSetLayeredWindowAttributes    = user32.NewProc("SetLayeredWindowAttributes")
-	pInvalidateRect                = user32.NewProc("InvalidateRect")
-	pBeginPaint                    = user32.NewProc("BeginPaint")
-	pEndPaint                      = user32.NewProc("EndPaint")
-	pGetClientRect                 = user32.NewProc("GetClientRect")
-	pGetWindowRect                 = user32.NewProc("GetWindowRect")
-	pGetCursorPos                  = user32.NewProc("GetCursorPos")
-	pDrawText                      = user32.NewProc("DrawTextW")
-	pFillRect                      = user32.NewProc("FillRect")
-	pGetDC                         = user32.NewProc("GetDC")
-	pReleaseDC                     = user32.NewProc("ReleaseDC")
-	pGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
-	pSetWindowDisplayAffinity      = user32.NewProc("SetWindowDisplayAffinity")
-	pSetWindowCompositionAttribute = user32.NewProc("SetWindowCompositionAttribute")
-	pGetModuleHandle               = kernel32.NewProc("GetModuleHandleW")
-	pCreateCompatibleDC            = gdi32.NewProc("CreateCompatibleDC")
-	pDeleteDC                      = gdi32.NewProc("DeleteDC")
-	pSelectObject                  = gdi32.NewProc("SelectObject")
-	pBitBlt                        = gdi32.NewProc("BitBlt")
-	pDeleteObject                  = gdi32.NewProc("DeleteObject")
-	pSetBkMode                     = gdi32.NewProc("SetBkMode")
-	pSetTextColor                  = gdi32.NewProc("SetTextColor")
-	pCreateSolidBrush              = gdi32.NewProc("CreateSolidBrush")
-	pCreateFont                    = gdi32.NewProc("CreateFontW")
-	pDwmFlush                      = dwmapi.NewProc("DwmFlush")
-	pShellNotifyIcon               = shell32.NewProc("Shell_NotifyIconW")
+	user32                            = syscall.NewLazyDLL("user32.dll")
+	gdi32                             = syscall.NewLazyDLL("gdi32.dll")
+	kernel32                          = syscall.NewLazyDLL("kernel32.dll")
+	dwmapi                            = syscall.NewLazyDLL("dwmapi.dll")
+	shell32                           = syscall.NewLazyDLL("shell32.dll")
+	wtsapi32                          = syscall.NewLazyDLL("wtsapi32.dll")
+	pRegisterClassEx                  = user32.NewProc("RegisterClassExW")
+	pCreateWindowEx                   = user32.NewProc("CreateWindowExW")
+	pDefWindowProc                    = user32.NewProc("DefWindowProcW")
+	pShowWindow                       = user32.NewProc("ShowWindow")
+	pUpdateWindow                     = user32.NewProc("UpdateWindow")
+	pGetMessage                       = user32.NewProc("GetMessageW")
+	pTranslateMessage                 = user32.NewProc("TranslateMessage")
+	pDispatchMessage                  = user32.NewProc("DispatchMessageW")
+	pPostQuitMessage                  = user32.NewProc("PostQuitMessage")
+	pRegisterHotKey                   = user32.NewProc("RegisterHotKey")
+	pUnregisterHotKey                 = user32.NewProc("UnregisterHotKey")
+	pSetWindowLongPtr                 = user32.NewProc("SetWindowLongPtrW")
+	pGetWindowLongPtr                 = user32.NewProc("GetWindowLongPtrW")
+	pSetWindowPos                     = user32.NewProc("SetWindowPos")
+	pSetLayeredWindowAttributes       = user32.NewProc("SetLayeredWindowAttributes")
+	pInvalidateRect                   = user32.NewProc("InvalidateRect")
+	pBeginPaint                       = user32.NewProc("BeginPaint")
+	pEndPaint                         = user32.NewProc("EndPaint")
+	pGetClientRect                    = user32.NewProc("GetClientRect")
+	pGetWindowRect                    = user32.NewProc("GetWindowRect")
+	pGetCursorPos                     = user32.NewProc("GetCursorPos")
+	pDrawText                         = user32.NewProc("DrawTextW")
+	pFillRect                         = user32.NewProc("FillRect")
+	pGetDC                            = user32.NewProc("GetDC")
+	pReleaseDC                        = user32.NewProc("ReleaseDC")
+	pGetSystemMetrics                 = user32.NewProc("GetSystemMetrics")
+	pSetWindowDisplayAffinity         = user32.NewProc("SetWindowDisplayAffinity")
+	pSetWindowCompositionAttribute    = user32.NewProc("SetWindowCompositionAttribute")
+	pGetModuleHandle                  = kernel32.NewProc("GetModuleHandleW")
+	pCreateCompatibleDC               = gdi32.NewProc("CreateCompatibleDC")
+	pDeleteDC                         = gdi32.NewProc("DeleteDC")
+	pSelectObject                     = gdi32.NewProc("SelectObject")
+	pBitBlt                           = gdi32.NewProc("BitBlt")
+	pDeleteObject                     = gdi32.NewProc("DeleteObject")
+	pSetBkMode                        = gdi32.NewProc("SetBkMode")
+	pSetTextColor                     = gdi32.NewProc("SetTextColor")
+	pCreateSolidBrush                 = gdi32.NewProc("CreateSolidBrush")
+	pCreateFont                       = gdi32.NewProc("CreateFontW")
+	pDwmFlush                         = dwmapi.NewProc("DwmFlush")
+	pShellNotifyIcon                  = shell32.NewProc("Shell_NotifyIconW")
+	pWTSRegisterSessionNotification   = wtsapi32.NewProc("WTSRegisterSessionNotification")
+	pWTSUnregisterSessionNotification = wtsapi32.NewProc("WTSUnRegisterSessionNotification")
 )
 
 type point struct{ X, Y int32 }
@@ -211,6 +214,8 @@ type winOverlay struct {
 	visibility                            visibilityState
 	configGhost                           bool
 	hotkeyError                           string
+	lifecycleError                        string
+	wtsRegistered                         bool
 	protection                            ProtectionStatus
 	mu                                    sync.RWMutex
 	hwnd                                  atomic.Uintptr
@@ -291,6 +296,7 @@ func (o *winOverlay) createWindow() error {
 	}
 	o.hwnd.Store(hwnd)
 	windowMap.Store(hwnd, o)
+	o.registerLifecycleNotifications(hwnd)
 	o.recreateGDI()
 	o.applyNative()
 	if err := o.registerHotkeys(); err != nil {
@@ -301,6 +307,29 @@ func (o *winOverlay) createWindow() error {
 	pUpdateWindow.Call(hwnd)
 	return nil
 }
+func (o *winOverlay) registerLifecycleNotifications(hwnd uintptr) {
+	result, _, callErr := pWTSRegisterSessionNotification.Call(hwnd, 0) // NOTIFY_FOR_THIS_SESSION
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if result == 0 {
+		o.lifecycleError = fmt.Sprintf("WTS session lifecycle registration failed: %v", callErr)
+		o.wtsRegistered = false
+		return
+	}
+	o.lifecycleError = ""
+	o.wtsRegistered = true
+}
+
+func (o *winOverlay) unregisterLifecycleNotifications() {
+	o.mu.Lock()
+	registered := o.wtsRegistered
+	o.wtsRegistered = false
+	o.mu.Unlock()
+	if registered && o.hwnd.Load() != 0 {
+		pWTSUnregisterSessionNotification.Call(o.hwnd.Load())
+	}
+}
+
 func globalWndProc(hwnd uintptr, message uint32, wparam, lparam uintptr) uintptr {
 	v, ok := windowMap.Load(hwnd)
 	if !ok {
@@ -320,6 +349,16 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 				return 0
 			}
 		}
+	case wmPowerBroadcast:
+		if reason, suspend := backgroundSuspendReason(message, wparam); suspend && o.cb.SuspendBackground != nil {
+			go o.cb.SuspendBackground(reason)
+		}
+		return 1
+	case wmWTSSessionChange:
+		if reason, suspend := backgroundSuspendReason(message, wparam); suspend && o.cb.SuspendBackground != nil {
+			go o.cb.SuspendBackground(reason)
+		}
+		return 0
 	case 0x0232: // WM_EXITSIZEMOVE
 		o.saveGeometry()
 		return 0
@@ -405,6 +444,7 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 		return 0
 	case wmDestroy:
 		o.removeTrayIcon()
+		o.unregisterLifecycleNotifications()
 		windowMap.Delete(o.hwnd.Load())
 		o.hwnd.Store(0)
 		pPostQuitMessage.Call(0)

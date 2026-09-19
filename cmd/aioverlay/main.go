@@ -63,6 +63,9 @@ func main() {
 			},
 			Control: studio.Show,
 			Cancel:  server.ClearPresentation,
+			SuspendBackground: func(reason string) {
+				a.SuspendBackground(reason)
+			},
 			Geometry: func(next domain.OverlayConfig) {
 				if err := a.SaveGeometry(next); err != nil {
 					log.Printf("geometry save: %v", err)

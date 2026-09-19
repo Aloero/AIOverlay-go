@@ -140,7 +140,14 @@ release guard that forbids system-endpoint fallback. The Windows acceptance test
 harness is opt-in via `AIO_PROCESS_LOOPBACK_EXE` and cross-compiles, but no real
 Windows process-loopback/Zoom/Teams audio capture has been run in this Linux
 verification, so T23/native quality and OS-driver behavior remain physically
-unverified. Local STT now has a
+unverified. Windows sleep/lock safety policy is now wired through the existing
+overlay message loop: `PBT_APMSUSPEND` and WTS session lock safety-pause sensitive
+background sources, expose `pause_reason`, and leave unlock/resume inert until the
+user explicitly resumes background work. WTS registration state/error is exposed in
+platform diagnostics. This policy is covered by pure/core/app/static tests only.
+Per the current acceptance scope, Windows-target verification and a physical
+suspend/lock/resume cycle were not run for this slice; native event delivery is
+therefore not claimed. Local STT now has a
 production keyless provider boundary for an explicitly configured compatible
 helper executable and model resource: one long-lived child process, bounded
 RAM-only PCM16 IPC, per-request cancellation, helper reuse/restart, missing-resource
