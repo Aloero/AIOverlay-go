@@ -43,6 +43,12 @@ func (a *App) ValidatePreparedCommand(prepared session.PreparedCommand) error {
 	}
 	return a.sessions.ValidatePreparedCommand(prepared)
 }
+func (a *App) RecordCommandObservation(prepared session.PreparedCommand, observation engine.Observation) bool {
+	if a.sessions == nil {
+		return false
+	}
+	return a.sessions.RecordCommandObservation(prepared, observation)
+}
 func (a *App) RecordCommandResult(prepared session.PreparedCommand, result engine.Result) bool {
 	if a.sessions == nil {
 		return false

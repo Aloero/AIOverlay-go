@@ -16,6 +16,7 @@ import (
 type ContextView struct {
 	Text      string
 	ImageJPEG []byte
+	EntryIDs  []string
 }
 
 type Input struct {
@@ -24,10 +25,11 @@ type Input struct {
 	ContextIncomplete                      bool
 	EntryNodeID, Intent, SourceID, EventID string
 
-	ImageJPEG    []byte
-	ImagePinned  bool
-	ContextViews map[string]ContextView
-	Text         string
+	ImageJPEG        []byte
+	ImagePinned      bool
+	ContextViews     map[string]ContextView
+	DefaultContextID string
+	Text             string
 }
 
 type CallLease interface {
@@ -136,5 +138,8 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 	}
 	t.PipelineID = r.redact.text(t.PipelineID)
 	e.traces.Add(t)
-	return Result{Text: text, Trace: domain.CloneTrace(t), Published: r.published, Observations: r.observations}, e.safeError(err)
+	r.observationMu.Lock()
+	observations := append([]Observation(nil), r.observations...)
+	r.observationMu.Unlock()
+	return Result{Text: text, Trace: domain.CloneTrace(t), Published: r.published, Observations: observations}, e.safeError(err)
 }

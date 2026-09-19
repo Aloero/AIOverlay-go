@@ -9,11 +9,13 @@ import (
 )
 
 type Observation struct {
-	Kind      string
-	Text      string
-	SegmentID string
-	Revision  uint64
-	Final     bool
+	Kind        string
+	Text        string
+	SegmentID   string
+	ContextID   string
+	DerivedFrom []string
+	Revision    uint64
+	Final       bool
 }
 type decision struct {
 	Action     string `json:"action"`
@@ -58,9 +60,15 @@ func (r *runner) observeValue(observation Observation) {
 	}
 	observation.Text = clipText(r.redact.text(observation.Text), 32000)
 	observation.SegmentID = r.redact.text(observation.SegmentID)
+	observation.ContextID = r.redact.text(observation.ContextID)
+	for i := range observation.DerivedFrom {
+		observation.DerivedFrom[i] = r.redact.text(observation.DerivedFrom[i])
+	}
+	r.observationMu.Lock()
 	if len(r.observations) < 100 {
 		r.observations = append(r.observations, observation)
 	}
+	r.observationMu.Unlock()
 	if r.opt.OnObservation != nil {
 		r.callbackMu.Lock()
 		r.opt.OnObservation(observation)
@@ -77,6 +85,12 @@ func clipText(s string, n int) string {
 	return s[:n]
 }
 func (r *runner) modelStage(ctx context.Context, n domain.Node, v nodeValue) (nodeValue, domain.Outcome, error) {
+	if n.ModelPool != nil && n.ModelPool.ResultName == "context.summary" {
+		contextID, derived := r.summaryProvenance(n)
+		if contextID == "" || len(derived) == 0 {
+			return v, domain.OutcomeValidationFailed, fmt.Errorf("context summary requires a selected context with provenance entries")
+		}
+	}
 	if n.ModelPool != nil && n.ModelPool.Task == "transcribe" {
 		ctx = context.WithValue(ctx, silentKey{}, true)
 	}
@@ -96,6 +110,11 @@ func (r *runner) modelStage(ctx context.Context, n domain.Node, v nodeValue) (no
 	if n.ModelPool.ResultName == "vision.text" {
 		out.vision = out.text
 		r.observe("vision.text", out.text)
+	}
+	if n.ModelPool.ResultName == "context.summary" {
+		contextID, derived := r.summaryProvenance(n)
+		r.observeValue(Observation{Kind: "context.summary", Text: out.text, ContextID: contextID, DerivedFrom: derived, SegmentID: n.ID + ":" + r.input.EventID, Revision: 1, Final: true})
+		out.hasOutput = false
 	}
 	return out, o, nil
 }
@@ -155,4 +174,23 @@ func (r *runner) capture(ctx context.Context, node string) ([]byte, error) {
 		return nil, err
 	}
 	return image, nil
+}
+
+func (r *runner) summaryProvenance(node domain.Node) (string, []string) {
+	contextID := r.input.DefaultContextID
+	mode := node.ContextMode
+	if mode == "" && node.ContextID != "" {
+		mode = "named"
+	}
+	switch mode {
+	case "none":
+		return "", nil
+	case "named":
+		contextID = node.ContextID
+	}
+	view, ok := r.input.ContextViews[contextID]
+	if !ok {
+		return contextID, nil
+	}
+	return contextID, append([]string(nil), view.EntryIDs...)
 }

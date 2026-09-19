@@ -18,6 +18,7 @@ type sessionBackend interface {
 	PreviewCommand(string) (session.CommandPreview, error)
 	PrepareCommand(context.Context, string, session.ScreenCapture) (session.PreparedCommand, error)
 	ValidatePreparedCommand(session.PreparedCommand) error
+	RecordCommandObservation(session.PreparedCommand, engine.Observation) bool
 	RecordCommandResult(session.PreparedCommand, engine.Result) bool
 	PauseBackground(bool)
 	SetSourceRunning(string, bool) error
@@ -84,6 +85,13 @@ func (s *Server) StartCommand(action string) (string, error) {
 			return engine.Result{Trace: emptyCommandTrace(prepared.PipelineID, prepared.Command.ID, purpose)}, nil, nil
 		}
 		opt.Capture = prepared.Capture
+		previousObservation := opt.OnObservation
+		opt.OnObservation = func(observation engine.Observation) {
+			if previousObservation != nil {
+				previousObservation(observation)
+			}
+			b.RecordCommandObservation(prepared, observation)
+		}
 		res, err := live.Run(ctx, prepared.PipelineID, prepared.Input, opt)
 		if err == nil {
 			b.RecordCommandResult(prepared, res)

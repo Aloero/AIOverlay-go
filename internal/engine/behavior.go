@@ -294,6 +294,9 @@ func behaviorAIStages(pipeline domain.Pipeline, reachable []BehaviorNode, starts
 		if node.Type == domain.NodeDecision && intent == domain.IntentRespond {
 			continue
 		}
+		if node.ModelPool.AudioPreprocessor != nil {
+			stages = append(stages, behaviorAIStage(pipeline, node, node.ID+"/audio", node.Name+" / Audio transcription", node.ModelPool.AudioPreprocessor, starts))
+		}
 		if node.ModelPool.VisionPreprocessor != nil {
 			stages = append(stages, behaviorAIStage(pipeline, node, node.ID+"/vision", node.Name+" / Vision", node.ModelPool.VisionPreprocessor, starts))
 		}

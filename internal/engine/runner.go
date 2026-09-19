@@ -36,12 +36,14 @@ type nodeValue struct {
 	contextText   string
 	hasOutput     bool
 	imageResolved bool
+	audioResolved bool
 	imagePinned   bool
 }
 type runner struct {
 	waited, published bool
 	captures          int
 	observations      []Observation
+	observationMu     sync.Mutex
 	lastNode          string
 	lastOutcome       domain.Outcome
 	redact            redactor
@@ -176,7 +178,7 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 				r.waited = true
 				return "", nil
 			}
-			if !value.hasOutput && strings.TrimSpace(value.text) == "" {
+			if !value.hasOutput {
 				return "", fmt.Errorf("output reached without an accepted answer")
 			}
 			r.published = true

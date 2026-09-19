@@ -195,21 +195,24 @@ type CatalogSelection struct {
 }
 
 type ModelPoolConfig struct {
-	Task               string                     `json:"task,omitempty"`
-	ResultName         string                     `json:"result_name,omitempty"`
-	Order              PoolPolicy                 `json:"order,omitempty"`
-	Dispatch           DispatchPolicy             `json:"dispatch,omitempty"`
-	Extra              map[string]json.RawMessage `json:"-"`
-	Selection          *CatalogSelection          `json:"selection,omitempty"`
-	Policy             PoolPolicy                 `json:"policy"`
-	Models             []ModelSlot                `json:"models"`
-	VisionPreprocessor *ModelPoolConfig           `json:"vision_preprocessor,omitempty"`
-	Prompt             PromptConfig               `json:"prompt"`
-	QualityFloor       float64                    `json:"quality_floor"`
-	MaxParallel        int                        `json:"max_parallel"`
-	MaxCalls           int                        `json:"max_calls"`
-	HedgeDelayMS       int                        `json:"hedge_delay_ms"`
-	RoundRobinCursor   int                        `json:"round_robin_cursor"`
+	Task                       string                     `json:"task,omitempty"`
+	ResultName                 string                     `json:"result_name,omitempty"`
+	Order                      PoolPolicy                 `json:"order,omitempty"`
+	Dispatch                   DispatchPolicy             `json:"dispatch,omitempty"`
+	Extra                      map[string]json.RawMessage `json:"-"`
+	Selection                  *CatalogSelection          `json:"selection,omitempty"`
+	Policy                     PoolPolicy                 `json:"policy"`
+	Models                     []ModelSlot                `json:"models"`
+	VisionPreprocessor         *ModelPoolConfig           `json:"vision_preprocessor,omitempty"`
+	AudioPreprocessor          *ModelPoolConfig           `json:"audio_preprocessor,omitempty"`
+	VisionPreprocessorOptional bool                       `json:"vision_preprocessor_optional,omitempty"`
+	AudioPreprocessorOptional  bool                       `json:"audio_preprocessor_optional,omitempty"`
+	Prompt                     PromptConfig               `json:"prompt"`
+	QualityFloor               float64                    `json:"quality_floor"`
+	MaxParallel                int                        `json:"max_parallel"`
+	MaxCalls                   int                        `json:"max_calls"`
+	HedgeDelayMS               int                        `json:"hedge_delay_ms"`
+	RoundRobinCursor           int                        `json:"round_robin_cursor"`
 }
 
 type ModelSlot struct {

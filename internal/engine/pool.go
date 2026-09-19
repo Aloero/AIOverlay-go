@@ -17,15 +17,9 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 	if pool == nil {
 		return nodeValue{}, domain.OutcomeInvalidResponse, fmt.Errorf("pool missing")
 	}
-	modelInput := input
-	// VLM -> LLM composite: a configured vision preprocessor is executed first and its output becomes text input.
-	if pool.VisionPreprocessor != nil {
-		visionNode := domain.Node{ID: n.ID + "/vision", Type: domain.NodeModelPool, Name: n.Name + " Vision", ContextMode: n.ContextMode, ContextID: n.ContextID, ModelPool: pool.VisionPreprocessor}
-		v, outcome, err := r.runPool(context.WithValue(ctx, silentKey{}, true), visionNode, input)
-		if err != nil {
-			return nodeValue{}, outcome, err
-		}
-		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true, imageResolved: true, audio: input.audio, transcript: input.transcript}
+	modelInput, outcome, err := r.runMediaPreprocessors(ctx, n, *pool, input)
+	if err != nil {
+		return nodeValue{}, outcome, err
 	}
 	gate := &streamGate{runner: r, silent: ctx.Value(silentKey{}) == true}
 	ctx = context.WithValue(ctx, streamKey{}, gate)
@@ -70,6 +64,84 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 		}
 		return nodeValue{}, lastOutcome, lastErr
 	}
+}
+
+type mediaPreprocessorResult struct {
+	kind    string
+	value   nodeValue
+	outcome domain.Outcome
+	err     error
+}
+
+func (r *runner) runMediaPreprocessors(ctx context.Context, node domain.Node, pool domain.ModelPoolConfig, input nodeValue) (nodeValue, domain.Outcome, error) {
+	branches := 0
+	results := make(chan mediaPreprocessorResult, 2)
+	launch := func(kind string, preprocessor *domain.ModelPoolConfig, branchInput nodeValue) {
+		branches++
+		preprocessorNode := domain.Node{
+			ID: node.ID + "/" + kind, Type: domain.NodeModelPool, Name: node.Name + " " + kind,
+			ContextMode: node.ContextMode, ContextID: node.ContextID, ModelPool: preprocessor,
+		}
+		go func() {
+			value, outcome, err := r.runPool(context.WithValue(ctx, silentKey{}, true), preprocessorNode, branchInput)
+			results <- mediaPreprocessorResult{kind: kind, value: value, outcome: outcome, err: err}
+		}()
+	}
+
+	if pool.VisionPreprocessor != nil {
+		if len(input.image) == 0 {
+			if !pool.VisionPreprocessorOptional {
+				return nodeValue{}, domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "vision preprocessor requires an image"}
+			}
+		} else {
+			visionInput := input
+			visionInput.audio = nil
+			visionInput.transcript = ""
+			launch("vision", pool.VisionPreprocessor, visionInput)
+		}
+	}
+	if pool.AudioPreprocessor != nil {
+		if input.audio == nil {
+			if !pool.AudioPreprocessorOptional {
+				return nodeValue{}, domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "audio preprocessor requires audio"}
+			}
+		} else {
+			audioInput := input
+			audioInput.image = nil
+			audioInput.vision = ""
+			launch("audio", pool.AudioPreprocessor, audioInput)
+		}
+	}
+	if branches == 0 {
+		return input, domain.OutcomeSuccess, nil
+	}
+
+	modelInput := input
+	failures := map[string]mediaPreprocessorResult{}
+	for range branches {
+		result := <-results
+		optional := result.kind == "vision" && pool.VisionPreprocessorOptional || result.kind == "audio" && pool.AudioPreprocessorOptional
+		if result.err != nil {
+			if optional {
+				r.emit(domain.TraceEvent{Kind: "preprocessor_optional_failed", NodeID: node.ID + "/" + result.kind, Outcome: result.outcome, Message: result.err.Error()})
+				continue
+			}
+			failures[result.kind] = result
+			continue
+		}
+		mergeMediaPreprocessorValue(&modelInput, result.kind, result.value)
+		if result.kind == "vision" {
+			r.observe("vision.text", result.value.text)
+		} else if result.kind == "audio" {
+			r.observeTranscript(result.value.text)
+		}
+	}
+	for _, kind := range []string{"vision", "audio"} {
+		if failure, ok := failures[kind]; ok {
+			return nodeValue{}, failure.outcome, failure.err
+		}
+	}
+	return modelInput, domain.OutcomeSuccess, nil
 }
 
 func (r *runner) racePool(ctx context.Context, n domain.Node, pool domain.ModelPoolConfig, input nodeValue, models []domain.ModelSlot, delay time.Duration) (nodeValue, domain.Outcome, error) {
@@ -198,12 +270,20 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 	}
 	if input.audio != nil {
 		if !caps.Audio {
-			return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "Audio is unsupported by this transport; add a transcription stage"}
+			if input.audioResolved {
+				input.audio = nil
+			} else {
+				return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "Audio is unsupported by this transport; add a transcription stage"}
+			}
 		}
-		if r.engine.catalog != nil {
+		if input.audio != nil && r.engine.catalog != nil {
 			ref := catalog.ProviderID(pc) + "/" + strings.TrimPrefix(m.ModelID, catalog.ProviderID(pc)+"/")
 			if meta, known := r.engine.catalog.Find(ref); known && !meta.HasAudioInput() {
-				return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "Model does not advertise audio input"}
+				if input.audioResolved {
+					input.audio = nil
+				} else {
+					return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "Model does not advertise audio input"}
+				}
 			}
 		}
 	} else if pool.Task == "transcribe" {

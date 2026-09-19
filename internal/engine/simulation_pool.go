@@ -8,18 +8,143 @@ import (
 	"strings"
 )
 
+type simulatedMediaPreprocessor struct {
+	kind     string
+	pool     *domain.ModelPoolConfig
+	input    nodeValue
+	optional bool
+}
+
+type simulatedMediaPreprocessorResult struct {
+	kind    string
+	value   nodeValue
+	outcome domain.Outcome
+	err     error
+	endedAt int64
+	until   map[string]int64
+}
+
+func (s *simulator) mediaPreprocessors(node domain.Node, pool domain.ModelPoolConfig, input nodeValue) (nodeValue, domain.Outcome, error) {
+	branches := make([]simulatedMediaPreprocessor, 0, 2)
+	if pool.VisionPreprocessor != nil {
+		if len(input.image) == 0 {
+			if !pool.VisionPreprocessorOptional {
+				return nodeValue{}, domain.OutcomeUnsupportedModality, fmt.Errorf("vision preprocessor requires an image")
+			}
+		} else {
+			branchInput := input
+			branchInput.audio = nil
+			branchInput.transcript = ""
+			branches = append(branches, simulatedMediaPreprocessor{kind: "vision", pool: pool.VisionPreprocessor, input: branchInput, optional: pool.VisionPreprocessorOptional})
+		}
+	}
+	if pool.AudioPreprocessor != nil {
+		if input.audio == nil {
+			if !pool.AudioPreprocessorOptional {
+				return nodeValue{}, domain.OutcomeUnsupportedModality, fmt.Errorf("audio preprocessor requires audio")
+			}
+		} else {
+			branchInput := input
+			branchInput.image = nil
+			branchInput.vision = ""
+			branches = append(branches, simulatedMediaPreprocessor{kind: "audio", pool: pool.AudioPreprocessor, input: branchInput, optional: pool.AudioPreprocessorOptional})
+		}
+	}
+	if len(branches) == 0 {
+		return input, domain.OutcomeSuccess, nil
+	}
+
+	start := s.now
+	initialUntil := cloneSimulationTimes(s.until)
+	eventStart := len(s.r.trace.Events)
+	results := make([]simulatedMediaPreprocessorResult, 0, len(branches))
+	maxEnd := start
+	for _, branch := range branches {
+		s.now = start
+		s.until = cloneSimulationTimes(initialUntil)
+		branchNode := domain.Node{
+			ID: node.ID + "/" + branch.kind, Type: domain.NodeModelPool, Name: node.Name + " " + branch.kind,
+			ContextMode: node.ContextMode, ContextID: node.ContextID, ModelPool: branch.pool,
+		}
+		value, outcome, branchErr := s.pool(branchNode, branch.input)
+		if s.now > maxEnd {
+			maxEnd = s.now
+		}
+		results = append(results, simulatedMediaPreprocessorResult{
+			kind: branch.kind, value: value, outcome: outcome, err: branchErr, endedAt: s.now, until: cloneSimulationTimes(s.until),
+		})
+	}
+	s.until = mergeSimulationTimes(initialUntil, results)
+	s.now = maxEnd
+	sort.SliceStable(s.r.trace.Events[eventStart:], func(i, j int) bool {
+		return s.r.trace.Events[eventStart+i].AtMS < s.r.trace.Events[eventStart+j].AtMS
+	})
+
+	modelInput := input
+	failures := map[string]simulatedMediaPreprocessorResult{}
+	for index, result := range results {
+		branch := branches[index]
+		if result.err != nil {
+			if branch.optional {
+				s.emit(domain.TraceEvent{Kind: "preprocessor_optional_failed", NodeID: node.ID + "/" + result.kind, Outcome: result.outcome, Message: result.err.Error()})
+				continue
+			}
+			failures[result.kind] = result
+			continue
+		}
+		mergeMediaPreprocessorValue(&modelInput, result.kind, result.value)
+	}
+	for _, branch := range branches {
+		if failure, ok := failures[branch.kind]; ok {
+			return nodeValue{}, failure.outcome, failure.err
+		}
+	}
+	return modelInput, domain.OutcomeSuccess, nil
+}
+
+func cloneSimulationTimes(source map[string]int64) map[string]int64 {
+	copy := make(map[string]int64, len(source))
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
+}
+
+func mergeSimulationTimes(initial map[string]int64, results []simulatedMediaPreprocessorResult) map[string]int64 {
+	merged := cloneSimulationTimes(initial)
+	for _, result := range results {
+		for key, value := range result.until {
+			current, exists := merged[key]
+			if !exists || value < 0 || current >= 0 && value > current {
+				merged[key] = value
+			}
+		}
+	}
+	return merged
+}
+
+func mergeMediaPreprocessorValue(target *nodeValue, kind string, value nodeValue) {
+	switch kind {
+	case "vision":
+		target.vision = value.text
+		target.imageResolved = true
+		if target.text == "" {
+			target.text = value.text
+		}
+	case "audio":
+		target.transcript = value.text
+		target.audioResolved = true
+	}
+}
+
 func (s *simulator) pool(n domain.Node, input nodeValue) (nodeValue, domain.Outcome, error) {
 	p := n.ModelPool
 	if p == nil {
 		return nodeValue{}, domain.OutcomeInvalidResponse, fmt.Errorf("pool missing")
 	}
-	modelInput := input
-	if p.VisionPreprocessor != nil {
-		v, o, err := s.pool(domain.Node{ID: n.ID + "/vision", Name: n.Name + " Vision", ModelPool: p.VisionPreprocessor, Type: domain.NodeModelPool}, input)
-		if err != nil {
-			return nodeValue{}, o, err
-		}
-		modelInput = nodeValue{text: v.text, vision: v.text, hasOutput: true, imageResolved: true}
+	modelInput, preprocessorOutcome, err := s.mediaPreprocessors(n, *p, input)
+	if err != nil {
+		return nodeValue{}, preprocessorOutcome, err
 	}
 	oldPlan := s.planID
 	s.planID = fmt.Sprintf("sim-plan-%d", len(s.r.trace.Events))

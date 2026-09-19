@@ -50,7 +50,13 @@ func (m *Manager) snapshotContextViews(pipelineID string, configs map[string]dom
 		if snapshot.Generation != generations[id] {
 			return nil, false
 		}
-		views[id] = engine.ContextView{Text: snapshot.Text, ImageJPEG: append([]byte(nil), snapshot.ImageJPEG...)}
+		entryIDs := make([]string, 0, len(snapshot.Entries))
+		for _, entry := range snapshot.Entries {
+			if entry.ID != "" && !entry.Gap {
+				entryIDs = append(entryIDs, entry.ID)
+			}
+		}
+		views[id] = engine.ContextView{Text: snapshot.Text, ImageJPEG: append([]byte(nil), snapshot.ImageJPEG...), EntryIDs: entryIDs}
 	}
 	return views, true
 }

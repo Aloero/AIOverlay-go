@@ -128,35 +128,40 @@ func describePoolInput(pipeline domain.Pipeline, nodeID string, starts []inputSt
 		result.AudioRequired = true
 		result.ImageRequired = false
 	}
+	var preprocessors []string
 	if result.Reachable && pool.VisionPreprocessor != nil && result.ImageRequired {
 		result.ImageRequired = false
 		result.TextAvailable = true
-		result.Mixed = result.AudioRequired
-		result.Source = nodeID + "/vision"
+		preprocessors = append(preprocessors, nodeID+"/vision")
+	}
+	if result.Reachable && pool.AudioPreprocessor != nil && result.AudioRequired {
+		result.AudioRequired = false
+		result.TextAvailable = true
+		preprocessors = append(preprocessors, nodeID+"/audio")
+	}
+	result.Mixed = boolInt(result.ImageRequired)+boolInt(result.AudioRequired)+boolInt(result.TextAvailable) > 1
+	if len(preprocessors) > 0 {
+		sort.Strings(preprocessors)
+		result.Source = strings.Join(preprocessors, ", ")
 	}
 	return result
 }
 
 func resolvePoolNode(pipeline domain.Pipeline, nodeID string) (string, *domain.ModelPoolConfig) {
-	rootID := nodeID
-	depth := 0
-	node, ok := findNode(pipeline, rootID)
-	for !ok && strings.HasSuffix(rootID, "/vision") {
-		rootID = strings.TrimSuffix(rootID, "/vision")
-		depth++
-		node, ok = findNode(pipeline, rootID)
-	}
-	if !ok || node.ModelPool == nil {
-		return "", nil
-	}
-	pool := node.ModelPool
-	for range depth {
-		pool = pool.VisionPreprocessor
-		if pool == nil {
-			return "", nil
+	for _, node := range pipeline.Nodes {
+		if node.ModelPool == nil {
+			continue
+		}
+		switch nodeID {
+		case node.ID:
+			return node.ID, node.ModelPool
+		case node.ID + "/vision":
+			return node.ID, node.ModelPool.VisionPreprocessor
+		case node.ID + "/audio":
+			return node.ID, node.ModelPool.AudioPreprocessor
 		}
 	}
-	return rootID, pool
+	return "", nil
 }
 
 func applySuccessfulNodeInput(node domain.Node, state inputState) inputState {

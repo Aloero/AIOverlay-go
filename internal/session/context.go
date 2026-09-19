@@ -10,17 +10,18 @@ import (
 )
 
 type ContextEntry struct {
-	ID       string    `json:"id"`
-	Kind     string    `json:"kind"`
-	SourceID string    `json:"source_id,omitempty"`
-	Text     string    `json:"text,omitempty"`
-	At       time.Time `json:"at"`
-	Start    time.Time `json:"start,omitempty"`
-	End      time.Time `json:"end,omitempty"`
-	Gap      bool      `json:"gap,omitempty"`
-	Revision uint64    `json:"revision,omitempty"`
-	Final    bool      `json:"final,omitempty"`
-	rawText  string
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	SourceID    string    `json:"source_id,omitempty"`
+	Text        string    `json:"text,omitempty"`
+	At          time.Time `json:"at"`
+	Start       time.Time `json:"start,omitempty"`
+	End         time.Time `json:"end,omitempty"`
+	Gap         bool      `json:"gap,omitempty"`
+	Revision    uint64    `json:"revision,omitempty"`
+	Final       bool      `json:"final,omitempty"`
+	DerivedFrom []string  `json:"derived_from,omitempty"`
+	rawText     string
 }
 
 type ContextSnapshot struct {
@@ -94,6 +95,9 @@ func sortEntries(entries []ContextEntry) {
 
 func (s *ContextStore) Append(cfg domain.ContextConfig, pipelineID string, generation uint64, entry ContextEntry) bool {
 	if !cfg.Enabled || cfg.ID == "" || (entry.Text == "" && !entry.Gap) {
+		return false
+	}
+	if entry.Kind == "summary" && len(entry.DerivedFrom) == 0 {
 		return false
 	}
 	s.mu.Lock()
@@ -233,6 +237,42 @@ func normalizeTranscriptToken(token string) string {
 	return strings.ToLower(strings.Trim(token, surroundingPunctuation))
 }
 
+func (s *ContextStore) UpsertSummary(cfg domain.ContextConfig, pipelineID string, generation uint64, entry ContextEntry) bool {
+	if !cfg.Enabled || cfg.ID == "" || entry.ID == "" || entry.Text == "" || len(entry.DerivedFrom) == 0 {
+		return false
+	}
+	entry.Kind = "summary"
+	if entry.Revision == 0 {
+		entry.Revision = 1
+	}
+	if entry.At.IsZero() {
+		entry.At = time.Now()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.stateLocked(pipelineID, cfg.ID)
+	if generation != 0 && generation != state.generation {
+		return false
+	}
+	for i := range state.entries {
+		old := state.entries[i]
+		if old.Kind != "summary" || old.ID != entry.ID {
+			continue
+		}
+		if old.Final || entry.Revision <= old.Revision {
+			return false
+		}
+		state.entries[i] = entry
+		sortEntries(state.entries)
+		s.pruneLocked(state, cfg, entry.At)
+		return true
+	}
+	state.entries = append(state.entries, entry)
+	sortEntries(state.entries)
+	s.pruneLocked(state, cfg, entry.At)
+	return true
+}
+
 func (s *ContextStore) SetScreen(cfg domain.ContextConfig, pipelineID string, generation uint64, image []byte, at time.Time) bool {
 	if !cfg.Enabled || !cfg.KeepLatestScreen || cfg.ID == "" || len(image) == 0 {
 		return false
@@ -342,6 +382,10 @@ func (s *ContextStore) Snapshot(cfg domain.ContextConfig, pipelineID string, cut
 			}
 		case "answer":
 			if !cfg.IncludeAnswers {
+				continue
+			}
+		case "summary":
+			if !cfg.IncludeSummaries {
 				continue
 			}
 		}

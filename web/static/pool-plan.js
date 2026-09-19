@@ -3,8 +3,8 @@
 let planSerial=0;
 function poolAddress(pool){
  const p=pipe();
- for(const n of p?.nodes||[]){let value=n.model_pool,id=n.id;while(value){if(value===pool)return {pipelineID:p.id,nodeID:id,rootID:n.id,vision:id!==n.id};value=value.vision_preprocessor;id+='/vision';}}
- return {pipelineID:p?.id,nodeID:state.node,rootID:state.node,vision:false};
+ for(const n of p?.nodes||[]){if(n.model_pool===pool)return {pipelineID:p.id,nodeID:n.id,rootID:n.id,stage:'solver'};if(n.model_pool?.audio_preprocessor===pool)return {pipelineID:p.id,nodeID:n.id+'/audio',rootID:n.id,stage:'audio'};if(n.model_pool?.vision_preprocessor===pool)return {pipelineID:p.id,nodeID:n.id+'/vision',rootID:n.id,stage:'vision'};}
+ return {pipelineID:p?.id,nodeID:state.node,rootID:state.node,stage:'solver'};
 }
 async function requestPoolPlan(pool,image,nodeID){const address=poolAddress(pool);return api('/api/pool/plan','POST',{config:state.config,pool,image,pipeline_id:address.pipelineID,node_id:nodeID??address.nodeID});}
 function planFilters(pool){

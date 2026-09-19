@@ -144,3 +144,26 @@ func TestShortTranscriptCorpusPreservesNegationAndNumber(t *testing.T) {
 		t.Fatalf("short transcripts changed: %+v", snapshot.Entries)
 	}
 }
+
+func TestSummaryRequiresProvenanceAndIsOptInForFutureSnapshots(t *testing.T) {
+	store := NewContextStore()
+	cfg := testContext()
+	generation := store.Generation("p", cfg.ID)
+	now := time.Now()
+	if store.UpsertSummary(cfg, "p", generation, ContextEntry{ID: "summary", Text: "summary", At: now, Final: true}) {
+		t.Fatal("summary without provenance was stored")
+	}
+	entry := ContextEntry{ID: "summary", Text: "summary", At: now, DerivedFrom: []string{"a", "b"}, Revision: 1, Final: true}
+	if !store.UpsertSummary(cfg, "p", generation, entry) {
+		t.Fatal("summary with provenance rejected")
+	}
+	snapshot := store.Snapshot(cfg, "p", now.Add(time.Second))
+	if len(snapshot.Entries) != 0 {
+		t.Fatalf("summary was read without opt-in: %+v", snapshot.Entries)
+	}
+	cfg.IncludeSummaries = true
+	snapshot = store.Snapshot(cfg, "p", now.Add(time.Second))
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Kind != "summary" || len(snapshot.Entries[0].DerivedFrom) != 2 {
+		t.Fatalf("summary provenance lost: %+v", snapshot.Entries)
+	}
+}

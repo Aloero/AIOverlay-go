@@ -92,6 +92,7 @@ type ContextConfig struct {
 	MaxChars          int                        `json:"max_chars"`
 	IncludeTranscript bool                       `json:"include_transcript"`
 	IncludeAnswers    bool                       `json:"include_answers"`
+	IncludeSummaries  bool                       `json:"include_summaries,omitempty"`
 	KeepLatestScreen  bool                       `json:"keep_latest_screen"`
 	ScreenMaxAgeS     int                        `json:"screen_max_age_s"`
 }

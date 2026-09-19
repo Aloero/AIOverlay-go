@@ -917,7 +917,7 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 	if !m.turnGenerationCurrent(turn) {
 		return
 	}
-	observe := m.transcriptObserver(pipelineID, r, turn)
+	observe := m.contextObservationObserver(pipelineID, r, turn)
 	res, err := exec(ctx, pipelineID, turn.input, engine.RunOptions{Purpose: "background", Capture: capture, OnObservation: observe})
 	if !m.sourceCurrent(r.cfg.ID, r.epoch) || !m.turnGenerationCurrent(turn) {
 		return
@@ -943,26 +943,68 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 }
 
 func (m *Manager) transcriptObserver(pipelineID string, runtime *sourceRuntime, turn backgroundTurn) func(engine.Observation) {
+	observer := m.contextObservationObserver(pipelineID, runtime, turn)
 	return func(observation engine.Observation) {
-		if observation.Kind != "audio.text" || turn.ctxCfg.ID == "" {
-			return
+		if observation.Kind == "audio.text" {
+			observer(observation)
 		}
-		entry := transcriptEntry(runtime.cfg.ID, turn, observation)
-		accepted := m.contexts.UpsertTranscript(turn.ctxCfg, pipelineID, turn.generation, entry)
-		if entry.Final {
-			m.finishPending(turn.input.EventID)
-		}
-		if !accepted {
-			return
-		}
-		runtime.mu.Lock()
-		runtime.status.LastTranscript = observation.Text
-		if entry.Final {
-			runtime.status.TranscriptLagMS = time.Since(turn.at).Milliseconds()
-		}
-		runtime.status.LastError = ""
-		runtime.mu.Unlock()
 	}
+}
+
+func (m *Manager) contextObservationObserver(pipelineID string, runtime *sourceRuntime, turn backgroundTurn) func(engine.Observation) {
+	return func(observation engine.Observation) {
+		switch observation.Kind {
+		case "audio.text":
+			if turn.ctxCfg.ID == "" {
+				return
+			}
+			entry := transcriptEntry(runtime.cfg.ID, turn, observation)
+			accepted := m.contexts.UpsertTranscript(turn.ctxCfg, pipelineID, turn.generation, entry)
+			if entry.Final {
+				m.finishPending(turn.input.EventID)
+			}
+			if !accepted {
+				return
+			}
+			runtime.mu.Lock()
+			runtime.status.LastTranscript = observation.Text
+			if entry.Final {
+				runtime.status.TranscriptLagMS = time.Since(turn.at).Milliseconds()
+			}
+			runtime.status.LastError = ""
+			runtime.mu.Unlock()
+		case "context.summary":
+			m.recordSummaryObservation(pipelineID, turn.contextGenerations, runtime.cfg.ID, observation)
+		}
+	}
+}
+
+func (m *Manager) recordSummaryObservation(pipelineID string, generations map[string]uint64, sourceID string, observation engine.Observation) bool {
+	if observation.ContextID == "" || observation.Text == "" || len(observation.DerivedFrom) == 0 {
+		return false
+	}
+	generation, selected := generations[observation.ContextID]
+	if !selected {
+		return false
+	}
+	m.mu.RLock()
+	pipeline := activePipeline(m.cfg)
+	contextCfg, exists := findContext(pipeline, observation.ContextID)
+	m.mu.RUnlock()
+	if !exists || pipeline == nil || pipeline.ID != pipelineID {
+		return false
+	}
+	if m.contexts.Generation(pipelineID, observation.ContextID) != generation {
+		return false
+	}
+	id := observation.SegmentID
+	if id == "" {
+		id = fmt.Sprintf("summary-%d", m.eventSeq.Add(1))
+	}
+	return m.contexts.UpsertSummary(contextCfg, pipelineID, generation, ContextEntry{
+		ID: id, Kind: "summary", SourceID: sourceID, Text: observation.Text, At: time.Now(),
+		DerivedFrom: append([]string(nil), observation.DerivedFrom...), Revision: max(uint64(1), observation.Revision), Final: observation.Final,
+	})
 }
 
 func transcriptEntry(sourceID string, turn backgroundTurn, observation engine.Observation) ContextEntry {
@@ -1237,7 +1279,7 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 		inputImage = defaultView.ImageJPEG
 	}
 	input := engine.Input{
-		ImageJPEG: append([]byte(nil), inputImage...), ImagePinned: imagePinned, ContextText: defaultView.Text, ContextViews: views, ContextIncomplete: incomplete,
+		ImageJPEG: append([]byte(nil), inputImage...), ImagePinned: imagePinned, ContextText: defaultView.Text, ContextViews: views, DefaultContextID: cmd.ContextID, ContextIncomplete: incomplete,
 		EntryNodeID: cmd.EntryNodeID, Intent: string(cmd.Intent), SourceID: cmd.ID, EventID: fmt.Sprintf("%s-%d", cmd.ID, m.eventSeq.Add(1)),
 	}
 	return PreparedCommand{PipelineID: p.ID, Command: cmd, Input: input, Context: ctxCfg, ContextGeneration: gen, ContextGenerations: cloneGenerations(generations), PermissionGeneration: permissionGeneration, Capture: capture}, nil
@@ -1272,6 +1314,13 @@ func (m *Manager) ValidatePreparedCommand(prepared PreparedCommand) error {
 		return errCommandContextChanged
 	}
 	return nil
+}
+
+func (m *Manager) RecordCommandObservation(prepared PreparedCommand, observation engine.Observation) bool {
+	if observation.Kind != "context.summary" {
+		return false
+	}
+	return m.recordSummaryObservation(prepared.PipelineID, prepared.ContextGenerations, prepared.Command.ID, observation)
 }
 
 // RecordCommandResult stores an accepted manual answer in the context snapshot

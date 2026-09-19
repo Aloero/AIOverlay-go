@@ -186,6 +186,9 @@ func validatePipeline(index int, p domain.Pipeline, providers map[string]struct{
 }
 
 func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, providers map[string]struct{}) error {
+	if (strings.HasSuffix(nodeID, ".vision_preprocessor") || strings.HasSuffix(nodeID, ".audio_preprocessor")) && (pool.VisionPreprocessor != nil || pool.AudioPreprocessor != nil) {
+		return fmt.Errorf("pool %s preprocessor cannot contain another media preprocessor", nodeID)
+	}
 	if err := validatePoolLimits(pool); err != nil {
 		return fmt.Errorf("pool %s: %w", nodeID, err)
 	}
@@ -244,6 +247,17 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 	}
 	if pool.VisionPreprocessor != nil {
 		if err := validatePool(pipelineID, nodeID+".vision_preprocessor", pool.VisionPreprocessor, providers); err != nil {
+			return err
+		}
+	}
+	if pool.AudioPreprocessor != nil {
+		if pool.AudioPreprocessor.Task != "transcribe" {
+			return fmt.Errorf("pool %s audio preprocessor must use transcribe task", nodeID)
+		}
+		if pool.AudioPreprocessor.ResultName != "" && pool.AudioPreprocessor.ResultName != "audio.text" {
+			return fmt.Errorf("pool %s audio preprocessor must produce audio.text", nodeID)
+		}
+		if err := validatePool(pipelineID, nodeID+".audio_preprocessor", pool.AudioPreprocessor, providers); err != nil {
 			return err
 		}
 	}

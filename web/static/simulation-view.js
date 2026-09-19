@@ -5,7 +5,8 @@ async function openSimulation(){
  const pipeline=copy(pipe()),config=copy(state.config),options=[];
  for(const n of pipeline.nodes.filter(n=>n.model_pool)){
   const stages=[{id:n.id,name:n.name,pool:n.model_pool,image:!n.model_pool.vision_preprocessor}];
-  if(n.model_pool.vision_preprocessor)stages.unshift({id:n.id+'/vision',name:n.name+' / Извлечение',pool:n.model_pool.vision_preprocessor,image:true});
+  if(n.model_pool.vision_preprocessor)stages.unshift({id:n.id+'/vision',name:n.name+' / Vision',pool:n.model_pool.vision_preprocessor,image:true});
+  if(n.model_pool.audio_preprocessor)stages.unshift({id:n.id+'/audio',name:n.name+' / STT',pool:n.model_pool.audio_preprocessor,image:false});
   for(const stage of stages){const plan=await api('/api/pool/plan','POST',{config,pool:stage.pool,image:stage.image,pipeline_id:pipeline.id,node_id:stage.id});for(const m of plan.candidates.slice(0,100))options.push({node_id:stage.id,provider_id:m.provider_id,model_id:m.model_id,label:stage.name+' · '+shortModel(m.model_id)});}
  }
  if(!options.length)throw new Error('Сначала настройте хотя бы одну подходящую модель. Симуляция использует те же правила отбора.');

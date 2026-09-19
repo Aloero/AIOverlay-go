@@ -156,7 +156,7 @@ func validatePoolLimits(p *domain.ModelPoolConfig) error {
 	if !enum(p.Task, "", "generate", "transcribe") {
 		return fmt.Errorf("unknown model task")
 	}
-	if !enum(p.ResultName, "", "audio.text", "vision.text", "decision") {
+	if !enum(p.ResultName, "", "audio.text", "vision.text", "context.summary", "decision") {
 		return fmt.Errorf("unknown output binding")
 	}
 

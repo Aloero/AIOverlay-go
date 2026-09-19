@@ -230,7 +230,7 @@ func (m *Manager) processScreenDelivery(pipelineID string, runtime *sourceRuntim
 	}
 	defaultView := views[runtime.cfg.ContextID]
 	input := engine.Input{
-		ImageJPEG: append([]byte(nil), image...), ImagePinned: true, ContextText: defaultView.Text, ContextViews: views,
+		ImageJPEG: append([]byte(nil), image...), ImagePinned: true, ContextText: defaultView.Text, ContextViews: views, DefaultContextID: runtime.cfg.ContextID,
 		EntryNodeID: runtime.cfg.EntryNodeID, Intent: string(runtime.cfg.Intent),
 		SourceID: runtime.cfg.ID, EventID: fmt.Sprintf("%s-%d", runtime.cfg.ID, m.eventSeq.Add(1)),
 	}

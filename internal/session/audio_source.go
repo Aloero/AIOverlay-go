@@ -251,7 +251,7 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 		return
 	}
 	defaultView := views[r.cfg.ContextID]
-	input := engine.Input{Audio: &clip, ContextText: defaultView.Text, ContextViews: views, ImageJPEG: append([]byte(nil), defaultView.ImageJPEG...), EntryNodeID: r.cfg.EntryNodeID, Intent: string(intent), SourceID: r.cfg.ID, EventID: clip.SegmentID}
+	input := engine.Input{Audio: &clip, ContextText: defaultView.Text, ContextViews: views, DefaultContextID: r.cfg.ContextID, ImageJPEG: append([]byte(nil), defaultView.ImageJPEG...), EntryNodeID: r.cfg.EntryNodeID, Intent: string(intent), SourceID: r.cfg.ID, EventID: clip.SegmentID}
 	if hasCtx {
 		m.addPending(pendingSegment{pipelineID: pipelineID, contextID: ctxCfg.ID, eventID: clip.SegmentID, generation: gen, start: seg.Started, end: seg.Ended})
 	}
