@@ -1657,3 +1657,30 @@ func TestApplyImportedSuppressesEnabledAutoStartUntilExplicitStart(t *testing.T)
 	}
 	manager.Close()
 }
+
+func TestProcessAudioRecoveryRetriesOnlyMissingOrChangedTarget(t *testing.T) {
+	runtime := &sourceRuntime{cfg: domain.EventSource{Kind: domain.SourceAudio, Audio: &domain.AudioSourceConfig{
+		Mode: "process", Process: &domain.AudioProcessConfig{ExecutablePath: `C:\Program Files\Zoom\bin\Zoom.exe`},
+	}}}
+	for _, kind := range []paudio.ProcessCaptureErrorKind{paudio.ProcessCaptureUnavailable, paudio.ProcessCaptureChanged} {
+		if !shouldRestartAudio(runtime, &paudio.ProcessCaptureError{Kind: kind}, nil) {
+			t.Fatalf("process recovery did not retry %s", kind)
+		}
+	}
+	for _, kind := range []paudio.ProcessCaptureErrorKind{paudio.ProcessCaptureAmbiguous, paudio.ProcessCaptureUnsupported} {
+		if shouldRestartAudio(runtime, &paudio.ProcessCaptureError{Kind: kind}, nil) {
+			t.Fatalf("process recovery retried unsafe condition %s", kind)
+		}
+	}
+}
+
+func TestAudioRuntimeStatusReportsResolvedProcessIdentity(t *testing.T) {
+	runtime := &sourceRuntime{cfg: domain.EventSource{Kind: domain.SourceAudio, Audio: &domain.AudioSourceConfig{
+		Mode: "process", Process: &domain.AudioProcessConfig{ExecutablePath: `C:\Program Files\Zoom\bin\Zoom.exe`},
+	}}}
+	started := time.Unix(100, 0)
+	updateAudioStatus(runtime, paudio.Block{Rate: 44100, ProcessID: 123, ProcessStartedAt: started}, 0)
+	if runtime.status.ProcessID != 123 || runtime.status.ProcessPath == "" {
+		t.Fatalf("process runtime status=%+v", runtime.status)
+	}
+}

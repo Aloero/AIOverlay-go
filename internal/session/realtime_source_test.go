@@ -466,3 +466,31 @@ func TestRealtimeProviderFailureDoesNotTriggerForkReconnect(t *testing.T) {
 		t.Fatalf("reconnects=%d", fixture.reconnectCount.Load())
 	}
 }
+
+func TestUnavailableProcessTargetDoesNotOpenRealtimeSessionOrCapture(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := realtimeManagerConfig()
+	source := &cfg.Pipelines[0].Sources[0]
+	source.Audio.Mode = "process"
+	source.Audio.DeviceID = ""
+	source.Audio.DeviceRole = ""
+	source.Audio.Process = &domain.AudioProcessConfig{ExecutablePath: `C:\Program Files\Zoom\bin\Zoom.exe`}
+	manager.cfg = cfg
+	var opens, captures atomic.Int32
+	manager.SetRealtimeOpener(func(context.Context, string, string) (providers.RealtimeSession, error) {
+		opens.Add(1)
+		return newRealtimeSessionFixture(), nil
+	})
+	manager.SetAudioCapture(func(context.Context, domain.AudioSourceConfig, func(paudio.Block)) error {
+		captures.Add(1)
+		return nil
+	})
+	runtime := &sourceRuntime{pipelineID: "p", cfg: *source, epoch: 1}
+	err := manager.runAudio(context.Background(), "p", runtime)
+	if err == nil {
+		t.Fatal("process-only capture unexpectedly passed unsupported/unavailable preflight")
+	}
+	if opens.Load() != 0 || captures.Load() != 0 {
+		t.Fatalf("preflight leaked work: realtime opens=%d capture calls=%d", opens.Load(), captures.Load())
+	}
+}

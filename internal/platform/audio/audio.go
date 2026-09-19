@@ -13,11 +13,14 @@ type Device struct {
 	Mode string `json:"mode"`
 }
 type Block struct {
-	Samples        []int16
-	Rate           int
-	At             time.Time
-	Silent         bool
-	Discontinuity  bool
-	TimestampError bool
+	Samples          []int16
+	Rate             int
+	At               time.Time
+	Silent           bool
+	Discontinuity    bool
+	TimestampError   bool
+	ProcessID        uint32
+	ProcessPath      string
+	ProcessStartedAt time.Time
 }
 type CaptureFunc func(context.Context, domain.AudioSourceConfig, func(Block)) error

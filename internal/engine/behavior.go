@@ -199,8 +199,13 @@ func behaviorScreenPolicy(source domain.EventSource) *BehaviorScreenPolicy {
 func behaviorSourceCapture(source domain.EventSource) string {
 	switch source.Kind {
 	case domain.SourceAudio:
-		if source.Audio != nil && source.Audio.Mode == "microphone" {
-			return "microphone"
+		if source.Audio != nil {
+			switch source.Audio.Mode {
+			case "microphone":
+				return "microphone"
+			case "process":
+				return "process_audio"
+			}
 		}
 		return "system_audio"
 	case domain.SourceScreenTimer:

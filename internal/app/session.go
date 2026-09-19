@@ -185,4 +185,6 @@ func collectLocalSTTPreview(ctx context.Context, events <-chan providers.Event, 
 	}
 	return strings.TrimSpace(text.String()), nil
 }
-func (a *App) AudioDevices() ([]audio.Device, error) { return audio.Devices() }
+func (a *App) AudioDevices() ([]audio.Device, error)    { return audio.Devices() }
+func (a *App) AudioCapabilities() audio.Capabilities    { return audio.GetCapabilities() }
+func (a *App) AudioProcesses() ([]audio.Process, error) { return audio.Processes() }

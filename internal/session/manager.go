@@ -88,6 +88,8 @@ type SourceStatus struct {
 	RemoteProvider  string  `json:"remote_provider,omitempty"`
 	RemoteModel     string  `json:"remote_model,omitempty"`
 	LastRecovery    string  `json:"last_recovery,omitempty"`
+	ProcessID       uint32  `json:"process_id,omitempty"`
+	ProcessPath     string  `json:"process_path,omitempty"`
 }
 
 type pendingSegment struct {
@@ -567,10 +569,10 @@ func (m *Manager) runSource(ctx context.Context, pipelineID string, runtime *sou
 	}
 	contextErr := ctx.Err()
 	finishSourceStatus(runtime, err, contextErr)
-	if shouldRestartDefaultAudio(runtime, err, contextErr) {
+	if shouldRestartAudio(runtime, err, contextErr) {
 		delay := m.nextAudioRestartDelay(runtime.cfg.ID)
 		setAudioRecovering(runtime)
-		go m.restartDefaultAudioSource(runtime, delay)
+		go m.restartAudioSource(runtime, delay)
 		return
 	}
 	if contextErr == nil {
@@ -585,9 +587,20 @@ const (
 	defaultAudioRestartCancelWait = 2 * time.Second
 )
 
+func shouldRestartAudio(runtime *sourceRuntime, runErr, contextErr error) bool {
+	if contextErr != nil || runtime == nil || runtime.cfg.Kind != domain.SourceAudio || runtime.cfg.Audio == nil {
+		return false
+	}
+	audio := runtime.cfg.Audio
+	if audio.Mode == "process" {
+		return paudio.RecoverableProcessTarget(runErr)
+	}
+	return audio.DeviceID == "" && paudio.RecoverableDefaultEndpoint(runErr)
+}
+
+// Kept for focused legacy regressions around default-endpoint recovery.
 func shouldRestartDefaultAudio(runtime *sourceRuntime, runErr, contextErr error) bool {
-	return contextErr == nil && runtime.cfg.Kind == domain.SourceAudio && runtime.cfg.Audio != nil &&
-		runtime.cfg.Audio.DeviceID == "" && paudio.RecoverableDefaultEndpoint(runErr)
+	return shouldRestartAudio(runtime, runErr, contextErr)
 }
 
 func (m *Manager) nextAudioRestartDelay(sourceID string) time.Duration {
@@ -633,7 +646,7 @@ func restartBackoff(base, maximum time.Duration, failures int) time.Duration {
 	return delay
 }
 
-func (m *Manager) restartDefaultAudioSource(runtime *sourceRuntime, delay time.Duration) {
+func (m *Manager) restartAudioSource(runtime *sourceRuntime, delay time.Duration) {
 	if !drainAudioRuntimeForRestart(runtime, defaultAudioRestartDrainGrace, defaultAudioRestartCancelWait) {
 		runtime.mu.Lock()
 		runtime.status.TransportState = "unavailable"
@@ -731,6 +744,14 @@ func updateAudioStatus(runtime *sourceRuntime, block paudio.Block, level float64
 	becameAlive := runtime.status.TransportState != "alive"
 	runtime.status.TransportState = "alive"
 	runtime.status.Level = level
+	if block.ProcessID != 0 {
+		runtime.status.ProcessID = block.ProcessID
+		if block.ProcessPath != "" {
+			runtime.status.ProcessPath = block.ProcessPath
+		} else if runtime.cfg.Audio != nil && runtime.cfg.Audio.Process != nil {
+			runtime.status.ProcessPath = runtime.cfg.Audio.Process.ExecutablePath
+		}
+	}
 	switch {
 	case len(block.Samples) == 0:
 		runtime.status.SignalState = "no_packets"

@@ -130,7 +130,17 @@ completed on that archive's commit.
 
 The acceptance scope for this branch is automated Go/race/UI verification plus
 Windows-target compile/vet. Physical Windows audio/desktop acceptance remains
-out of scope rather than being implied by cross-builds. Local STT now has a
+out of scope rather than being implied by cross-builds. Process-only Windows
+audio now has a separate native `ActivateAudioInterfaceAsync` path with the
+process-loopback virtual device, Windows build capability gating (minimum 20348),
+exact executable-path selection, unique process-tree root resolution, a held
+process handle plus creation-time identity fence against PID reuse, bounded
+restart/backoff, Studio/API capability and process identity views, and an explicit
+release guard that forbids system-endpoint fallback. The Windows acceptance test
+harness is opt-in via `AIO_PROCESS_LOOPBACK_EXE` and cross-compiles, but no real
+Windows process-loopback/Zoom/Teams audio capture has been run in this Linux
+verification, so T23/native quality and OS-driver behavior remain physically
+unverified. Local STT now has a
 production keyless provider boundary for an explicitly configured compatible
 helper executable and model resource: one long-lived child process, bounded
 RAM-only PCM16 IPC, per-request cancellation, helper reuse/restart, missing-resource

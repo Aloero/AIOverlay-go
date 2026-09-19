@@ -143,6 +143,9 @@ func Devices() ([]Device, error) {
 // Capture exclusively owns all COM interfaces on this STA. Shared-mode loopback
 // duplicates the render stream; it never writes to/mutes/reconfigures playback.
 func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)) error {
+	if cfg.Mode == "process" {
+		return captureProcess(ctx, cfg, emit)
+	}
 	if cfg.Mode != "system" && cfg.Mode != "microphone" {
 		return fmt.Errorf("unsupported audio source")
 	}
@@ -251,44 +254,15 @@ func Capture(ctx context.Context, cfg domain.AudioSourceConfig, emit func(Block)
 				if frames == 0 {
 					break
 				}
-				var data *byte
-				var count, flag uint32
-				var position, qpc uint64
-				if err = result("get buffer", call(capture, 3, uintptr(unsafe.Pointer(&data)), uintptr(unsafe.Pointer(&count)), uintptr(unsafe.Pointer(&flag)), uintptr(unsafe.Pointer(&position)), uintptr(unsafe.Pointer(&qpc)))); err != nil {
-					return err
+				block, ready, packetErr := readCapturePacket(uintptr(capture), frames, f, now, &captureClock)
+				if packetErr != nil {
+					return packetErr
 				}
-				if count == 0 {
+				if !ready {
 					break
 				}
-				var raw []byte
-				if count > uint32(f.Rate*2) {
-					call(capture, 4, uintptr(count))
-					return fmt.Errorf("audio packet exceeds safe allocation")
-				}
-				flags := decodeWASAPIBufferFlags(flag)
-				if !flags.Silent {
-					if data == nil {
-						call(capture, 4, uintptr(count))
-						return fmt.Errorf("audio packet pointer missing")
-					}
-					raw = append([]byte(nil), unsafe.Slice(data, int(count)*f.Align)...)
-				}
-				if err = result("release buffer", call(capture, 4, uintptr(count))); err != nil {
-					return err
-				}
-				samples, e := MonoPCM(raw, int(count), f, flags.Silent)
-				if e != nil {
-					return e
-				}
 				lastPacket = now
-				emit(Block{
-					Samples:        samples,
-					Rate:           f.Rate,
-					At:             captureClock.PacketStart(qpc, int(count), f.Rate, now, flags.TimestampError),
-					Silent:         flags.Silent,
-					Discontinuity:  flags.Discontinuity,
-					TimestampError: flags.TimestampError,
-				})
+				emit(block)
 			}
 			if now.Sub(lastPacket) > 100*time.Millisecond {
 				emit(Block{Rate: f.Rate, At: now})

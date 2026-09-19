@@ -163,3 +163,20 @@ func TestBehaviorReportShowsPersistentRealtimeSourceWithoutFakeGraphRoute(t *tes
 		t.Fatalf("realtime AI stage=%+v", source.AIStages[0])
 	}
 }
+
+func TestBehaviorReportDistinguishesProcessAudioFromSystemLoopback(t *testing.T) {
+	cfg := mixedSimulationConfig()
+	pipeline := cfg.Pipelines[0]
+	pipeline.Sources = []domain.EventSource{{
+		ID: "zoom", Name: "Zoom", Kind: domain.SourceAudio, Enabled: true,
+		EntryNodeID: "audio", Intent: domain.IntentContext, ContextID: "conversation",
+		Audio: &domain.AudioSourceConfig{
+			Mode: "process", Process: &domain.AudioProcessConfig{ExecutablePath: `C:\Program Files\Zoom\bin\Zoom.exe`},
+			SegmentMS: 1000, SilenceMS: 200, MinimumMS: 80, Threshold: .01,
+		},
+	}}
+	report := DescribePipelineBehavior(pipeline)
+	if len(report.Sources) != 1 || report.Sources[0].Capture != "process_audio" {
+		t.Fatalf("process capture report=%+v", report.Sources)
+	}
+}

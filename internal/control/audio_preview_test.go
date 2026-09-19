@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"aioverlay/internal/domain"
+	paudio "aioverlay/internal/platform/audio"
 	"aioverlay/internal/session"
 )
 
@@ -108,6 +109,45 @@ func TestLocalSTTPreviewHandlerRejectsMissingProviderAndInvalidAudio(t *testing.
 		server.DesktopHandler().ServeHTTP(response, request)
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("HTTP %d for %s", response.Code, body)
+		}
+	}
+}
+
+type processAudioBackend struct {
+	*auditBackend
+	sessionBackend
+}
+
+func (*processAudioBackend) AudioCapabilities() paudio.Capabilities {
+	return paudio.Capabilities{SystemLoopback: true, Microphone: true, ProcessLoopback: true, MinimumProcessLoopbackBuild: 20348}
+}
+func (*processAudioBackend) AudioProcesses() ([]paudio.Process, error) {
+	return []paudio.Process{{PID: 42, Name: "Zoom.exe", Path: `C:\Program Files\Zoom\bin\Zoom.exe`, StartedAt: time.Unix(100, 0)}}, nil
+}
+
+func TestAudioProcessCapabilityAndIdentityHandlersExposeNoFallback(t *testing.T) {
+	backend := &processAudioBackend{auditBackend: &auditBackend{}}
+	server := New("127.0.0.1:0", backend)
+	for _, test := range []struct {
+		path     string
+		required []string
+	}{
+		{path: "/api/audio/capabilities", required: []string{"process_loopback", "minimum_process_loopback_build", "20348"}},
+		{path: "/api/audio/processes", required: []string{"Zoom.exe", `C:\\Program Files\\Zoom\\bin\\Zoom.exe`, "42", "started_at"}},
+	} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		response := httptest.NewRecorder()
+		server.DesktopHandler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s HTTP %d: %s", test.path, response.Code, response.Body.String())
+		}
+		for _, required := range test.required {
+			if !strings.Contains(response.Body.String(), required) {
+				t.Fatalf("%s response missing %q: %s", test.path, required, response.Body.String())
+			}
+		}
+		if strings.Contains(strings.ToLower(response.Body.String()), "system_fallback") {
+			t.Fatalf("%s advertised a silent fallback: %s", test.path, response.Body.String())
 		}
 	}
 }

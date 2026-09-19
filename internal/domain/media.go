@@ -77,11 +77,17 @@ type RealtimeSourceConfig struct {
 	ResponsePolicy string                     `json:"response_policy"` // manual, each_segment
 }
 
+type AudioProcessConfig struct {
+	Extra          map[string]json.RawMessage `json:"-"`
+	ExecutablePath string                     `json:"executable_path"`
+}
+
 type AudioSourceConfig struct {
 	Extra      map[string]json.RawMessage `json:"-"`
-	Mode       string                     `json:"mode"`                  // system, microphone
+	Mode       string                     `json:"mode"`                  // system, microphone, process
 	DeviceID   string                     `json:"device_id,omitempty"`   // empty = current default endpoint
 	DeviceRole string                     `json:"device_role,omitempty"` // multimedia, communications
+	Process    *AudioProcessConfig        `json:"process,omitempty"`
 	SegmentMS  int                        `json:"segment_ms"`
 	SilenceMS  int                        `json:"silence_ms"`
 	MinimumMS  int                        `json:"minimum_ms"`

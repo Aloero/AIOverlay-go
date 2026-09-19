@@ -76,6 +76,11 @@ func (m *Manager) runAudio(ctx context.Context, pipelineID string, runtime *sour
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if runtime.cfg.Audio.Mode == "process" {
+		if err := paudio.CheckProcessTarget(runtime.cfg.Audio.Process); err != nil {
+			return err
+		}
+	}
 	if runtime.cfg.Realtime != nil {
 		if err := m.openRealtimeSource(ctx, runtime); err != nil {
 			return err

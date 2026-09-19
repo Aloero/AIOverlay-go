@@ -28,6 +28,8 @@ type sessionBackend interface {
 	SessionStatus() any
 	ClearConversation(string) (uint64, error)
 	AudioDevices() ([]paudio.Device, error)
+	AudioCapabilities() paudio.Capabilities
+	AudioProcesses() ([]paudio.Process, error)
 	PreviewAudio(context.Context, domain.AudioSourceConfig, time.Duration) (session.AudioPreview, error)
 	PreviewLocalSTT(context.Context, domain.AudioSourceConfig, string, time.Duration) (session.LocalSTTPreview, error)
 }
@@ -291,6 +293,37 @@ func (s *Server) handleContextClear(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{"ok": true, "generation": g})
 }
+func (s *Server) handleAudioCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	backend, ok := s.backend.(sessionBackend)
+	if !ok {
+		http.Error(w, "audio runtime unavailable", http.StatusNotImplemented)
+		return
+	}
+	writeJSON(w, backend.AudioCapabilities())
+}
+
+func (s *Server) handleAudioProcesses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	backend, ok := s.backend.(sessionBackend)
+	if !ok {
+		http.Error(w, "audio runtime unavailable", http.StatusNotImplemented)
+		return
+	}
+	processes, err := backend.AudioProcesses()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotImplemented)
+		return
+	}
+	writeJSON(w, processes)
+}
+
 func (s *Server) handleAudioDevices(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)

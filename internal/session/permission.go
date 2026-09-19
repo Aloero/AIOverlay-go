@@ -28,6 +28,7 @@ type sourceCapturePermission struct {
 	AudioMode              string
 	DeviceID               string
 	DeviceRole             string
+	ProcessPath            string
 	ContextID              string
 	RealtimeProviderID     string
 	RealtimeModelID        string
@@ -51,6 +52,9 @@ func capturePermissions(cfg domain.Config) capturePermissionPolicy {
 			permission.AudioMode = source.Audio.Mode
 			permission.DeviceID = source.Audio.DeviceID
 			permission.DeviceRole = source.Audio.DeviceRole
+			if source.Audio.Process != nil {
+				permission.ProcessPath = source.Audio.Process.ExecutablePath
+			}
 		}
 		if source.Realtime != nil {
 			permission.RealtimeProviderID = source.Realtime.ProviderID
@@ -110,6 +114,18 @@ func commandPermissionAllowed(policy capturePermissionPolicy, command domain.Com
 func sourcePermissionAllowed(policy capturePermissionPolicy, source domain.EventSource) bool {
 	for _, allowed := range policy.Sources {
 		if allowed.ID != source.ID || allowed.Kind != source.Kind || !allowed.Enabled || allowed.ContextID != source.ContextID {
+			continue
+		}
+		audioMode, deviceID, deviceRole, processPath := "", "", "", ""
+		if source.Audio != nil {
+			audioMode = source.Audio.Mode
+			deviceID = source.Audio.DeviceID
+			deviceRole = source.Audio.DeviceRole
+			if source.Audio.Process != nil {
+				processPath = source.Audio.Process.ExecutablePath
+			}
+		}
+		if allowed.AudioMode != audioMode || allowed.DeviceID != deviceID || allowed.DeviceRole != deviceRole || allowed.ProcessPath != processPath {
 			continue
 		}
 		providerID, modelID, responsePolicy := "", "", ""

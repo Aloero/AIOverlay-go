@@ -68,3 +68,36 @@ func TestNonPermissionConfigChangeKeepsPinnedCaptureValid(t *testing.T) {
 		t.Fatalf("capture calls=%d", captures.Load())
 	}
 }
+
+func TestFencePermissionsRevokesChangedProcessAudioTarget(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	source := &cfg.Pipelines[0].Sources[0]
+	source.Audio.Mode = "process"
+	source.Audio.DeviceID = ""
+	source.Audio.DeviceRole = ""
+	source.Audio.Process = &domain.AudioProcessConfig{ExecutablePath: `C:\Program Files\Zoom\bin\Zoom.exe`}
+	manager.cfg = cfg
+	manager.permissionPolicy = capturePermissions(cfg)
+	manager.permissionPolicySet = true
+
+	cancelled := make(chan struct{})
+	runtime := &sourceRuntime{pipelineID: "p", cfg: *source, cancel: func() { close(cancelled) }}
+	manager.sources[source.ID] = runtime
+
+	next := cfg
+	next.Pipelines = append([]domain.Pipeline(nil), cfg.Pipelines...)
+	next.Pipelines[0].Sources = append([]domain.EventSource(nil), cfg.Pipelines[0].Sources...)
+	audio := *next.Pipelines[0].Sources[0].Audio
+	process := *audio.Process
+	process.ExecutablePath = `C:\Program Files\Teams\current\Teams.exe`
+	audio.Process = &process
+	next.Pipelines[0].Sources[0].Audio = &audio
+
+	manager.FencePermissions(next)
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("process target change did not revoke old audio capture")
+	}
+}

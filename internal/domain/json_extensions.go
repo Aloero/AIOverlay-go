@@ -500,6 +500,22 @@ func (v *RealtimeSourceConfig) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+func (v AudioProcessConfig) MarshalJSON() ([]byte, error) {
+	type plain AudioProcessConfig
+	return marshalExt(plain(v), v.Extra)
+}
+func (v *AudioProcessConfig) UnmarshalJSON(raw []byte) error {
+	type plain AudioProcessConfig
+	var p plain
+	extra, err := unmarshalExt(raw, &p)
+	if err != nil {
+		return err
+	}
+	*v = AudioProcessConfig(p)
+	v.Extra = extra
+	return nil
+}
+
 func (v AudioSourceConfig) MarshalJSON() ([]byte, error) {
 	type plain AudioSourceConfig
 	return marshalExt(plain(v), v.Extra)

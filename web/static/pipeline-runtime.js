@@ -2,7 +2,7 @@
 
 const intentNames={respond:'Ответить',decide:'Модель решает',context:'Только контекст'};
 const sourceKindNames={audio:'Звук',screen_timer:'Экран по событию'};
-let sessionPollTimer=null,audioDeviceCache=null;
+let sessionPollTimer=null,audioDeviceCache=null,audioCapabilityCache=null;
 
 function ensurePipelineRuntime(p){
  p.commands||=[];p.sources||=[];p.contexts||=[];
@@ -22,6 +22,7 @@ const behaviorCaptureNames={
  screen:'Текущий экран',
  system_audio:'Системный звук',
  microphone:'Микрофон',
+ process_audio:'Конкретное приложение',
  screen_periodic:'Периодический экран'
 };
 const behaviorContextRoles={
@@ -156,24 +157,76 @@ function renderBackgroundBehavior(root,p,nodes,contexts){
  if($('#runtimePauseInDialog'))$('#runtimePauseInDialog').onclick=guarded(async()=>{await api('/api/session/pause','POST',{paused:!state.session?.paused});await refreshSessionStatus(true);});renderRuntimeLiveState();
 }
 function sourceEditorCard(s,i,p,nodes,contexts){
- const st=sourceStatus(s.id),running=!!st?.running,remote=!!s.realtime;let fields=remote?`<div class="form-row">${field('Название','srcName_'+i,s.name)}${selectField('Локально сохранять ответы','srcContext_'+i,contexts,s.context_id||'')}</div>`:`<div class="form-row">${field('Название','srcName_'+i,s.name)}${selectField('Когда новые данные готовы','srcIntent_'+i,{context:'Только обновить контекст',decide:'Пусть модель решит, отвечать ли',respond:'Сразу готовить ответ'},s.intent)}</div><div class="form-row">${selectField('Начать с этапа','srcEntry_'+i,nodes,s.entry_node_id)}${selectField('Контекст','srcContext_'+i,contexts,s.context_id||'')}</div>`;
- if(s.kind==='audio'){const a=s.audio||(s.audio={mode:'system',device_id:'',device_role:'communications',segment_ms:12000,silence_ms:700,minimum_ms:180,threshold:.012}),locals=(appliedConfig?.providers||state.config.providers||[]).filter(provider=>provider.enabled&&provider.kind==='local_stt'&&provider.local_stt),localOptions=Object.fromEntries(locals.map(provider=>[provider.id,(provider.label||provider.id)+' · '+provider.local_stt.model_id]));fields+=`<div class="form-row">${selectField('Что слушать','srcMode_'+i,{system:'Системный звук — то, что слышу',microphone:'Микрофон'},a.mode)}${selectField('Устройство по умолчанию','srcRole_'+i,{multimedia:'Основное устройство',communications:'Устройство связи'},a.device_role||'multimedia')}</div><div class="field"><label>Конкретное устройство (необязательно)</label><select id="srcDevice_${i}"><option value="">Следовать выбранному устройству по умолчанию</option></select><small>Фиксированное устройство не заменяется другим молча, если оно исчезнет.</small></div><details><summary>Границы фрагмента и фильтр сигнала</summary><div class="form-row">${field('Макс. фрагмент, мс','srcSegment_'+i,a.segment_ms,'number')}${field('Пауза завершения, мс','srcSilence_'+i,a.silence_ms,'number')}</div><div class="form-row">${field('Минимум сигнала, мс','srcMinimum_'+i,a.minimum_ms,'number')}${field('Порог RMS','srcThreshold_'+i,a.threshold,'number')}</div><p class="note">RMS — только технический фильтр тишины, не распознавание речи. Музыка и уведомления тоже могут пройти этот порог.</p></details><div class="actions-row"><button class="button small" data-audio-preview="${i}">Проверить локальный захват</button><span id="audioPreviewState_${i}" class="dim">Без AI-запросов</span></div><div id="audioPreview_${i}"></div>${locals.length?`<div class="section-line"><h4>ЛОКАЛЬНОЕ РАСПОЗНАВАНИЕ</h4></div><div class="form-row">${selectField('Local STT','localSTTPreviewProvider_'+i,localOptions,locals[0].id)}<div class="field"><label>&nbsp;</label><button class="button small" data-local-stt-preview="${i}">Проверить распознавание</button></div></div><p class="note">2 секунды PCM остаются в RAM и отправляются только локальному helper. Без сети, quota, context и публикации ответа.</p><div id="localSTTPreviewState_${i}" class="dim"></div>`:'<p class="note">Для проверки распознавания сохраните и включите подключение Local STT.</p>'}`;}
- if(s.realtime){const liveProviders=Object.fromEntries((state.config.providers||[]).filter(provider=>provider.enabled&&provider.kind==='openai_live').map(provider=>[provider.id,provider.label||provider.id])),live=provider(s.realtime.provider_id),delegated=!!live?.realtime?.responses_model;fields+=`<section class="task-contract"><span>PERSISTENT REMOTE SESSION</span><b>OpenAI Live · AUDIO</b><small>Remote memory существует отдельно от local Context. IMAGE, semantic no_action, interrupt и reconnect здесь не обещаются.</small></section><div class="form-row">${selectField('Live подключение','srcLiveProvider_'+i,liveProviders,s.realtime.provider_id||'')}${field('Live model','srcLiveModel_'+i,s.realtime.model_id||'gpt-live-1')}</div>${selectField('Ответ','srcLivePolicy_'+i,{manual:'Только по кнопке «Ответить сейчас»',each_segment:'После каждого финального сегмента'},s.realtime.response_policy||'manual')}<div class="actions-row">${delegated?`<button class="button small primary" data-realtime-response="${i}" ${running?'':'disabled'}>Ответить сейчас</button>`:'<span class="dim">Responses delegation не настроена — text response недоступен.</span>'}<span class="dim">${esc(st?.remote_state||'remote session ещё не открыта')}</span></div>`;}
+ const st=sourceStatus(s.id),running=!!st?.running,remote=!!s.realtime;
+ let fields=remote?`<div class="form-row">${field('Название','srcName_'+i,s.name)}${selectField('Локально сохранять ответы','srcContext_'+i,contexts,s.context_id||'')}</div>`:`<div class="form-row">${field('Название','srcName_'+i,s.name)}${selectField('Когда новые данные готовы','srcIntent_'+i,{context:'Только обновить контекст',decide:'Пусть модель решит, отвечать ли',respond:'Сразу готовить ответ'},s.intent)}</div><div class="form-row">${selectField('Начать с этапа','srcEntry_'+i,nodes,s.entry_node_id)}${selectField('Контекст','srcContext_'+i,contexts,s.context_id||'')}</div>`;
+ if(s.kind==='audio')fields+=audioSourceFields(s,i);
+ if(s.realtime)fields+=realtimeSourceFields(s,i,running,st);
  if(s.kind==='screen_timer')fields+=screenSourceFields(s,i);
- const liveState=st?runtimeAudioStateParts(st).join(' · '):'';return `<section class="behavior-card source-card" data-source-index="${i}"><div class="behavior-card-head"><div><h3>${esc(s.name||sourceKindNames[s.kind])}</h3><p>${esc(sourceKindNames[s.kind]||s.kind)} · ${running?'работает':'остановлен'}${liveState?' · '+esc(liveState):''}${st?.last_diagnostic?' · диагностика: '+esc(st.last_diagnostic):''}${st?.last_error?' · ошибка: '+esc(st.last_error):''}</p></div><div class="tool-group"><label class="switch"><input type="checkbox" id="srcEnabled_${i}" ${s.enabled?'checked':''}>Настроен</label><button class="button small" data-source-run="${i}" ${!s.enabled?'disabled':''}>${running?'Остановить сейчас':'Запустить сейчас'}</button><button class="icon-button" data-source-remove="${i}" aria-label="Удалить источник">×</button></div></div><label class="switch"><input type="checkbox" id="srcAuto_${i}" ${s.auto_start?'checked':''}>Запускать автоматически вместе с AIOverlay</label>${fields}</section>`;
+ const liveState=st?runtimeAudioStateParts(st).join(' · '):'';
+ return `<section class="behavior-card source-card" data-source-index="${i}"><div class="behavior-card-head"><div><h3>${esc(s.name||sourceKindNames[s.kind])}</h3><p>${esc(sourceKindNames[s.kind]||s.kind)} · ${running?'работает':'остановлен'}${liveState?' · '+esc(liveState):''}${st?.last_diagnostic?' · диагностика: '+esc(st.last_diagnostic):''}${st?.last_error?' · ошибка: '+esc(st.last_error):''}</p></div><div class="tool-group"><label class="switch"><input type="checkbox" id="srcEnabled_${i}" ${s.enabled?'checked':''}>Настроен</label><button class="button small" data-source-run="${i}" ${!s.enabled?'disabled':''}>${running?'Остановить сейчас':'Запустить сейчас'}</button><button class="icon-button" data-source-remove="${i}" aria-label="Удалить источник">×</button></div></div><label class="switch"><input type="checkbox" id="srcAuto_${i}" ${s.auto_start?'checked':''}>Запускать автоматически вместе с AIOverlay</label>${fields}</section>`;
+}
+function audioSourceFields(source,index){
+ const audio=source.audio||(source.audio={mode:'system',device_id:'',device_role:'communications',segment_ms:12000,silence_ms:700,minimum_ms:180,threshold:.012});
+ const modes={system:'Системный звук — то, что слышу',microphone:'Микрофон',process:'Конкретное приложение · process-only'};
+ let captureFields='';
+ if(audio.mode==='process'){
+  audio.process ||= {executable_path:''};
+  captureFields=`<div class="form-row">${selectField('Что слушать','srcMode_'+index,modes,audio.mode)}${field('Executable path','srcProcessPath_'+index,audio.process.executable_path||'','text','Сохраняется путь приложения, не PID. После restart новый PID разрешается заново по exact path.')}</div><div class="field"><label>Сейчас запущенные приложения</label><select id="srcProcessRunning_${index}"><option value="">Проверяю process-loopback…</option></select><small id="srcProcessCapability_${index}">Process-only не переключается на общий system mix при ошибке.</small></div><p class="note">Захватывается выбранный process tree. Если одновременно запущено несколько экземпляров с тем же executable path, источник остановится как ambiguous, а не выберет один случайно.</p>`;
+ }else{
+  captureFields=`<div class="form-row">${selectField('Что слушать','srcMode_'+index,modes,audio.mode)}${selectField('Устройство по умолчанию','srcRole_'+index,{multimedia:'Основное устройство',communications:'Устройство связи'},audio.device_role||'multimedia')}</div><div class="field"><label>Конкретное устройство (необязательно)</label><select id="srcDevice_${index}"><option value="">Следовать выбранному устройству по умолчанию</option></select><small>Фиксированное устройство не заменяется другим молча, если оно исчезнет.</small></div>`;
+ }
+ const locals=(appliedConfig?.providers||state.config.providers||[]).filter(provider=>provider.enabled&&provider.kind==='local_stt'&&provider.local_stt);
+ const localOptions=Object.fromEntries(locals.map(provider=>[provider.id,(provider.label||provider.id)+' · '+provider.local_stt.model_id]));
+ const localSTT=locals.length?`<div class="section-line"><h4>ЛОКАЛЬНОЕ РАСПОЗНАВАНИЕ</h4></div><div class="form-row">${selectField('Local STT','localSTTPreviewProvider_'+index,localOptions,locals[0].id)}<div class="field"><label>&nbsp;</label><button class="button small" data-local-stt-preview="${index}">Проверить распознавание</button></div></div><p class="note">2 секунды PCM остаются в RAM и отправляются только локальному helper. Без сети, quota, context и публикации ответа.</p><div id="localSTTPreviewState_${index}" class="dim"></div>`:'<p class="note">Для проверки распознавания сохраните и включите подключение Local STT.</p>';
+ return `${captureFields}<details><summary>Границы фрагмента и фильтр сигнала</summary><div class="form-row">${field('Макс. фрагмент, мс','srcSegment_'+index,audio.segment_ms,'number')}${field('Пауза завершения, мс','srcSilence_'+index,audio.silence_ms,'number')}</div><div class="form-row">${field('Минимум сигнала, мс','srcMinimum_'+index,audio.minimum_ms,'number')}${field('Порог RMS','srcThreshold_'+index,audio.threshold,'number')}</div><p class="note">RMS — только технический фильтр тишины, не распознавание речи. Музыка и уведомления тоже могут пройти этот порог.</p></details><div class="actions-row"><button class="button small" data-audio-preview="${index}">Проверить локальный захват</button><span id="audioPreviewState_${index}" class="dim">Без AI-запросов</span></div><div id="audioPreview_${index}"></div>${localSTT}`;
+}
+function realtimeSourceFields(source,index,running,status){
+ const liveProviders=Object.fromEntries((state.config.providers||[]).filter(provider=>provider.enabled&&provider.kind==='openai_live').map(provider=>[provider.id,provider.label||provider.id]));
+ const live=provider(source.realtime.provider_id),delegated=!!live?.realtime?.responses_model;
+ return `<section class="task-contract"><span>PERSISTENT REMOTE SESSION</span><b>OpenAI Live · AUDIO</b><small>Remote memory существует отдельно от local Context. IMAGE, semantic no_action и interrupt здесь не обещаются.</small></section><div class="form-row">${selectField('Live подключение','srcLiveProvider_'+index,liveProviders,source.realtime.provider_id||'')}${field('Live model','srcLiveModel_'+index,source.realtime.model_id||'gpt-live-1')}</div>${selectField('Ответ','srcLivePolicy_'+index,{manual:'Только по кнопке «Ответить сейчас»',each_segment:'После каждого финального сегмента'},source.realtime.response_policy||'manual')}<div class="actions-row">${delegated?`<button class="button small primary" data-realtime-response="${index}" ${running?'':'disabled'}>Ответить сейчас</button>`:'<span class="dim">Responses delegation не настроена — text response недоступен.</span>'}<span class="dim">${esc(status?.remote_state||'remote session ещё не открыта')}</span></div>`;
 }
 function bindSourceCards(root,p){
- (p.sources||[]).forEach((s,i)=>{
-  const set=(id,key,numeric=false,obj=s)=>{const el=$('#'+id);if(el)el.onchange=()=>{obj[key]=numeric?finite(el.value):el.value;dirty();renderRuntimeStrip();};};set('srcName_'+i,'name');set('srcIntent_'+i,'intent');set('srcEntry_'+i,'entry_node_id');set('srcContext_'+i,'context_id');$('#srcEnabled_'+i).onchange=e=>{s.enabled=e.target.checked;dirty();renderBehaviorEditor(p,'background');};$('#srcAuto_'+i).onchange=e=>{s.auto_start=e.target.checked;dirty();};
-  if(s.kind==='audio'){const a=s.audio;set('srcMode_'+i,'mode',false,a);set('srcRole_'+i,'device_role',false,a);set('srcSegment_'+i,'segment_ms',true,a);set('srcSilence_'+i,'silence_ms',true,a);set('srcMinimum_'+i,'minimum_ms',true,a);set('srcThreshold_'+i,'threshold',true,a);loadAudioDevices($('#srcDevice_'+i),a);$('#srcDevice_'+i).onchange=e=>{a.device_id=e.target.value;dirty();};}
-  if(s.realtime){set('srcLiveProvider_'+i,'provider_id',false,s.realtime);set('srcLiveModel_'+i,'model_id',false,s.realtime);const policy=$('#srcLivePolicy_'+i);if(policy)policy.onchange=e=>{s.realtime.response_policy=e.target.value;s.intent=e.target.value==='each_segment'?'respond':'context';dirty();renderBehaviorEditor(p,'background');};}
-  if(s.kind==='screen_timer')bindScreenSource(s,i,set);
+ (p.sources||[]).forEach((source,index)=>{
+  const set=(id,key,numeric=false,obj=source)=>{const element=$('#'+id);if(element)element.onchange=()=>{obj[key]=numeric?finite(element.value):element.value;dirty();renderRuntimeStrip();};};
+  set('srcName_'+index,'name');set('srcIntent_'+index,'intent');set('srcEntry_'+index,'entry_node_id');set('srcContext_'+index,'context_id');
+  $('#srcEnabled_'+index).onchange=event=>{source.enabled=event.target.checked;dirty();renderBehaviorEditor(p,'background');};
+  $('#srcAuto_'+index).onchange=event=>{source.auto_start=event.target.checked;dirty();};
+  if(source.kind==='audio')bindAudioSource(source,index,p,set);
+  if(source.realtime){set('srcLiveProvider_'+index,'provider_id',false,source.realtime);set('srcLiveModel_'+index,'model_id',false,source.realtime);const policy=$('#srcLivePolicy_'+index);if(policy)policy.onchange=event=>{source.realtime.response_policy=event.target.value;source.intent=event.target.value==='each_segment'?'respond':'context';dirty();renderBehaviorEditor(p,'background');};}
+  if(source.kind==='screen_timer')bindScreenSource(source,index,set);
  });
- $$('[data-source-remove]',root).forEach(b=>b.onclick=()=>{const i=Number(b.dataset.sourceRemove),s=p.sources[i];if(confirm(`Удалить источник «${s.name}»?`)){p.sources.splice(i,1);dirty();renderBehaviorEditor(p,'background');renderRuntimeStrip();}});
- $$('[data-source-run]',root).forEach(b=>b.onclick=guarded(async()=>{const i=Number(b.dataset.sourceRun),s=p.sources[i],running=!!sourceStatus(s.id)?.running;if(state.dirty)throw new Error('Сначала сохраните и примените конфигурацию источника.');await api('/api/session/source','POST',{id:s.id,running:!running});await refreshSessionStatus(true);renderBehaviorEditor(p,'background');}));
- $$('[data-audio-preview]',root).forEach(b=>b.onclick=guarded(()=>previewAudioSource(p,Number(b.dataset.audioPreview))));
- $$('[data-local-stt-preview]',root).forEach(b=>b.onclick=guarded(()=>previewLocalSTTSource(p,Number(b.dataset.localSttPreview))));
- $$('[data-realtime-response]',root).forEach(b=>b.onclick=guarded(async()=>{const source=p.sources[Number(b.dataset.realtimeResponse)];if(state.dirty)throw new Error('Сначала сохраните и примените Live source.');await api('/api/session/realtime/respond','POST',{source_id:source.id});state.job=await api('/api/job');updateOutput();notify('Live response запрошен через общую ручную очередь.');}));
+ $$('[data-source-remove]',root).forEach(button=>button.onclick=()=>{const index=Number(button.dataset.sourceRemove),source=p.sources[index];if(confirm(`Удалить источник «${source.name}»?`)){p.sources.splice(index,1);dirty();renderBehaviorEditor(p,'background');renderRuntimeStrip();}});
+ $$('[data-source-run]',root).forEach(button=>button.onclick=guarded(async()=>{const index=Number(button.dataset.sourceRun),source=p.sources[index],running=!!sourceStatus(source.id)?.running;if(state.dirty)throw new Error('Сначала сохраните и примените конфигурацию источника.');await api('/api/session/source','POST',{id:source.id,running:!running});await refreshSessionStatus(true);renderBehaviorEditor(p,'background');}));
+ $$('[data-audio-preview]',root).forEach(button=>button.onclick=guarded(()=>previewAudioSource(p,Number(button.dataset.audioPreview))));
+ $$('[data-local-stt-preview]',root).forEach(button=>button.onclick=guarded(()=>previewLocalSTTSource(p,Number(button.dataset.localSttPreview))));
+ $$('[data-realtime-response]',root).forEach(button=>button.onclick=guarded(async()=>{const source=p.sources[Number(button.dataset.realtimeResponse)];if(state.dirty)throw new Error('Сначала сохраните и примените Live source.');await api('/api/session/realtime/respond','POST',{source_id:source.id});state.job=await api('/api/job');updateOutput();notify('Live response запрошен через общую ручную очередь.');}));
+}
+function bindAudioSource(source,index,p,set){
+ const audio=source.audio;
+ set('srcSegment_'+index,'segment_ms',true,audio);set('srcSilence_'+index,'silence_ms',true,audio);set('srcMinimum_'+index,'minimum_ms',true,audio);set('srcThreshold_'+index,'threshold',true,audio);
+ const mode=$('#srcMode_'+index);if(mode)mode.onchange=event=>{audio.mode=event.target.value;if(audio.mode==='process'){audio.device_id='';audio.device_role='';audio.process ||= {executable_path:''};}else{delete audio.process;audio.device_id='';audio.device_role ||= 'multimedia';}dirty();renderBehaviorEditor(p,'background');};
+ if(audio.mode==='process'){
+  audio.process ||= {executable_path:''};
+  const path=$('#srcProcessPath_'+index);if(path)path.onchange=()=>{audio.process.executable_path=path.value.trim();dirty();};
+  loadAudioProcesses($('#srcProcessRunning_'+index),audio,index);
+ }else{
+  set('srcRole_'+index,'device_role',false,audio);loadAudioDevices($('#srcDevice_'+index),audio);const device=$('#srcDevice_'+index);if(device)device.onchange=event=>{audio.device_id=event.target.value;dirty();};
+ }
+}
+async function loadAudioProcesses(select,audio,index){
+ if(!select)return;
+ const status=$('#srcProcessCapability_'+index);
+ try{
+  audioCapabilityCache ||= await api('/api/audio/capabilities');
+  if(!audioCapabilityCache.process_loopback){select.disabled=true;select.innerHTML='<option value="">Process-only недоступен</option>';if(status)status.textContent=audioCapabilityCache.process_loopback_reason||'Захват приложения недоступен; выберите системный звук явно.';return;}
+  if(status)status.textContent=`Process-loopback поддерживается. Минимальный build ${audioCapabilityCache.minimum_process_loopback_build||20348}. Silent downgrade запрещён.`;
+  const processes=await api('/api/audio/processes'),groups=new Map();
+  for(const process of processes||[]){const key=(process.path||'').toLowerCase();if(!key)continue;const group=groups.get(key)||{path:process.path,name:process.name,items:[]};group.items.push(process);groups.set(key,group);}
+  const configured=audio.process?.executable_path||'';
+  select.innerHTML='<option value="">Выбрать запущенное приложение…</option>'+[...groups.values()].map(group=>{const ids=new Set(group.items.map(item=>item.pid)),roots=group.items.filter(item=>!ids.has(item.parent_pid)),detail=roots.length===1?`root PID ${roots[0].pid} · tree ${group.items.length}`:`${roots.length} независимых roots · ambiguous`;return `<option value="${esc(group.path)}" ${group.path.toLowerCase()===configured.toLowerCase()?'selected':''}>${esc(group.name)} · ${detail}</option>`;}).join('');
+  if(configured&&![...groups.values()].some(group=>group.path.toLowerCase()===configured.toLowerCase())){const option=document.createElement('option');option.value=configured;option.selected=true;option.textContent='Сохранённое приложение сейчас не запущено';select.append(option);}
+  select.onchange=()=>{if(!select.value)return;audio.process ||= {executable_path:''};audio.process.executable_path=select.value;const path=$('#srcProcessPath_'+index);if(path)path.value=select.value;dirty();};
+ }catch(error){select.disabled=true;select.innerHTML='<option value="">Process-only capability недоступна</option>';if(status)status.textContent=error.message||String(error);}
 }
 function screenSourceFields(s,i){
  const region=s.screen_region;
@@ -195,13 +248,14 @@ async function previewAudioSource(p,i){const s=p.sources[i];if(!s?.audio||!await
 async function previewLocalSTTSource(p,i){const source=p.sources[i],select=$('#localSTTPreviewProvider_'+i),status=$('#localSTTPreviewState_'+i);if(!source?.audio||!select||!status||!await pauseBackgroundForAudioPreview())return;status.textContent='Запись 2 секунды и локальное распознавание…';const result=await api('/api/audio/local-stt-preview','POST',{config:source.audio,provider_id:select.value,duration_ms:2000});status.innerHTML=`<strong>${esc(result.provider_id)} · ${esc(result.model_id)}</strong><br>${esc(result.text||'Речь не распознана')}<br><span class="dim">${(result.duration_ms/1000).toFixed(1)} с · RMS ${Number(result.rms).toFixed(3)} · LOCAL / без сети</span>`;}
 function runtimeOutcomeLabel(outcome){return {no_action:'без ответа по решению модели',respond:'ответ опубликован',context_only:'обновлён только контекст',rate_limited:'лимит провайдера',timeout:'таймаут',any_error:'ошибка обработки'}[outcome]||outcome||'';}
 function runtimeSuppressionLabel(reason){return {cooldown_after_auto_answer:'AI на паузе после автоответа',studio_visible_without_capture_exclusion:'кадр пропущен: Studio видима без подтверждённого capture exclusion',studio_capture_safety_timeout:'кадр пропущен: Studio не подтвердила безопасность capture'}[reason]||reason||'';}
-const audioTransportLabels={starting:'transport запускается',alive:'transport жив',recovering:'transport переподключается',stopped:'transport остановлен',unavailable:'transport недоступен'};
+const audioTransportLabels={starting:'transport запускается',alive:'transport жив',recovering:'transport восстанавливается',stopped:'transport остановлен',unavailable:'transport недоступен'};
 const audioSignalLabels={unknown:'сигнал ещё не определён',no_packets:'пакетов сейчас нет',silent:'WASAPI: тишина',data:'аудиоданные поступают'};
 function runtimeAudioStateParts(source){
  const parts=[];
  if(source.transport_state)parts.push(audioTransportLabels[source.transport_state]||source.transport_state);
  if(source.signal_state)parts.push(audioSignalLabels[source.signal_state]||source.signal_state);
  if(source.remote_state)parts.push(`Live: ${source.remote_state}${source.remote_model?' · '+source.remote_model:''}`);
+ if(source.process_id)parts.push(`process PID ${source.process_id}${source.process_path?' · '+source.process_path:''}`);
  return parts;
 }
 function runtimeSourceSummary(source){

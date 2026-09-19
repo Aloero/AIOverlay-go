@@ -138,6 +138,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/session/context/clear", s.handleContextClear)
 	mux.HandleFunc("/api/session/command/preview", s.handleCommandPreview)
 	mux.HandleFunc("/api/audio/devices", s.handleAudioDevices)
+	mux.HandleFunc("/api/audio/capabilities", s.handleAudioCapabilities)
+	mux.HandleFunc("/api/audio/processes", s.handleAudioProcesses)
 	mux.HandleFunc("/api/audio/preview", s.handleAudioPreview)
 	mux.HandleFunc("/api/audio/local-stt-preview", s.handleLocalSTTPreview)
 	mux.HandleFunc("/api/simulation", s.handleSimulation)
