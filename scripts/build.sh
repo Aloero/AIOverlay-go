@@ -25,7 +25,7 @@ cp README.md ARCHITECTURE.md VERIFICATION.md THIRD_PARTY_NOTICES.txt dist/
 for doc in AUDIT_FIXES.md SECURITY.md STUDIO_UX.md UX_REVIEW.md; do [[ ! -f "$doc" ]] || cp "$doc" dist/; done
 cp runtime/manifest.json dist/runtime/
 cp scripts/Install-WebView2.ps1 dist/Install-WebView2.ps1
-cp runtime/opencode/opencode.exe runtime/opencode/LICENSE dist/runtime/opencode/
+cp runtime/opencode/opencode.exe runtime/opencode/LICENSE runtime/opencode/VERSION.txt dist/runtime/opencode/
 cp runtime/sing-box/sing-box.exe runtime/sing-box/libcronet.dll runtime/sing-box/LICENSE runtime/sing-box/VERSION.txt dist/runtime/sing-box/
 if [[ -f runtime/sing-box/GPL-3.0.txt ]]; then cp runtime/sing-box/GPL-3.0.txt dist/runtime/sing-box/; fi
 cp runtime/catalog/models-dev-api.json runtime/catalog/opencode-enabled.json dist/runtime/catalog/

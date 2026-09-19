@@ -1,0 +1,6 @@
+OpenCode v1.18.31
+Official release: https://github.com/anomalyco/opencode/releases/tag/v1.18.31
+Windows x64 archive: opencode-windows-x64.zip
+Archive SHA-256: 0ecd7ffc7f26390ce7799e7bcd409e4f11c410144308a6a5b0fcdce63d871006
+Bundled opencode.exe SHA-256: 0242a0dc705af67c90882b456a36b619883c1c786aad8fe071a1bc64e5d1d440
+Bundled file is unmodified from the official release archive.

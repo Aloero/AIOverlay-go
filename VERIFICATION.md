@@ -22,12 +22,15 @@ vet (`--windows-verify`) opt-in instead of default release gates. Building the
 Windows EXE remains an artifact-production step, not evidence of Windows runtime
 acceptance.
 
-Current runtime materialization is intentionally fail-closed.
-`go run ./cmd/preflight --runtimes` stops because
-`runtime/opencode/opencode.exe` is an LFS pointer; `runtime/sing-box/sing-box.exe`
-and `runtime/sing-box/libcronet.dll` are pointers too. This checkout has no origin
-remote, no release ZIP cache and no matching local payload copy, so no fresh
-release archive is claimed or generated from these pointers.
+Runtime materialization is now complete and content-verified. OpenCode v1.18.31
+was downloaded from the official GitHub release; the ZIP SHA-256 matched GitHub's
+release digest and the extracted `opencode.exe` exactly matched the pinned LFS
+OID/manifest SHA-256. sing-box 1.14.1 was downloaded from its official Windows
+amd64 release; the archive SHA-256 matched `runtime/sing-box/VERSION.txt`, and
+both `sing-box.exe` and `libcronet.dll` exactly matched their pinned LFS OIDs.
+The three payloads are also present in the local Git LFS object cache.
+`go run ./cmd/preflight --runtimes` now passes. Release generation remains
+fail-closed if any payload is missing, reverts to a pointer, or fails its hash.
 
 ## Historical 0.2.8 snapshot checks · not rerun for current HEAD
 

@@ -43,6 +43,7 @@ Copy-Item "README.md" "dist/README.md" -Force
 Copy-Item "VERIFICATION.md" "dist/VERIFICATION.md" -Force
 Copy-Item "runtime/opencode/opencode.exe" "dist/runtime/opencode/opencode.exe" -Force
 Copy-Item "runtime/opencode/LICENSE" "dist/runtime/opencode/LICENSE" -Force
+Copy-Item "runtime/opencode/VERSION.txt" "dist/runtime/opencode/VERSION.txt" -Force
 Copy-Item "runtime/sing-box/sing-box.exe" "dist/runtime/sing-box/sing-box.exe" -Force
 Copy-Item "runtime/sing-box/libcronet.dll" "dist/runtime/sing-box/libcronet.dll" -Force
 Copy-Item "runtime/sing-box/LICENSE" "dist/runtime/sing-box/LICENSE" -Force

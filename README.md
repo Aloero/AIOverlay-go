@@ -88,7 +88,7 @@ Studio → «Приложение» содержит runtime-настройки 
 
 VPN-конфиг может содержать UUID, пароли и другие секреты. Он хранится в том же переносимом `config.json`; файл следует считать секретным. Кнопка «Проверить конфиг» выполняет структурную проверку, а на Windows также `sing-box check`. Рабочий sing-box запускается только при первом AI-запросе после включения; «Проверить конфиг» создаёт отдельный короткий процесс check, без AI-запроса.
 
-Bundled runtime: sing-box 1.14.1 из официального Windows amd64 release; исходный release archive сверяется по SHA-256 при подготовке дистрибутива. Лицензия находится в `runtime/sing-box/LICENSE`.
+Bundled runtimes закреплены по содержимому, а не по имени latest. OpenCode v1.18.31 берётся из официального `opencode-windows-x64.zip`; SHA-256 архива `0ecd7ffc7f26390ce7799e7bcd409e4f11c410144308a6a5b0fcdce63d871006`, а bundled `opencode.exe` — `0242a0dc705af67c90882b456a36b619883c1c786aad8fe071a1bc64e5d1d440`. Подробности находятся в `runtime/opencode/VERSION.txt`. sing-box 1.14.1 берётся из официального Windows amd64 release; SHA-256 исходного архива закреплён в `runtime/sing-box/VERSION.txt`. Лицензии находятся рядом с runtime-файлами. Если checkout содержит только Git LFS pointers, выполните `python3 scripts/materialize-runtimes.py`: helper скачивает только эти закреплённые официальные ZIP, проверяет SHA-256 архива и каждого извлечённого runtime-файла и лишь затем атомарно заменяет pointer. `python3 scripts/materialize-runtimes.py --check` выполняет только локальную проверку без сети.
 
 ## Privacy и процессы
 
