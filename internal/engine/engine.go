@@ -13,14 +13,21 @@ import (
 	tracestore "aioverlay/internal/trace"
 )
 
+type ContextView struct {
+	Text      string
+	ImageJPEG []byte
+}
+
 type Input struct {
 	Audio                                  *domain.AudioClip
 	AudioText, ContextText, VisionText     string
 	ContextIncomplete                      bool
 	EntryNodeID, Intent, SourceID, EventID string
 
-	ImageJPEG []byte
-	Text      string
+	ImageJPEG    []byte
+	ImagePinned  bool
+	ContextViews map[string]ContextView
+	Text         string
 }
 
 type CallLease interface {
@@ -107,7 +114,7 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, input Input, op
 	t.SourceID = input.SourceID
 	t.EventID = input.EventID
 	t.Intent = input.Intent
-	text, err := r.run(ctx, entry, nodeValue{image: input.ImageJPEG, audio: input.Audio, transcript: input.AudioText, vision: input.VisionText, text: input.Text})
+	text, err := r.run(ctx, entry, nodeValue{image: input.ImageJPEG, imagePinned: input.ImagePinned, audio: input.Audio, transcript: input.AudioText, vision: input.VisionText, text: input.Text, contextText: input.ContextText})
 	terminalCause := context.Cause(ctx)
 	cancel()
 	r.workers.Wait()

@@ -135,6 +135,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/session/pause", s.handleSessionPause)
 	mux.HandleFunc("/api/session/source", s.handleSessionSource)
 	mux.HandleFunc("/api/session/context/clear", s.handleContextClear)
+	mux.HandleFunc("/api/session/command/preview", s.handleCommandPreview)
 	mux.HandleFunc("/api/audio/devices", s.handleAudioDevices)
 	mux.HandleFunc("/api/audio/preview", s.handleAudioPreview)
 	mux.HandleFunc("/api/simulation", s.handleSimulation)
@@ -164,6 +165,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/prompts/preview", s.handlePromptPreview)
 	mux.HandleFunc("/api/prompts/last", s.handleLastPrompts)
 	mux.HandleFunc("/api/job", s.handleJob)
+	mux.HandleFunc("/api/job/pending", s.handlePendingJob)
 	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			w.WriteHeader(405)

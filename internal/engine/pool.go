@@ -20,7 +20,7 @@ func (r *runner) runPool(ctx context.Context, n domain.Node, input nodeValue) (n
 	modelInput := input
 	// VLM -> LLM composite: a configured vision preprocessor is executed first and its output becomes text input.
 	if pool.VisionPreprocessor != nil {
-		visionNode := domain.Node{ID: n.ID + "/vision", Type: domain.NodeModelPool, Name: n.Name + " Vision", ModelPool: pool.VisionPreprocessor}
+		visionNode := domain.Node{ID: n.ID + "/vision", Type: domain.NodeModelPool, Name: n.Name + " Vision", ContextMode: n.ContextMode, ContextID: n.ContextID, ModelPool: pool.VisionPreprocessor}
 		v, outcome, err := r.runPool(context.WithValue(ctx, silentKey{}, true), visionNode, input)
 		if err != nil {
 			return nodeValue{}, outcome, err
@@ -188,6 +188,7 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 	if !ok {
 		return "", domain.OutcomeProviderUnavailable, fmt.Errorf("provider config missing")
 	}
+	input = r.contextualizeNodeInput(n, input)
 	if pool.Task == "transcribe" {
 		input.image = nil
 	}

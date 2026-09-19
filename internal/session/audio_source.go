@@ -217,13 +217,6 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 	ctxCfg := captured.context.config
 	hasCtx := ctxCfg.ID != ""
 	gen := captured.context.generation
-	snap := ContextSnapshot{}
-	if hasCtx {
-		snap = m.contexts.Snapshot(ctxCfg, pipelineID, seg.Ended)
-		if snap.Generation != gen {
-			return
-		}
-	}
 	clip := seg.Clip
 	if clip.SegmentID == "" {
 		clip.SegmentID = captured.eventID
@@ -246,11 +239,23 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 	} else {
 		clearSourceSuppression(r)
 	}
-	input := engine.Input{Audio: &clip, ContextText: snap.Text, ImageJPEG: snap.ImageJPEG, EntryNodeID: r.cfg.EntryNodeID, Intent: string(intent), SourceID: r.cfg.ID, EventID: clip.SegmentID}
+	contextIDs := requestedContextIDs(*p, r.cfg.EntryNodeID, intent, r.cfg.ContextID)
+	configs := contextConfigs(p, contextIDs)
+	generations := m.contextGenerations(pipelineID, configs)
+	if hasCtx {
+		generations[ctxCfg.ID] = gen
+	}
+	views, current := m.snapshotContextViews(pipelineID, configs, generations, seg.Ended)
+	if !current {
+		m.finishPending(captured.eventID)
+		return
+	}
+	defaultView := views[r.cfg.ContextID]
+	input := engine.Input{Audio: &clip, ContextText: defaultView.Text, ContextViews: views, ImageJPEG: append([]byte(nil), defaultView.ImageJPEG...), EntryNodeID: r.cfg.EntryNodeID, Intent: string(intent), SourceID: r.cfg.ID, EventID: clip.SegmentID}
 	if hasCtx {
 		m.addPending(pendingSegment{pipelineID: pipelineID, contextID: ctxCfg.ID, eventID: clip.SegmentID, generation: gen, start: seg.Started, end: seg.Ended})
 	}
-	m.enqueueBackgroundTurn(r, backgroundTurn{pipelineID: pipelineID, ctxCfg: ctxCfg, generation: gen, input: input, at: seg.Ended})
+	m.enqueueBackgroundTurn(r, backgroundTurn{pipelineID: pipelineID, ctxCfg: ctxCfg, generation: gen, contextGenerations: cloneGenerations(generations), input: input, at: seg.Ended})
 }
 
 func (m *Manager) discardQueuedAudioSegments(runtime *sourceRuntime, queue *audioSegmentQueue) {

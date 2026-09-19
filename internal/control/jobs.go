@@ -87,6 +87,23 @@ func (j *JobManager) Cancel() {
 	}
 }
 
+func (j *JobManager) CancelPending(id string) bool {
+	j.admission.Lock()
+	defer j.admission.Unlock()
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.pending == nil || (id != "" && j.pending.id != id) {
+		return false
+	}
+	if j.pending.cancelPrepare != nil {
+		j.pending.cancelPrepare()
+	}
+	j.pending = nil
+	j.job.QueuedID = ""
+	j.job.QueuedPurpose = ""
+	return true
+}
+
 // StartPrepared registers the entire operation before capture. Cancelling the
 // operation while GDI finishes discards the frame before any provider call.
 func (j *JobManager) Start(parent context.Context, b liveBackend, pipeline string, input engine.Input) (string, error) {
@@ -319,6 +336,19 @@ func (j *JobManager) Wait(ctx context.Context, id string) (Job, error) {
 	case <-ctx.Done():
 		return Job{}, ctx.Err()
 	}
+}
+
+func (s *Server) handlePendingJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if !s.jobs.CancelPending(id) {
+		http.Error(w, "pending command not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {

@@ -14,12 +14,15 @@ type BehaviorNode struct {
 }
 
 type BehaviorAIStage struct {
-	ID         string          `json:"id"`
-	Name       string          `json:"name"`
-	Type       domain.NodeType `json:"type"`
-	Task       string          `json:"task,omitempty"`
-	ResultName string          `json:"result_name,omitempty"`
-	Input      PoolInput       `json:"input"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Type        domain.NodeType `json:"type"`
+	Task        string          `json:"task,omitempty"`
+	ResultName  string          `json:"result_name,omitempty"`
+	ContextMode string          `json:"context_mode,omitempty"`
+	ContextID   string          `json:"context_id,omitempty"`
+	ContextName string          `json:"context_name,omitempty"`
+	Input       PoolInput       `json:"input"`
 }
 
 type BehaviorTrigger struct {
@@ -267,6 +270,7 @@ func behaviorAIStage(pipeline domain.Pipeline, node domain.Node, id, name string
 	return BehaviorAIStage{
 		ID: id, Name: behaviorName(name, id), Type: node.Type,
 		Task: pool.Task, ResultName: pool.ResultName,
+		ContextMode: behaviorNodeContextMode(node), ContextID: node.ContextID, ContextName: behaviorContextName(pipeline, node.ContextID),
 		Input: describePoolInput(pipeline, id, starts),
 	}
 }
@@ -295,4 +299,23 @@ func cloneSessionBudget(budget *domain.SessionBudget) *domain.SessionBudget {
 	copy := *budget
 	copy.Extra = nil
 	return &copy
+}
+
+func behaviorNodeContextMode(node domain.Node) string {
+	if node.ContextMode != "" {
+		return node.ContextMode
+	}
+	if node.ContextID != "" {
+		return "named"
+	}
+	return "trigger"
+}
+
+func behaviorContextName(pipeline domain.Pipeline, id string) string {
+	for _, context := range pipeline.Contexts {
+		if context.ID == id {
+			return behaviorName(context.Name, context.ID)
+		}
+	}
+	return ""
 }

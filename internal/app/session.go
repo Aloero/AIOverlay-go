@@ -25,6 +25,12 @@ func (a *App) SetSessionPublisher(fn func(session.Publication)) {
 		a.sessions.SetPublisher(fn)
 	}
 }
+func (a *App) PreviewCommand(action string) (session.CommandPreview, error) {
+	if a.sessions == nil {
+		return session.CommandPreview{}, fmt.Errorf("session runtime unavailable")
+	}
+	return a.sessions.PreviewCommand(action)
+}
 func (a *App) PrepareCommand(ctx context.Context, action string, capture session.ScreenCapture) (session.PreparedCommand, error) {
 	if a.sessions == nil {
 		return session.PreparedCommand{}, fmt.Errorf("session runtime unavailable")

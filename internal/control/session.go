@@ -15,6 +15,7 @@ import (
 )
 
 type sessionBackend interface {
+	PreviewCommand(string) (session.CommandPreview, error)
 	PrepareCommand(context.Context, string, session.ScreenCapture) (session.PreparedCommand, error)
 	ValidatePreparedCommand(session.PreparedCommand) error
 	RecordCommandResult(session.PreparedCommand, engine.Result) bool
@@ -25,6 +26,24 @@ type sessionBackend interface {
 	ClearConversation(string) (uint64, error)
 	AudioDevices() ([]paudio.Device, error)
 	PreviewAudio(context.Context, domain.AudioSourceConfig, time.Duration) (session.AudioPreview, error)
+}
+
+func (s *Server) handleCommandPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	backend, ok := s.backend.(sessionBackend)
+	if !ok {
+		http.Error(w, "session runtime unavailable", http.StatusNotImplemented)
+		return
+	}
+	preview, err := backend.PreviewCommand(r.URL.Query().Get("action"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, preview)
 }
 
 func (s *Server) StartCommand(action string) (string, error) {

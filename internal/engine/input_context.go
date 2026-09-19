@@ -106,9 +106,15 @@ func describePoolInput(pipeline domain.Pipeline, nodeID string, starts []inputSt
 			continue
 		}
 		if state.id == rootID {
-			image = image || (state.image && !state.imageResolved)
+			stageImage := state.image && !state.imageResolved
+			stageText := state.text || state.hasOutput
+			if node.ContextID != "" {
+				stageText = true
+				stageImage = stageImage || contextMayProvideScreen(pipeline, node.ContextID)
+			}
+			image = image || stageImage
 			audio = audio || state.audio
-			text = text || state.text || state.hasOutput
+			text = text || stageText
 			sources[state.source] = true
 			continue
 		}
@@ -215,4 +221,33 @@ func boolInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+// ContextIDsForRoute returns only explicit named context dependencies for the
+// reachable AI stages. Trigger context is already carried separately in Input.
+func ContextIDsForRoute(pipeline domain.Pipeline, entryID string, intent domain.CommandIntent) []string {
+	nodes := behaviorNodeMap(pipeline)
+	reachable := reachableBehaviorNodes(pipeline, entryID, intent, false)
+	seen := map[string]bool{}
+	var ids []string
+	for _, item := range reachable {
+		node := nodes[item.ID]
+		if node.Type != domain.NodeModelPool && node.Type != domain.NodeDecision {
+			continue
+		}
+		if node.Type == domain.NodeDecision && intent == domain.IntentRespond {
+			continue
+		}
+		mode := node.ContextMode
+		if mode == "" && node.ContextID != "" {
+			mode = "named"
+		}
+		if mode != "named" || node.ContextID == "" || seen[node.ContextID] {
+			continue
+		}
+		seen[node.ContextID] = true
+		ids = append(ids, node.ContextID)
+	}
+	sort.Strings(ids)
+	return ids
 }

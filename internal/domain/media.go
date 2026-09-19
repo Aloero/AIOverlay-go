@@ -38,24 +38,35 @@ type CommandConfig struct {
 // source belongs to the saved pipeline; AutoStart controls whether it starts with
 // the application. Runtime pause/resume state is intentionally not serialized here.
 type EventSource struct {
-	Extra       map[string]json.RawMessage `json:"-"`
-	ID          string                     `json:"id"`
-	Name        string                     `json:"name"`
-	Kind        SourceKind                 `json:"kind"`
-	Enabled     bool                       `json:"enabled"`
-	AutoStart   bool                       `json:"auto_start"`
-	EntryNodeID string                     `json:"entry_node_id"`
-	Intent      CommandIntent              `json:"intent"`
-	ContextID   string                     `json:"context_id,omitempty"`
-	IntervalMS  int                        `json:"interval_ms,omitempty"`
-	ChangedOnly bool                       `json:"changed_only,omitempty"`
-	DebounceMS  int                        `json:"debounce_ms,omitempty"`
-	MaxWaitMS   int                        `json:"max_wait_ms,omitempty"`
-	Audio       *AudioSourceConfig         `json:"audio,omitempty"`
+	Extra             map[string]json.RawMessage `json:"-"`
+	ID                string                     `json:"id"`
+	Name              string                     `json:"name"`
+	Kind              SourceKind                 `json:"kind"`
+	Enabled           bool                       `json:"enabled"`
+	AutoStart         bool                       `json:"auto_start"`
+	EntryNodeID       string                     `json:"entry_node_id"`
+	Intent            CommandIntent              `json:"intent"`
+	ContextID         string                     `json:"context_id,omitempty"`
+	IntervalMS        int                        `json:"interval_ms,omitempty"`
+	ContextIntervalMS int                        `json:"context_interval_ms,omitempty"`
+	TriggerIntervalMS int                        `json:"trigger_interval_ms,omitempty"`
+	ChangedOnly       bool                       `json:"changed_only,omitempty"`
+	DebounceMS        int                        `json:"debounce_ms,omitempty"`
+	MaxWaitMS         int                        `json:"max_wait_ms,omitempty"`
+	ScreenRegion      *ScreenRegionConfig        `json:"screen_region,omitempty"`
+	Audio             *AudioSourceConfig         `json:"audio,omitempty"`
 
 	// Command is a schema-4 compatibility field. Schema 5 materializes manual
 	// commands into Pipeline.Commands and leaves this empty.
 	Command string `json:"command,omitempty"`
+}
+
+type ScreenRegionConfig struct {
+	Extra  map[string]json.RawMessage `json:"-"`
+	X      int                        `json:"x"`
+	Y      int                        `json:"y"`
+	Width  int                        `json:"width"`
+	Height int                        `json:"height"`
 }
 
 type AudioSourceConfig struct {

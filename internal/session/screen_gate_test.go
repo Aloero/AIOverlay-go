@@ -60,3 +60,23 @@ func TestScreenChangeGateWithoutChangedOnlyPublishesEveryFrame(t *testing.T) {
 		t.Fatal("periodic source unexpectedly suppressed a frame")
 	}
 }
+
+func TestScreenDeliveryClockSeparatesContextAndAIIntervals(t *testing.T) {
+	clock := newScreenDeliveryClock(domain.EventSource{IntervalMS: 1000, ContextIntervalMS: 2000, TriggerIntervalMS: 5000})
+	start := time.Unix(100, 0)
+	first, ok := clock.Observe([]byte("one"), start, true, true, true)
+	if !ok || !first.contextDue || !first.triggerDue {
+		t.Fatalf("first delivery=%+v ok=%v", first, ok)
+	}
+	if _, ok := clock.Observe([]byte("two"), start.Add(time.Second), true, true, true); ok {
+		t.Fatal("throttled change delivered too early")
+	}
+	contextOnly, ok := clock.Observe([]byte("latest"), start.Add(2*time.Second), false, true, true)
+	if !ok || !contextOnly.contextDue || contextOnly.triggerDue || string(contextOnly.image) != "latest" {
+		t.Fatalf("context cadence=%+v ok=%v", contextOnly, ok)
+	}
+	trigger, ok := clock.Observe([]byte("newest"), start.Add(5*time.Second), false, true, true)
+	if !ok || trigger.contextDue || !trigger.triggerDue || string(trigger.image) != "newest" {
+		t.Fatalf("trigger cadence=%+v ok=%v", trigger, ok)
+	}
+}

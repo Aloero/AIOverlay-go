@@ -6,12 +6,16 @@ const skipNames={not_configured:'нет подключения / ключа',not
 function renderPoolInspector(n) {
  const pool=n.model_pool,transcribe=pool.task==='transcribe',decision=n.type==='decision';
  const taskLabel=transcribe?'AUDIO → TEXT':decision?'РЕШЕНИЕ О РЕАКЦИИ':'ОТВЕТ / ОБРАБОТКА';
- $('#inspectorBody').innerHTML=`${field('Название этапа','nodeName',n.name)}<div class="task-contract"><span>ЗАДАЧА</span><b>${taskLabel}</b><small>${transcribe?'Результат становится {{audio.text}}. Пустая корректная расшифровка не требует fallback.':decision?'Служебный результат: no_action / respond / need_screen. JSON решения не публикуется как ответ.':'Вход определяется графом и контекстом; несовместимые media route исключаются.'}</small></div>
+ const contextMode=n.context_mode||(n.context_id?'named':'trigger'),contexts=contextOptions(pipe(),'Выберите context');
+ const contextFields=selectField('Контекст этого AI-этапа','nodeContextMode',{trigger:'Наследовать от команды / источника',none:'Без local context',named:'Выбрать конкретный context'},contextMode)+(contextMode==='named'?selectField('Использовать context','nodeContextID',contexts,n.context_id||''):'');
+ $('#inspectorBody').innerHTML=`${field('Название этапа','nodeName',n.name)}${contextFields}<div class="task-contract"><span>ЗАДАЧА</span><b>${taskLabel}</b><small>${transcribe?'Результат становится {{audio.text}}. Пустая корректная расшифровка не требует fallback.':decision?'Служебный результат: no_action / respond / need_screen. JSON решения не публикуется как ответ.':'Вход определяется графом и контекстом; несовместимые media route исключаются.'}</small></div>
  ${!transcribe&&!decision?`<label class="switch stage-switch"><input type="checkbox" id="enableVision" ${pool.vision_preprocessor?'checked':''}>Зрение → текстовая модель</label>`:''}<div id="visionPool"></div><div id="solverSource"></div><div class="section-line"><h4>ПОРЯДОК ЗАПУСКА</h4></div>
  <div id="dispatchControls"></div><div id="poolPlan" class="pool-plan"></div>
  <div class="section-line"><h4>${pool.selection?.mode&&pool.selection.mode!=='manual'?'СНАЧАЛА ПРОБОВАТЬ':'МОЙ СПИСОК'}</h4></div><div id="solverModels"></div><button class="add-model" id="addSolverModel">+ Выбрать совместимую модель</button>
  ${outgoing(n.id)}`;
  bindValue('nodeName',n,'name',false,renderGraph);
+ $('#nodeContextMode').onchange=e=>{n.context_mode=e.target.value;if(n.context_mode!=='named')delete n.context_id;dirty();renderGraph();renderInspector();};
+ if($('#nodeContextID'))$('#nodeContextID').onchange=e=>{n.context_id=e.target.value;dirty();renderGraph();renderInspector();};
  if(transcribe){pool.selection||={mode:'catalog',provider_ids:[],free_only:false,modality:'audio',default_quality_score:0};pool.selection.modality='audio';pool.result_name='audio.text';}
  renderSourceControls($('#solverSource'),pool,'source',false);
  renderSlots($('#solverModels'),pool,false);

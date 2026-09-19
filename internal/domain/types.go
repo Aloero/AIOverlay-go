@@ -173,13 +173,15 @@ type Position struct {
 }
 
 type Node struct {
-	Extra     map[string]json.RawMessage `json:"-"`
-	ID        string                     `json:"id"`
-	Type      NodeType                   `json:"type"`
-	Name      string                     `json:"name"`
-	Position  Position                   `json:"position"`
-	ModelPool *ModelPoolConfig           `json:"model_pool,omitempty"`
-	Validator *ValidatorConfig           `json:"validator,omitempty"`
+	Extra       map[string]json.RawMessage `json:"-"`
+	ID          string                     `json:"id"`
+	Type        NodeType                   `json:"type"`
+	Name        string                     `json:"name"`
+	Position    Position                   `json:"position"`
+	ContextMode string                     `json:"context_mode,omitempty"`
+	ContextID   string                     `json:"context_id,omitempty"`
+	ModelPool   *ModelPoolConfig           `json:"model_pool,omitempty"`
+	Validator   *ValidatorConfig           `json:"validator,omitempty"`
 }
 
 // CatalogSelection is an explicit model source, independent of dispatch policy.

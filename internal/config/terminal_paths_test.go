@@ -10,9 +10,10 @@ func TestContextOnlyCommandIsValidTerminalWithoutOutput(t *testing.T) {
 	cfg := Default()
 	pipeline := &cfg.Pipelines[0]
 	pipeline.Nodes = append(pipeline.Nodes, domain.Node{ID: "context-only", Type: domain.NodeContext, Name: "Context only"})
+	pipeline.Contexts = append(pipeline.Contexts, domain.ContextConfig{ID: "store", Name: "Store", Enabled: true, MaxAgeS: 60, MaxEntries: 10, MaxChars: 1000, KeepLatestScreen: true, ScreenMaxAgeS: 60})
 	pipeline.Commands = append(pipeline.Commands, domain.CommandConfig{
 		ID: "store-screen", Action: "screen_context", EntryNodeID: "context-only",
-		Intent: domain.IntentContext, CaptureScreen: true,
+		Intent: domain.IntentContext, ContextID: "store", CaptureScreen: true,
 	})
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("context-only terminal rejected: %v", err)
@@ -72,5 +73,31 @@ func TestCommandAndSourceCannotShareTriggerID(t *testing.T) {
 	})
 	if err := Validate(cfg); err == nil {
 		t.Fatal("command/source trigger ID collision was accepted")
+	}
+}
+
+func TestScreenContextRequiresScreenRetention(t *testing.T) {
+	cfg := Default()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Nodes = append(pipeline.Nodes, domain.Node{ID: "context-only-screen", Type: domain.NodeContext, Name: "Context"})
+	pipeline.Contexts = append(pipeline.Contexts, domain.ContextConfig{ID: "no-screen", Name: "No screen", Enabled: true, MaxAgeS: 60, MaxEntries: 10, MaxChars: 1000, ScreenMaxAgeS: 60})
+	pipeline.Commands = append(pipeline.Commands, domain.CommandConfig{ID: "store", Action: "screen_context", EntryNodeID: "context-only-screen", Intent: domain.IntentContext, ContextID: "no-screen", CaptureScreen: true})
+	if err := Validate(cfg); err == nil {
+		t.Fatal("screen_context accepted a context that discards screens")
+	}
+}
+
+func TestAIStageContextModeValidation(t *testing.T) {
+	cfg := Default()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Contexts = append(pipeline.Contexts, domain.ContextConfig{ID: "stage", Name: "Stage", Enabled: true, MaxAgeS: 60, MaxEntries: 10, MaxChars: 1000, ScreenMaxAgeS: 60})
+	pipeline.Nodes[1].ContextMode = "named"
+	pipeline.Nodes[1].ContextID = "stage"
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("valid named stage context rejected: %v", err)
+	}
+	pipeline.Nodes[1].ContextMode = "none"
+	if err := Validate(cfg); err == nil {
+		t.Fatal("none mode accepted a named context id")
 	}
 }

@@ -341,6 +341,7 @@ async function startRun(source,image) {
  state.job=await api('/api/job');updateOutput();notify('Запрос запущен. Журнал доступен во вкладке «Запуски».');
 }
 async function stopRun(){await api('/api/job','DELETE');notify('Отмена отправлена. Уже принятый провайдером запрос может быть учтён в квоте.');}
+async function cancelQueuedRun(){const id=state.job?.queued_id;if(!id)return;await api('/api/job/pending?id='+encodeURIComponent(id),'DELETE');state.job=await api('/api/job');updateOutput();notify('Ожидающая ручная команда отменена. Текущий запрос продолжается.');}
 async function runImage(e) {
  const f=e.target.files[0];e.target.value='';if(!f)return;
  if(f.size>15*1024*1024)throw new Error('Изображение больше 15 МБ.');
@@ -366,11 +367,11 @@ async function pollJob() {
 function updateOutput() {
  const j=state.job;
  applyResultLayout();
- if($('#stopRun'))$('#stopRun').classList.toggle('hidden',!j?.running);
+ if($('#stopRun'))$('#stopRun').classList.toggle('hidden',!j?.running);if($('#cancelQueued'))$('#cancelQueued').classList.toggle('hidden',!j?.queued_id);
  renderAttemptState();
  if(!j?.id)return;
  if(j.cleared){if($('#outputText'))$('#outputText').textContent='';if($('#outputMeta'))$('#outputMeta').textContent='';$('#appStatus').textContent='Готов к работе';return;}
- $('#appStatus').innerHTML=`<i style="background:${j.error?'var(--red)':j.running?'var(--accent)':'var(--green)'}"></i>${j.running?'Выполнение · '+(j.duration_ms/1000).toFixed(1)+' с':j.error?'Запрос завершился с ошибкой':'Готов · '+(j.duration_ms/1000).toFixed(2)+' с'}`;
+ $('#appStatus').innerHTML=`<i style="background:${j.error?'var(--red)':j.running?'var(--accent)':'var(--green)'}"></i>${j.running?'Выполнение · '+(j.duration_ms/1000).toFixed(1)+' с':j.error?'Запрос завершился с ошибкой':'Готов · '+(j.duration_ms/1000).toFixed(2)+' с'}${j.queued_id?' · ручная команда ожидает':''}`;
  if(!$('#outputText'))return;
  const text=j.error ? (j.text?j.text+'\n\n':'')+'Ошибка: '+j.error : j.text;
  if(text){$('#outputText').textContent=text;$('#outputText').classList.toggle('result-error',!!j.error);}

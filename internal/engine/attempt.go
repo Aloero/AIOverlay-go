@@ -85,7 +85,7 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	respTimeout := durationMS(limits.ResponseMS)
 	actx, cancel := context.WithTimeout(ctx, respTimeout)
 	defer cancel()
-	values := PromptValues{InputText: r.input.Text, PreviousOutput: input.text, VisionText: input.vision, AudioText: input.transcript, ContextText: r.input.ContextText}
+	values := PromptValues{InputText: r.input.Text, PreviousOutput: input.text, VisionText: input.vision, AudioText: input.transcript, ContextText: input.contextText}
 	system, user := RenderRequestPrompt(pool.Prompt, values)
 	req := providers.Request{Audio: input.audio, Task: pool.Task, ProviderID: m.ProviderID, ModelID: m.ModelID, SystemPrompt: system, UserPrompt: user, ImageJPEG: input.image, TextInput: input.text, MaxOutputTokens: limits.MaxOutputTokens, ConnectTimeout: durationMS(limits.ConnectMS), FirstTokenTimeout: durationMS(limits.FirstTokenMS), ResponseTimeout: respTimeout, StreamIdleTimeout: durationMS(limits.IdleMS)}
 	if r.opt.OnPrompt != nil {
@@ -311,4 +311,36 @@ func holdAttemptResourcesUntilProviderStops(sem chan struct{}, lease CallLease, 
 	if lease != nil {
 		lease.Release()
 	}
+}
+
+func (r *runner) contextualizeNodeInput(node domain.Node, input nodeValue) nodeValue {
+	mode := node.ContextMode
+	if mode == "" && node.ContextID != "" {
+		mode = "named"
+	}
+	switch mode {
+	case "none":
+		input.contextText = ""
+		if !input.imagePinned {
+			input.image = nil
+			input.imageResolved = false
+		}
+		return input
+	case "named":
+		view, ok := r.input.ContextViews[node.ContextID]
+		if !ok {
+			input.contextText = ""
+			if !input.imagePinned {
+				input.image = nil
+				input.imageResolved = false
+			}
+			return input
+		}
+		input.contextText = view.Text
+		if !input.imagePinned {
+			input.image = append(input.image[:0], view.ImageJPEG...)
+			input.imageResolved = false
+		}
+	}
+	return input
 }

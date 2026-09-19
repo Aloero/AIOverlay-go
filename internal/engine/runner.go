@@ -33,8 +33,10 @@ type nodeValue struct {
 	image         []byte
 	text          string
 	vision        string
+	contextText   string
 	hasOutput     bool
 	imageResolved bool
+	imagePinned   bool
 }
 type runner struct {
 	waited, published bool
@@ -141,6 +143,7 @@ func (r *runner) run(ctx context.Context, nodeID string, value nodeValue) (strin
 			out = value
 			out.image, err = r.capture(ctx, n.ID)
 			out.imageResolved = false
+			out.imagePinned = err == nil
 			if err != nil {
 				outcome = domain.OutcomeProviderUnavailable
 			}

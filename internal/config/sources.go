@@ -35,6 +35,28 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 		c, ok := contexts[id]
 		return ok && c.Enabled
 	}
+	for _, node := range p.Nodes {
+		if node.ContextMode == "" && node.ContextID == "" {
+			continue
+		}
+		if node.Type != domain.NodeModelPool && node.Type != domain.NodeDecision {
+			return fmt.Errorf("node %s can select context only for an AI stage", node.ID)
+		}
+		mode := node.ContextMode
+		if mode == "" && node.ContextID != "" {
+			mode = "named"
+		}
+		if !enum(mode, "trigger", "none", "named") {
+			return fmt.Errorf("node %s has invalid context mode", node.ID)
+		}
+		if mode == "named" {
+			if node.ContextID == "" || !contextOK(node.ContextID) {
+				return fmt.Errorf("node %s references disabled or missing context", node.ID)
+			}
+		} else if node.ContextID != "" {
+			return fmt.Errorf("node %s context id requires named context mode", node.ID)
+		}
+	}
 	ids := map[string]bool{}
 	actions := map[string]bool{}
 	for _, c := range p.Commands {
@@ -63,6 +85,12 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 		}
 		if c.Action == "analyze" && !c.CaptureScreen {
 			return fmt.Errorf("analyze command must capture the screen")
+		}
+		if c.Action == "screen_context" {
+			ctxCfg, ok := contexts[c.ContextID]
+			if !ok || !ctxCfg.Enabled || !ctxCfg.KeepLatestScreen {
+				return fmt.Errorf("screen_context command %s requires a context that stores the latest screen", c.ID)
+			}
 		}
 	}
 	if _, ok := actions["analyze"]; !ok {
@@ -93,6 +121,17 @@ func validateSources(p domain.Pipeline, nodes map[string]domain.Node) error {
 		if s.Kind == domain.SourceScreenTimer {
 			if !within(s.IntervalMS, 1000, 600000) {
 				return fmt.Errorf("screen source interval must be 1..600 seconds")
+			}
+			if s.ContextIntervalMS != 0 && !within(s.ContextIntervalMS, 1000, 600000) {
+				return fmt.Errorf("screen context interval must be 1..600 seconds or 0 to inherit capture interval")
+			}
+			if s.TriggerIntervalMS != 0 && !within(s.TriggerIntervalMS, 1000, 600000) {
+				return fmt.Errorf("screen AI trigger interval must be 1..600 seconds or 0 to inherit capture interval")
+			}
+			if region := s.ScreenRegion; region != nil {
+				if region.X < 0 || region.Y < 0 || !within(region.Width, 1, 16384) || !within(region.Height, 1, 16384) {
+					return fmt.Errorf("screen region must use non-negative origin and 1..16384 dimensions")
+				}
 			}
 			if !within(s.DebounceMS, 0, 60000) {
 				return fmt.Errorf("screen source debounce must be 0..60 seconds")

@@ -6,6 +6,7 @@ import (
 	paudio "aioverlay/internal/platform/audio"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1519,5 +1520,104 @@ func TestBackgroundScreenUsesCaptureCompletionTimeForContextSnapshot(t *testing.
 		}
 	case <-time.After(time.Second):
 		t.Fatal("background screen turn was not queued")
+	}
+}
+
+func TestPreparedCommandPinsNamedStageContextGeneration(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Commands[0].ContextID = "c"
+	pipeline.Contexts = append(pipeline.Contexts, domain.ContextConfig{
+		ID: "other", Name: "Other", Enabled: true, MaxAgeS: 60, MaxEntries: 10, MaxChars: 1000,
+		IncludeTranscript: true, KeepLatestScreen: true, ScreenMaxAgeS: 60,
+	})
+	pool := domain.ModelPoolConfig{Task: "generate", Models: []domain.ModelSlot{{ID: "m", ProviderID: "fixture", ModelID: "m", Enabled: true}}}
+	pipeline.Nodes = []domain.Node{
+		{ID: "screen", Type: domain.NodeScreen},
+		{ID: "solver", Type: domain.NodeModelPool, ContextMode: "named", ContextID: "other", ModelPool: &pool},
+		{ID: "output", Type: domain.NodeOutput},
+	}
+	pipeline.Edges = []domain.Edge{
+		{ID: "a", From: "screen", To: "solver", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+		{ID: "b", From: "solver", To: "output", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+	}
+	manager.Apply(cfg)
+	manager.capture = func(context.Context) ([]byte, error) { return []byte("manual"), nil }
+	for _, contextCfg := range pipeline.Contexts {
+		generation := manager.contexts.Generation(pipeline.ID, contextCfg.ID)
+		manager.contexts.Append(contextCfg, pipeline.ID, generation, ContextEntry{ID: contextCfg.ID, Kind: "transcript", Text: contextCfg.ID + " text", At: time.Now().Add(-time.Second)})
+	}
+
+	prepared, err := manager.PrepareCommand(context.Background(), "analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Input.ContextText != "[transcript] c text" {
+		t.Fatalf("trigger context=%q", prepared.Input.ContextText)
+	}
+	if got := prepared.Input.ContextViews["other"].Text; got != "[transcript] other text" {
+		t.Fatalf("named stage context=%q", got)
+	}
+	if len(prepared.ContextGenerations) != 2 {
+		t.Fatalf("pinned generations=%v", prepared.ContextGenerations)
+	}
+	if _, err := manager.ClearContext("other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidatePreparedCommand(prepared); err == nil {
+		t.Fatal("cleared named stage context remained dispatchable")
+	}
+}
+
+func TestCommandPreviewReportsMetadataWithoutCaptureOrContent(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := managerConfig()
+	pipeline := &cfg.Pipelines[0]
+	pipeline.Commands[0].ContextID = "c"
+	pipeline.Commands[0].WaitForTranscriptMS = 250
+	pool := domain.ModelPoolConfig{Task: "generate", Models: []domain.ModelSlot{{ID: "m", ProviderID: "fixture", ModelID: "m", Enabled: true}}}
+	pipeline.Nodes = []domain.Node{
+		{ID: "screen", Type: domain.NodeScreen},
+		{ID: "solver", Type: domain.NodeModelPool, ContextMode: "named", ContextID: "c", ModelPool: &pool},
+		{ID: "output", Type: domain.NodeOutput},
+	}
+	pipeline.Edges = []domain.Edge{
+		{ID: "a", From: "screen", To: "solver", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+		{ID: "b", From: "solver", To: "output", On: []domain.Outcome{domain.OutcomeSuccess}, MaxVisits: 1},
+	}
+	manager.Apply(cfg)
+	var captures atomic.Int32
+	manager.capture = func(context.Context) ([]byte, error) {
+		captures.Add(1)
+		return []byte("must-not-capture"), nil
+	}
+	contextCfg := pipeline.Contexts[0]
+	generation := manager.contexts.Generation(pipeline.ID, contextCfg.ID)
+	manager.contexts.Append(contextCfg, pipeline.ID, generation, ContextEntry{ID: "private", Kind: "transcript", Text: "PRIVATE_PREVIEW_CONTENT", At: time.Now().Add(-time.Second)})
+	manager.contexts.Append(contextCfg, pipeline.ID, generation, ContextEntry{ID: "gap", Kind: "gap", Gap: true, At: time.Now().Add(-500 * time.Millisecond)})
+	manager.contexts.SetScreen(contextCfg, pipeline.ID, generation, []byte("private-screen"), time.Now().Add(-100*time.Millisecond))
+
+	preview, err := manager.PreviewCommand("analyze")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captures.Load() != 0 {
+		t.Fatalf("metadata preview captured screen %d times", captures.Load())
+	}
+	if preview.WaitForTranscriptMS != 250 || len(preview.Contexts) != 1 {
+		t.Fatalf("preview=%+v", preview)
+	}
+	row := preview.Contexts[0]
+	if row.Entries != 2 || row.Gaps != 1 || !row.HasScreen || row.Generation != generation {
+		t.Fatalf("context metadata=%+v", row)
+	}
+	stage := preview.StageContexts["solver"]
+	if stage.Mode != "named" || stage.ContextID != "c" {
+		t.Fatalf("stage metadata=%+v", stage)
+	}
+	raw := fmt.Sprintf("%+v", preview)
+	if strings.Contains(raw, "PRIVATE_PREVIEW_CONTENT") || strings.Contains(raw, "private-screen") {
+		t.Fatalf("metadata preview exposed content: %s", raw)
 	}
 }

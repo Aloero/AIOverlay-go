@@ -35,9 +35,34 @@ type PreparedCommand struct {
 	Input                engine.Input
 	Context              domain.ContextConfig
 	ContextGeneration    uint64
+	ContextGenerations   map[string]uint64
 	PermissionGeneration uint64
 	Capture              ScreenCapture
 	SkipRun              bool
+}
+
+type CommandContextPreview struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Generation  uint64 `json:"generation"`
+	Entries     int    `json:"entries"`
+	Gaps        int    `json:"gaps"`
+	HasScreen   bool   `json:"has_screen"`
+	ScreenAgeMS int64  `json:"screen_age_ms,omitempty"`
+}
+
+type CommandStageContextPreview struct {
+	Mode      string `json:"mode"`
+	ContextID string `json:"context_id,omitempty"`
+}
+
+type CommandPreview struct {
+	Action              string                                `json:"action"`
+	EntryNodeID         string                                `json:"entry_node_id"`
+	CaptureScreen       bool                                  `json:"capture_screen"`
+	WaitForTranscriptMS int                                   `json:"wait_for_transcript_ms"`
+	Contexts            []CommandContextPreview               `json:"contexts"`
+	StageContexts       map[string]CommandStageContextPreview `json:"stage_contexts,omitempty"`
 }
 
 type SourceStatus struct {
@@ -66,18 +91,18 @@ type pendingSegment struct {
 	start, end                     time.Time
 }
 type backgroundTurn struct {
-	pipelineID string
-	ctxCfg     domain.ContextConfig
-	generation uint64
-	input      engine.Input
-	at         time.Time
+	pipelineID         string
+	ctxCfg             domain.ContextConfig
+	generation         uint64
+	contextGenerations map[string]uint64
+	input              engine.Input
+	at                 time.Time
 }
 
 type activeBackgroundTurn struct {
-	pipelineID string
-	contextID  string
-	generation uint64
-	cancel     context.CancelFunc
+	pipelineID         string
+	contextGenerations map[string]uint64
+	cancel             context.CancelFunc
 }
 
 type sourceRuntime struct {
@@ -436,7 +461,11 @@ func (m *Manager) reconcile() {
 	}
 	m.mu.Unlock()
 }
-func sameSource(a, b domain.EventSource) bool { return reflect.DeepEqual(a, b) }
+func sameSource(a, b domain.EventSource) bool {
+	a.Name = ""
+	b.Name = ""
+	return reflect.DeepEqual(a, b)
+}
 
 func sourceFinished(runtime *sourceRuntime) bool {
 	select {
@@ -964,6 +993,14 @@ func transcriptEntry(sourceID string, turn backgroundTurn, observation engine.Ob
 }
 
 func (m *Manager) turnGenerationCurrent(turn backgroundTurn) bool {
+	if len(turn.contextGenerations) > 0 {
+		for contextID, generation := range turn.contextGenerations {
+			if m.contexts.Generation(turn.pipelineID, contextID) != generation {
+				return false
+			}
+		}
+		return true
+	}
 	if turn.ctxCfg.ID == "" || turn.generation == 0 {
 		return true
 	}
@@ -976,9 +1013,11 @@ func (m *Manager) registerActiveTurn(turn backgroundTurn, cancel context.CancelF
 		id = fmt.Sprintf("background-turn-%d", m.eventSeq.Add(1))
 	}
 	m.activeTurnMu.Lock()
-	m.activeTurns[id] = activeBackgroundTurn{
-		pipelineID: turn.pipelineID, contextID: turn.ctxCfg.ID, generation: turn.generation, cancel: cancel,
+	generations := cloneGenerations(turn.contextGenerations)
+	if len(generations) == 0 && turn.ctxCfg.ID != "" {
+		generations = map[string]uint64{turn.ctxCfg.ID: turn.generation}
 	}
+	m.activeTurns[id] = activeBackgroundTurn{pipelineID: turn.pipelineID, contextGenerations: generations, cancel: cancel}
 	m.activeTurnMu.Unlock()
 	return id
 }
@@ -996,7 +1035,10 @@ func (m *Manager) cancelContextTurns(pipelineID, contextID string, currentGenera
 	m.activeTurnMu.Lock()
 	var cancels []context.CancelFunc
 	for _, turn := range m.activeTurns {
-		if turn.pipelineID == pipelineID && turn.contextID == contextID && turn.generation != currentGeneration {
+		if turn.pipelineID != pipelineID {
+			continue
+		}
+		if generation, selected := turn.contextGenerations[contextID]; selected && generation != currentGeneration {
 			cancels = append(cancels, turn.cancel)
 		}
 	}
@@ -1057,6 +1099,65 @@ func (m *Manager) sourceCurrent(id string, epoch uint64) bool {
 	return r != nil && r.epoch == epoch && m.started && !m.paused
 }
 
+func (m *Manager) PreviewCommand(action string) (CommandPreview, error) {
+	m.mu.RLock()
+	cfg := m.cfg
+	m.mu.RUnlock()
+	pipeline := activePipeline(cfg)
+	if pipeline == nil {
+		return CommandPreview{}, fmt.Errorf("active pipeline missing")
+	}
+	command, ok := findCommand(pipeline, action)
+	if !ok {
+		return CommandPreview{}, fmt.Errorf("command %q is not configured in active pipeline", action)
+	}
+	preview := CommandPreview{Action: action, EntryNodeID: command.EntryNodeID, CaptureScreen: command.CaptureScreen, WaitForTranscriptMS: command.WaitForTranscriptMS, StageContexts: map[string]CommandStageContextPreview{}}
+	reachable := map[string]bool{}
+	for _, node := range engine.DescribePipelineBehavior(*pipeline).Commands {
+		if node.ID != command.ID {
+			continue
+		}
+		for _, item := range node.Reachable {
+			reachable[item.ID] = true
+		}
+	}
+	for _, node := range pipeline.Nodes {
+		if !reachable[node.ID] || node.Type != domain.NodeModelPool && node.Type != domain.NodeDecision {
+			continue
+		}
+		mode := node.ContextMode
+		if mode == "" {
+			if node.ContextID != "" {
+				mode = "named"
+			} else {
+				mode = "trigger"
+			}
+		}
+		preview.StageContexts[node.ID] = CommandStageContextPreview{Mode: mode, ContextID: node.ContextID}
+	}
+	now := time.Now()
+	ids := requestedContextIDs(*pipeline, command.EntryNodeID, command.Intent, command.ContextID)
+	configs := contextConfigs(pipeline, ids)
+	for _, id := range ids {
+		contextCfg, exists := configs[id]
+		if !exists {
+			continue
+		}
+		snapshot := m.contexts.Snapshot(contextCfg, pipeline.ID, now)
+		row := CommandContextPreview{ID: id, Name: contextCfg.Name, Generation: snapshot.Generation, Entries: len(snapshot.Entries), HasScreen: len(snapshot.ImageJPEG) > 0}
+		for _, entry := range snapshot.Entries {
+			if entry.Gap {
+				row.Gaps++
+			}
+		}
+		if row.HasScreen && !snapshot.ImageAt.IsZero() {
+			row.ScreenAgeMS = now.Sub(snapshot.ImageAt).Milliseconds()
+		}
+		preview.Contexts = append(preview.Contexts, row)
+	}
+	return preview, nil
+}
+
 func (m *Manager) PrepareCommand(ctx context.Context, action string) (PreparedCommand, error) {
 	return m.PrepareCommandWithCapture(ctx, action, nil)
 }
@@ -1082,7 +1183,10 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 		return PreparedCommand{}, fmt.Errorf("command %q is not configured in active pipeline", action)
 	}
 	ctxCfg, has := findContext(p, cmd.ContextID)
-	gen := m.contexts.Generation(p.ID, ctxCfg.ID)
+	contextIDs := requestedContextIDs(*p, cmd.EntryNodeID, cmd.Intent, cmd.ContextID)
+	configs := contextConfigs(p, contextIDs)
+	generations := m.contextGenerations(p.ID, configs)
+	gen := generations[ctxCfg.ID]
 	triggeredAt := time.Now()
 	capturedAt := triggeredAt
 	var img []byte
@@ -1100,37 +1204,44 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 		}
 		capturedAt = time.Now()
 	}
-	snap := ContextSnapshot{}
 	incomplete := false
-	if has {
-		if cmd.WaitForTranscriptMS > 0 {
-			complete, waitErr := m.waitPending(ctx, p.ID, ctxCfg.ID, gen, triggeredAt, time.Duration(cmd.WaitForTranscriptMS)*time.Millisecond)
-			if waitErr != nil {
-				return PreparedCommand{}, waitErr
-			}
-			incomplete = !complete
+	if cmd.WaitForTranscriptMS > 0 {
+		complete, waitErr := m.waitPendingContexts(ctx, p.ID, generations, triggeredAt, time.Duration(cmd.WaitForTranscriptMS)*time.Millisecond)
+		if waitErr != nil {
+			return PreparedCommand{}, waitErr
 		}
-		if m.contexts.Generation(p.ID, ctxCfg.ID) != gen {
-			return PreparedCommand{}, errCommandContextChanged
-		}
-		if cmd.Intent == domain.IntentContext && len(img) > 0 {
-			stored := m.contexts.SetScreen(ctxCfg, p.ID, gen, img, capturedAt)
-			if ctxCfg.KeepLatestScreen && !stored {
-				return PreparedCommand{}, errCommandContextChanged
-			}
-			return PreparedCommand{PipelineID: p.ID, Command: cmd, Context: ctxCfg, ContextGeneration: gen, PermissionGeneration: permissionGeneration, Capture: capture, SkipRun: true}, nil
-		}
-		snap = m.contexts.Snapshot(ctxCfg, p.ID, triggeredAt)
-		if snap.Generation != gen {
+		incomplete = !complete
+	}
+	for contextID, generation := range generations {
+		if m.contexts.Generation(p.ID, contextID) != generation {
 			return PreparedCommand{}, errCommandContextChanged
 		}
 	}
+	if cmd.Intent == domain.IntentContext && len(img) > 0 {
+		if !has || !ctxCfg.KeepLatestScreen {
+			return PreparedCommand{}, fmt.Errorf("screen_context command requires a context that stores screens")
+		}
+		if !m.contexts.SetScreen(ctxCfg, p.ID, gen, img, capturedAt) {
+			return PreparedCommand{}, errCommandContextChanged
+		}
+		return PreparedCommand{PipelineID: p.ID, Command: cmd, Context: ctxCfg, ContextGeneration: gen, ContextGenerations: cloneGenerations(generations), PermissionGeneration: permissionGeneration, Capture: capture, SkipRun: true}, nil
+	}
+	views, current := m.snapshotContextViews(p.ID, configs, generations, triggeredAt)
+	if !current {
+		return PreparedCommand{}, errCommandContextChanged
+	}
+	defaultView := views[cmd.ContextID]
 	inputImage := img
-	if len(inputImage) == 0 && len(snap.ImageJPEG) > 0 {
-		inputImage = snap.ImageJPEG
+	imagePinned := len(img) > 0
+	if len(inputImage) == 0 && len(defaultView.ImageJPEG) > 0 {
+		inputImage = defaultView.ImageJPEG
 	}
-	input := engine.Input{ImageJPEG: append([]byte(nil), inputImage...), ContextText: snap.Text, ContextIncomplete: incomplete, EntryNodeID: cmd.EntryNodeID, Intent: string(cmd.Intent), SourceID: cmd.ID, EventID: fmt.Sprintf("%s-%d", cmd.ID, m.eventSeq.Add(1))}
-	return PreparedCommand{PipelineID: p.ID, Command: cmd, Input: input, Context: ctxCfg, ContextGeneration: gen, PermissionGeneration: permissionGeneration, Capture: capture}, nil
+	input := engine.Input{
+		ImageJPEG: append([]byte(nil), inputImage...), ImagePinned: imagePinned, ContextText: defaultView.Text, ContextViews: views, ContextIncomplete: incomplete,
+		EntryNodeID: cmd.EntryNodeID, Intent: string(cmd.Intent), SourceID: cmd.ID, EventID: fmt.Sprintf("%s-%d", cmd.ID, m.eventSeq.Add(1)),
+	}
+	return PreparedCommand{PipelineID: p.ID, Command: cmd, Input: input, Context: ctxCfg, ContextGeneration: gen, ContextGenerations: cloneGenerations(generations), PermissionGeneration: permissionGeneration, Capture: capture}, nil
+
 }
 
 func (m *Manager) ValidatePreparedCommand(prepared PreparedCommand) error {
@@ -1152,7 +1263,12 @@ func (m *Manager) ValidatePreparedCommand(prepared PreparedCommand) error {
 	if !allowed {
 		return errCapturePermissionChanged
 	}
-	if prepared.Context.ID != "" && m.contexts.Generation(prepared.PipelineID, prepared.Context.ID) != prepared.ContextGeneration {
+	for contextID, generation := range prepared.ContextGenerations {
+		if m.contexts.Generation(prepared.PipelineID, contextID) != generation {
+			return errCommandContextChanged
+		}
+	}
+	if len(prepared.ContextGenerations) == 0 && prepared.Context.ID != "" && m.contexts.Generation(prepared.PipelineID, prepared.Context.ID) != prepared.ContextGeneration {
 		return errCommandContextChanged
 	}
 	return nil
