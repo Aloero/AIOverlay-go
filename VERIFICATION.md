@@ -111,8 +111,10 @@ lifecycle soak accepts only the specific cancellation caused by a concurrent
 Clear and checks that a fresh manual command still succeeds afterward.
 
 R2 regressions now also cover bounded long-speech overlap with time-scoped
-transcript deduplication, synthetic silence/noise/short-negation/number fixtures,
-one active plus one pending manual command with separately pinned screenshots,
+transcript deduplication, synthetic silence/noise/short-duration signal fixtures,
+and separate context retention of short negation/number transcript text. These are
+not claimed as a speech-recognition corpus. One active plus one pending manual
+command uses separately pinned screenshots,
 permission-generation fencing for late screen actions, proxy-credential
 redaction on realtime fail-closed errors, per-stage context snapshots, independent
 screen capture/context/AI cadence, parallel VLM+STT preprocessing with provenance,
@@ -128,9 +130,9 @@ DOM/Chromium, CRC, every-entry hashes, clean extraction and a reproducible EXE
 from the extracted source. Consult the generated report for the checks actually
 completed on that archive's commit.
 
-The acceptance scope for this branch is automated Go/race/UI verification plus
-Windows-target compile/vet. Physical Windows audio/desktop acceptance remains
-out of scope rather than being implied by cross-builds. Process-only Windows
+The acceptance scope for this branch is automated Go/race/static/JS verification.
+Windows-target compilation/vet and physical Windows audio/desktop acceptance are
+not release gates for the scope requested here and are not implied by Linux tests. Process-only Windows
 audio now has a separate native `ActivateAudioInterfaceAsync` path with the
 process-loopback virtual device, Windows build capability gating (minimum 20348),
 exact executable-path selection, unique process-tree root resolution, a held

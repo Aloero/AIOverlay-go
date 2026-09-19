@@ -70,7 +70,7 @@ func (socket *openAILiveSocketFixture) writtenEvents(t *testing.T) []openAILiveE
 	return result
 }
 
-func TestOpenAILiveExperimentRequiresSessionStartedBeforeCommands(t *testing.T) {
+func TestOpenAILiveProtocolRequiresSessionStartedBeforeCommands(t *testing.T) {
 	socket := newOpenAILiveSocketFixture()
 	protocol := newOpenAILiveProtocol(socket, true)
 	if err := protocol.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
@@ -93,7 +93,7 @@ func TestOpenAILiveExperimentRequiresSessionStartedBeforeCommands(t *testing.T) 
 	}
 }
 
-func TestOpenAILiveExperimentAudioAppendDoesNotCreateResponse(t *testing.T) {
+func TestOpenAILiveProtocolAudioAppendDoesNotCreateResponse(t *testing.T) {
 	socket := newOpenAILiveSocketFixture()
 	protocol := newOpenAILiveProtocol(socket, true)
 	if err := protocol.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
@@ -121,7 +121,7 @@ func TestOpenAILiveExperimentAudioAppendDoesNotCreateResponse(t *testing.T) {
 	}
 }
 
-func TestOpenAILiveExperimentExplicitResponseRequiresDelegationAndParsesNestedText(t *testing.T) {
+func TestOpenAILiveProtocolExplicitResponseRequiresDelegationAndParsesNestedText(t *testing.T) {
 	withoutDelegation := newOpenAILiveProtocol(newOpenAILiveSocketFixture(), false)
 	if err := withoutDelegation.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestOpenAILiveExperimentExplicitResponseRequiresDelegationAndParsesNestedTe
 	}
 }
 
-func TestOpenAILiveExperimentKeepsUnverifiedOperationsUnsupported(t *testing.T) {
+func TestOpenAILiveProtocolKeepsUnverifiedOperationsUnsupported(t *testing.T) {
 	verified := openAILiveProtocolOperations()
 	for _, operation := range []RealtimeOperation{RealtimeAppendAudio, RealtimeRequestResponse, RealtimeTextOutput} {
 		if !verified[operation] {
@@ -175,19 +175,19 @@ func TestOpenAILiveExperimentKeepsUnverifiedOperationsUnsupported(t *testing.T) 
 	}
 }
 
-func TestOpenAILiveExperimentRejectsSessionStartedBeforeSessionStart(t *testing.T) {
+func TestOpenAILiveProtocolRejectsSessionStartedBeforeSessionStart(t *testing.T) {
 	socket := newOpenAILiveSocketFixture()
 	protocol := newOpenAILiveProtocol(socket, false)
 	socket.reads <- `{"type":"session.started"}`
 	if _, err := protocol.NextServerEvent(context.Background()); err == nil {
-		t.Fatal("out-of-order session.started activated Live experiment")
+		t.Fatal("out-of-order session.started activated Live session")
 	}
 	if protocol.Started() {
 		t.Fatal("out-of-order session.started changed protocol state")
 	}
 }
 
-func TestOpenAILiveExperimentClosesOnlyAfterProtocolCloseAndBoundsEvents(t *testing.T) {
+func TestOpenAILiveProtocolClosesOnlyAfterProtocolCloseAndBoundsEvents(t *testing.T) {
 	socket := newOpenAILiveSocketFixture()
 	protocol := newOpenAILiveProtocol(socket, false)
 	if err := protocol.Start(context.Background(), json.RawMessage(`{"model":"gpt-live-1"}`)); err != nil {

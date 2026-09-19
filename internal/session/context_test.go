@@ -128,7 +128,7 @@ func TestOverlappingTranscriptTrimsOnlySharedAudioPrefix(t *testing.T) {
 	}
 }
 
-func TestShortTranscriptCorpusPreservesNegationAndNumber(t *testing.T) {
+func TestContextStorePreservesShortNegationAndNumberText(t *testing.T) {
 	store := NewContextStore()
 	cfg := testContext()
 	generation := store.Generation("p", cfg.ID)

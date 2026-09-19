@@ -240,7 +240,7 @@ func TestSegmenterLongSpeechUsesBoundedOverlap(t *testing.T) {
 	}
 }
 
-func TestSyntheticAudioCorpusKeepsShortSignalsAndRejectsSilenceNoise(t *testing.T) {
+func TestSyntheticSignalFixturesKeepShortSignalsAndRejectSilenceNoise(t *testing.T) {
 	tests := []struct {
 		name         string
 		amplitude    int16
@@ -249,8 +249,8 @@ func TestSyntheticAudioCorpusKeepsShortSignalsAndRejectsSilenceNoise(t *testing.
 	}{
 		{name: "silence", amplitude: 0, durationMS: 300, wantSegments: 0},
 		{name: "background_noise", amplitude: 100, durationMS: 300, wantSegments: 0},
-		{name: "short_no", amplitude: 12000, durationMS: 100, wantSegments: 1},
-		{name: "short_number", amplitude: 9000, durationMS: 120, wantSegments: 1},
+		{name: "short_signal_100ms", amplitude: 12000, durationMS: 100, wantSegments: 1},
+		{name: "short_signal_120ms", amplitude: 9000, durationMS: 120, wantSegments: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

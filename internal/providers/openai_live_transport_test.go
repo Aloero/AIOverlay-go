@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestOpenAILiveTransportExperimentUsesExplicitEndpointAuthAndSessionStart(t *testing.T) {
+func TestOpenAILiveTransportUsesExplicitEndpointAuthAndSessionStart(t *testing.T) {
 	serverDone := make(chan error, 1)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/explicit-live-primary" || request.URL.Query().Get("fixture") != "1" {
@@ -109,7 +109,7 @@ func TestOpenAILiveTransportExperimentUsesExplicitEndpointAuthAndSessionStart(t 
 	}
 }
 
-func TestOpenAILiveTransportExperimentFailsClosedBeforeWebSocketDial(t *testing.T) {
+func TestOpenAILiveTransportFailsClosedBeforeWebSocketDial(t *testing.T) {
 	var dials atomic.Int32
 	connector := newRealtimeConnector(testProxyResolver{err: errors.New("tunnel unavailable")}, time.Second)
 	connector.dialContext = func(context.Context, string, string) (net.Conn, error) {
@@ -124,11 +124,11 @@ func TestOpenAILiveTransportExperimentFailsClosedBeforeWebSocketDial(t *testing.
 		t.Fatalf("Live fail-closed error=%v", err)
 	}
 	if dials.Load() != 0 {
-		t.Fatalf("Live experiment bypassed VPN resolver with %d direct dials", dials.Load())
+		t.Fatalf("Live adapter bypassed VPN resolver with %d direct dials", dials.Load())
 	}
 }
 
-func TestOpenAILiveTransportExperimentRejectsCredentialInURLAndMissingKeyBeforeDial(t *testing.T) {
+func TestOpenAILiveTransportRejectsCredentialInURLAndMissingKeyBeforeDial(t *testing.T) {
 	var dials atomic.Int32
 	connector := newRealtimeConnector(nil, time.Second)
 	connector.dialContext = func(context.Context, string, string) (net.Conn, error) {

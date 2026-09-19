@@ -494,3 +494,123 @@ func TestUnavailableProcessTargetDoesNotOpenRealtimeSessionOrCapture(t *testing.
 		t.Fatalf("preflight leaked work: realtime opens=%d capture calls=%d", opens.Load(), captures.Load())
 	}
 }
+
+func TestCancelledRealtimeResponseDropsLateServerTextAndKeepsItOutOfContext(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := realtimeManagerConfig()
+	source := &cfg.Pipelines[0].Sources[0]
+	source.ContextID = "c"
+	manager.cfg = cfg
+	manager.started = true
+	manager.governor.Configure(1, 60)
+	runtime := &sourceRuntime{pipelineID: "p", cfg: *source, epoch: 1}
+	fixture := newRealtimeSessionFixture()
+	runtime.realtime = fixture
+	manager.sources[source.ID] = runtime
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := manager.RequestRealtimeResponse(ctx, source.ID)
+		result <- err
+	}()
+	<-fixture.started
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel error=%v", err)
+	}
+
+	// The remote side may still deliver data because this adapter does not claim
+	// a verified interrupt operation. These events must be drained only; they may
+	// not reopen local publication or context after the manual command cancelled.
+	fixture.events <- providers.Event{Type: providers.EventDelta, Text: "LATE_REMOTE_PRIVATE_TEXT"}
+	close(fixture.events)
+	close(fixture.errors)
+	deadline := time.Now().Add(time.Second)
+	for manager.governor.Snapshot()["active"] != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if active := manager.governor.Snapshot()["active"]; active != 0 {
+		t.Fatalf("late remote terminal did not release governor lease: active=%d", active)
+	}
+	snapshot := manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
+	for _, entry := range snapshot.Entries {
+		if strings.Contains(entry.Text, "LATE_REMOTE_PRIVATE_TEXT") {
+			t.Fatalf("late server text escaped cancelled response into context: %+v", snapshot.Entries)
+		}
+	}
+}
+
+func TestClearContextStartsFreshRealtimeSessionInsteadOfForkingOldOne(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := realtimeManagerConfig()
+	cfg.Pipelines[0].Sources[0].ContextID = "c"
+	opened := make(chan *reconnectingRealtimeFixture, 4)
+	manager.SetRealtimeOpener(func(context.Context, string, string) (providers.RealtimeSession, error) {
+		fixture := newReconnectingRealtimeFixture()
+		opened <- fixture
+		return fixture, nil
+	})
+	manager.SetAudioCapture(func(ctx context.Context, _ domain.AudioSourceConfig, _ func(paudio.Block)) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx, cfg)
+	var first *reconnectingRealtimeFixture
+	select {
+	case first = <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("initial realtime session did not open")
+	}
+	if _, err := manager.ClearContext("c"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case second := <-opened:
+		if second == first {
+			t.Fatal("Clear reused the old remote session")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Clear did not open a new primary remote session")
+	}
+	if first.reconnectCount.Load() != 0 {
+		t.Fatalf("Clear forked old remote history: reconnects=%d", first.reconnectCount.Load())
+	}
+	manager.Close()
+}
+
+func TestRealtimeAppendStatusDoesNotClaimServerProcessedAudio(t *testing.T) {
+	manager := NewManager(nil)
+	cfg := realtimeManagerConfig()
+	manager.cfg = cfg
+	manager.started = true
+	runtime := &sourceRuntime{pipelineID: "p", cfg: cfg.Pipelines[0].Sources[0], epoch: 1}
+	fixture := newRealtimeSessionFixture()
+	runtime.realtime = fixture
+	manager.sources[runtime.cfg.ID] = runtime
+
+	captured := capturedAudioSegment{
+		context: audioContext{pipelineID: "p"},
+		segment: paudio.Segment{Clip: domain.AudioClip{PCM16: []int16{1, 2, 3, 4}, SampleRate: 16000, Channels: 1, SegmentID: "seg", Final: true}, Started: time.Now(), Ended: time.Now().Add(10 * time.Millisecond)},
+		eventID: "seg",
+	}
+	manager.processRealtimeAudioSegment(context.Background(), "p", runtime, captured, captured.segment.Clip)
+	select {
+	case <-fixture.appended:
+	case <-time.After(time.Second):
+		t.Fatal("realtime append did not reach session fixture")
+	}
+	runtime.mu.RLock()
+	status := runtime.status
+	runtime.mu.RUnlock()
+	if !strings.Contains(status.LastDiagnostic, "exact model processing acknowledgement is unavailable") {
+		t.Fatalf("append status overclaimed processing: %+v", status)
+	}
+	for _, forbidden := range []string{"server processed", "processed successfully", "heard", "услыш"} {
+		if strings.Contains(strings.ToLower(status.LastDiagnostic), strings.ToLower(forbidden)) {
+			t.Fatalf("append status contains unsupported acknowledgement claim %q: %q", forbidden, status.LastDiagnostic)
+		}
+	}
+}
