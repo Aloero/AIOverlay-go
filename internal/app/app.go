@@ -127,16 +127,34 @@ func (a *App) ImportConfig(cfg domain.Config) error {
 }
 
 func (a *App) saveConfig(cfg domain.Config, imported bool) error {
+	if err := config.Migrate(&cfg); err != nil {
+		return err
+	}
+	if err := config.Validate(cfg); err != nil {
+		return err
+	}
+	if a.sessions != nil {
+		a.sessions.FencePermissions(cfg)
+	}
 	var thaw func()
 	if a.sessions != nil {
 		thaw = a.sessions.FreezeTurns()
 		defer thaw()
 	}
 	if !a.operation.TryLock() {
+		if a.sessions != nil {
+			a.sessions.FencePermissions(a.GetConfig())
+		}
 		return fmt.Errorf("analysis is running; stop it before saving settings")
 	}
 	defer a.operation.Unlock()
-	return a.saveConfigLockedWithSessionPolicy(cfg, imported)
+	if err := a.saveConfigLockedWithSessionPolicy(cfg, imported); err != nil {
+		if a.sessions != nil {
+			a.sessions.FencePermissions(a.GetConfig())
+		}
+		return err
+	}
+	return nil
 }
 
 // Caller owns the operation write lock.

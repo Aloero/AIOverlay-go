@@ -39,7 +39,12 @@ func Source(root string, allowDirty bool) ([]File, string, error) {
 	}
 	var names []string
 	commit := "source-archive"
-	if raw, err := command("rev-parse", "--show-toplevel"); err == nil && filepath.Clean(strings.TrimSpace(string(raw))) == filepath.Clean(root) {
+	raw, gitErr := command("rev-parse", "--show-toplevel")
+	_, gitMarkerErr := os.Stat(filepath.Join(root, ".git"))
+	if gitErr != nil && gitMarkerErr == nil {
+		return nil, "", fmt.Errorf("Git metadata exists but Git is unavailable or unreadable: %w", gitErr)
+	}
+	if gitErr == nil && filepath.Clean(strings.TrimSpace(string(raw))) == filepath.Clean(root) {
 		status, err := command("status", "--porcelain")
 		if err != nil {
 			return nil, "", err

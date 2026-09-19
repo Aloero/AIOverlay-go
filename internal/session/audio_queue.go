@@ -19,6 +19,7 @@ var (
 type capturedAudioSegment struct {
 	segment paudio.Segment
 	context audioContext
+	eventID string
 }
 
 type audioContext struct {

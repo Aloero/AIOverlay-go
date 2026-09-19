@@ -16,6 +16,7 @@ import (
 
 type sessionBackend interface {
 	PrepareCommand(context.Context, string, session.ScreenCapture) (session.PreparedCommand, error)
+	ValidatePreparedCommand(session.PreparedCommand) error
 	RecordCommandResult(session.PreparedCommand, engine.Result) bool
 	PauseBackground(bool)
 	SetSourceRunning(string, bool) error
@@ -55,6 +56,9 @@ func (s *Server) StartCommand(action string) (string, error) {
 	}
 	run := func(ctx context.Context, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
 		if err := prepare(ctx); err != nil {
+			return engine.Result{}, nil, err
+		}
+		if err := b.ValidatePreparedCommand(prepared); err != nil {
 			return engine.Result{}, nil, err
 		}
 		if prepared.SkipRun {

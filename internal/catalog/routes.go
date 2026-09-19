@@ -59,11 +59,26 @@ func (s *Service) runtimePresent() bool {
 		paths = append(paths, p)
 	}
 	for _, p := range paths {
-		if st, e := os.Stat(p); e == nil && !st.IsDir() {
+		if usableRuntimeFile(p) {
 			return true
 		}
 	}
 	return false
+}
+
+func usableRuntimeFile(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() || st.Size() == 0 {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, 200)
+	n, _ := f.Read(head)
+	return !strings.HasPrefix(string(head[:n]), "version https://git-lfs.github.com/spec/v1")
 }
 
 func (s *Service) Routes(cfg domain.Config) []Route {

@@ -110,6 +110,8 @@ type Manager struct {
 	started               bool
 	paused                bool
 	permissionGeneration  uint64
+	permissionPolicy      capturePermissionPolicy
+	permissionPolicySet   bool
 	sources               map[string]*sourceRuntime
 	sourceOverrides       map[string]bool
 	turnSem               chan struct{}
@@ -180,6 +182,8 @@ func (m *Manager) Start(ctx context.Context, cfg domain.Config) {
 	m.root, m.cancel = context.WithCancel(ctx)
 	m.started = true
 	m.cfg = cfg
+	m.permissionPolicy = capturePermissions(cfg)
+	m.permissionPolicySet = true
 	m.configureBudgetLocked(cfg)
 	m.mu.Unlock()
 	m.reconcile()
@@ -215,8 +219,14 @@ func (m *Manager) ApplyImported(cfg domain.Config) {
 func (m *Manager) apply(cfg domain.Config, clearRuntimeOverrides bool) {
 	m.mu.Lock()
 	pipelineChanged := activePipelineID(m.cfg) != activePipelineID(cfg)
-	if !sameCapturePermissions(m.cfg, cfg) {
+	if !m.permissionPolicySet {
+		m.permissionPolicy = capturePermissions(m.cfg)
+		m.permissionPolicySet = true
+	}
+	nextPermissions := capturePermissions(cfg)
+	if !reflect.DeepEqual(m.permissionPolicy, nextPermissions) {
 		m.permissionGeneration++
+		m.permissionPolicy = nextPermissions
 	}
 	if clearRuntimeOverrides || pipelineChanged {
 		m.sourceOverrides = map[string]bool{}
@@ -227,6 +237,7 @@ func (m *Manager) apply(cfg domain.Config, clearRuntimeOverrides bool) {
 	m.configureBudgetLocked(cfg)
 	started := m.started
 	m.mu.Unlock()
+	m.contexts.RetainConfig(cfg)
 	if started {
 		m.reconcile()
 	}
@@ -842,6 +853,14 @@ func (m *Manager) executeBackgroundTurn(parent context.Context, pipelineID strin
 		return
 	}
 	m.mu.RLock()
+	policy := m.permissionPolicy
+	if !m.permissionPolicySet {
+		policy = capturePermissions(m.cfg)
+	}
+	if !sourcePermissionAllowed(policy, r.cfg) {
+		m.mu.RUnlock()
+		return
+	}
 	exec := m.execute
 	publisher := m.publish
 	cfg := m.cfg
@@ -1114,6 +1133,31 @@ func (m *Manager) PrepareCommandWithCapture(ctx context.Context, action string, 
 	return PreparedCommand{PipelineID: p.ID, Command: cmd, Input: input, Context: ctxCfg, ContextGeneration: gen, PermissionGeneration: permissionGeneration, Capture: capture}, nil
 }
 
+func (m *Manager) ValidatePreparedCommand(prepared PreparedCommand) error {
+	m.mu.RLock()
+	pipeline := activePipeline(m.cfg)
+	permissionGeneration := m.permissionGeneration
+	policy := m.permissionPolicy
+	if !m.permissionPolicySet {
+		policy = capturePermissions(m.cfg)
+	}
+	allowed := commandPermissionAllowed(policy, prepared.Command)
+	m.mu.RUnlock()
+	if pipeline == nil || pipeline.ID != prepared.PipelineID {
+		return fmt.Errorf("active pipeline changed before command dispatch: %w", context.Canceled)
+	}
+	if prepared.PermissionGeneration != 0 && prepared.PermissionGeneration != permissionGeneration {
+		return errCapturePermissionChanged
+	}
+	if !allowed {
+		return errCapturePermissionChanged
+	}
+	if prepared.Context.ID != "" && m.contexts.Generation(prepared.PipelineID, prepared.Context.ID) != prepared.ContextGeneration {
+		return errCommandContextChanged
+	}
+	return nil
+}
+
 // RecordCommandResult stores an accepted manual answer in the context snapshot
 // generation that was pinned before the request. It never schedules another turn.
 func (m *Manager) RecordCommandResult(prepared PreparedCommand, result engine.Result) bool {
@@ -1148,8 +1192,26 @@ func (m *Manager) ClearContext(contextID string) (uint64, error) {
 	generation := m.contexts.Clear(p.ID, c.ID)
 	m.clearPendingBeforeGeneration(p.ID, c.ID, generation)
 	m.cancelContextTurns(p.ID, c.ID, generation)
+	m.clearContextSourceStatus(p.ID, c.ID)
 	return generation, nil
 }
+func (m *Manager) clearContextSourceStatus(pipelineID, contextID string) {
+	m.mu.RLock()
+	runtimes := make([]*sourceRuntime, 0, len(m.sources))
+	for _, runtime := range m.sources {
+		if runtime.cfg.ContextID == contextID && (runtime.pipelineID == "" || runtime.pipelineID == pipelineID) {
+			runtimes = append(runtimes, runtime)
+		}
+	}
+	m.mu.RUnlock()
+	for _, runtime := range runtimes {
+		runtime.mu.Lock()
+		runtime.status.LastTranscript = ""
+		runtime.status.TranscriptLagMS = 0
+		runtime.mu.Unlock()
+	}
+}
+
 func (m *Manager) Status() map[string]any {
 	m.mu.RLock()
 	cfg := m.cfg

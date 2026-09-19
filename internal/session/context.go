@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 )
 
 type ContextEntry struct {
@@ -21,6 +20,7 @@ type ContextEntry struct {
 	Gap      bool      `json:"gap,omitempty"`
 	Revision uint64    `json:"revision,omitempty"`
 	Final    bool      `json:"final,omitempty"`
+	rawText  string
 }
 
 type ContextSnapshot struct {
@@ -113,13 +113,14 @@ func (s *ContextStore) Append(cfg domain.ContextConfig, pipelineID string, gener
 
 // UpsertTranscript keeps one chronological record per segment. Partial updates may
 // advance a non-final record, while a final transcript is immutable against late
-// partial callbacks. Final transcripts from deliberately overlapped audio segments
-// trim only a matching suffix/prefix inside the overlapping capture interval.
+// partial callbacks. Overlap trimming is recomputed in capture order from each
+// segment's immutable raw text so network completion order cannot change context.
 func (s *ContextStore) UpsertTranscript(cfg domain.ContextConfig, pipelineID string, generation uint64, entry ContextEntry) bool {
 	if !cfg.Enabled || cfg.ID == "" || entry.ID == "" || entry.Text == "" {
 		return false
 	}
 	entry.Kind = "transcript"
+	entry.rawText = entry.Text
 	if entry.Revision == 0 {
 		entry.Revision = 1
 	}
@@ -142,22 +143,12 @@ func (s *ContextStore) UpsertTranscript(cfg domain.ContextConfig, pipelineID str
 		if old.Final || entry.Revision <= old.Revision {
 			return false
 		}
-	}
-	if entry.Final {
-		entry.Text = trimTranscriptOverlap(st.entries, entry)
-		if entry.Text == "" {
-			if existing >= 0 {
-				st.entries = append(st.entries[:existing], st.entries[existing+1:]...)
-			}
-			return true
-		}
-	}
-	if existing >= 0 {
 		st.entries[existing] = entry
 	} else {
 		st.entries = append(st.entries, entry)
 	}
 	sortEntries(st.entries)
+	recomputeTranscriptOverlap(st.entries)
 	s.pruneLocked(st, cfg, entry.At)
 	return true
 }
@@ -173,39 +164,56 @@ func transcriptIndex(entries []ContextEntry, id string) int {
 
 const maxTranscriptOverlapTokens = 16
 
-func trimTranscriptOverlap(entries []ContextEntry, current ContextEntry) string {
+func recomputeTranscriptOverlap(entries []ContextEntry) {
+	for i := range entries {
+		entry := &entries[i]
+		if entry.Kind != "transcript" {
+			continue
+		}
+		if entry.rawText == "" {
+			entry.rawText = entry.Text
+		}
+		entry.Text = entry.rawText
+		if !entry.Final {
+			continue
+		}
+		previous := previousOverlappingTranscript(entries, i)
+		if previous == nil {
+			continue
+		}
+		entry.Text = trimTranscriptOverlap(previous.rawText, entry.rawText)
+	}
+}
+
+func previousOverlappingTranscript(entries []ContextEntry, index int) *ContextEntry {
+	current := entries[index]
 	if current.Start.IsZero() || current.End.IsZero() {
-		return current.Text
+		return nil
 	}
-	previous := previousOverlappingTranscript(entries, current)
-	if previous == nil {
-		return current.Text
+	for i := index - 1; i >= 0; i-- {
+		candidate := &entries[i]
+		if candidate.Kind != "transcript" || !candidate.Final || candidate.SourceID != current.SourceID {
+			continue
+		}
+		if candidate.Start.IsZero() || candidate.End.IsZero() {
+			continue
+		}
+		if candidate.Start.Before(current.Start) && current.Start.Before(candidate.End) {
+			return candidate
+		}
 	}
-	left, right := strings.Fields(previous.Text), strings.Fields(current.Text)
+	return nil
+}
+
+func trimTranscriptOverlap(leftText, rightText string) string {
+	left, right := strings.Fields(leftText), strings.Fields(rightText)
 	limit := min(len(left), len(right), maxTranscriptOverlapTokens)
 	for count := limit; count > 0; count-- {
 		if equalTranscriptTokens(left[len(left)-count:], right[:count]) {
 			return strings.Join(right[count:], " ")
 		}
 	}
-	return current.Text
-}
-
-func previousOverlappingTranscript(entries []ContextEntry, current ContextEntry) *ContextEntry {
-	var best *ContextEntry
-	for i := range entries {
-		candidate := &entries[i]
-		if candidate.Kind != "transcript" || candidate.ID == current.ID || !candidate.Final || candidate.SourceID != current.SourceID {
-			continue
-		}
-		if candidate.Start.IsZero() || candidate.End.IsZero() || !candidate.Start.Before(current.Start) || !current.Start.Before(candidate.End) {
-			continue
-		}
-		if best == nil || best.End.Before(candidate.End) {
-			best = candidate
-		}
-	}
-	return best
+	return rightText
 }
 
 func equalTranscriptTokens(left, right []string) bool {
@@ -221,9 +229,8 @@ func equalTranscriptTokens(left, right []string) bool {
 }
 
 func normalizeTranscriptToken(token string) string {
-	return strings.ToLower(strings.TrimFunc(token, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
-	}))
+	const surroundingPunctuation = ".,!?;:\"'()[]{}«»…"
+	return strings.ToLower(strings.Trim(token, surroundingPunctuation))
 }
 
 func (s *ContextStore) SetScreen(cfg domain.ContextConfig, pipelineID string, generation uint64, image []byte, at time.Time) bool {
@@ -238,6 +245,9 @@ func (s *ContextStore) SetScreen(cfg domain.ContextConfig, pipelineID string, ge
 	}
 	if at.IsZero() {
 		at = time.Now()
+	}
+	if !st.imageAt.IsZero() && at.Before(st.imageAt) {
+		return false
 	}
 	st.image = append(st.image[:0], image...)
 	st.imageAt = at
@@ -276,13 +286,38 @@ func (s *ContextStore) pruneTextSizeLocked(st *contextState, maxChars int) {
 	}
 	totalChars := 0
 	for _, entry := range st.entries {
-		totalChars += len(entry.Text)
+		totalChars += storedEntryChars(entry)
 	}
 	for totalChars > maxChars && len(st.entries) > 0 {
-		totalChars -= len(st.entries[0].Text)
+		totalChars -= storedEntryChars(st.entries[0])
 		st.entries = append([]ContextEntry(nil), st.entries[1:]...)
 	}
 }
+func storedEntryChars(entry ContextEntry) int {
+	if len(entry.rawText) > len(entry.Text) {
+		return len(entry.rawText)
+	}
+	return len(entry.Text)
+}
+
+func (s *ContextStore) RetainConfig(cfg domain.Config) {
+	allowed := map[string]bool{}
+	for _, pipeline := range cfg.Pipelines {
+		for _, contextCfg := range pipeline.Contexts {
+			if contextCfg.Enabled && contextCfg.ID != "" {
+				allowed[contextKey(pipeline.ID, contextCfg.ID)] = true
+			}
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.states {
+		if !allowed[key] {
+			delete(s.states, key)
+		}
+	}
+}
+
 func (s *ContextStore) Snapshot(cfg domain.ContextConfig, pipelineID string, cutoff time.Time) ContextSnapshot {
 	out := ContextSnapshot{ID: cfg.ID, Cutoff: cutoff}
 	if !cfg.Enabled || cfg.ID == "" {

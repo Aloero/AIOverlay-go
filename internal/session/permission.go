@@ -30,10 +30,6 @@ type sourceCapturePermission struct {
 	DeviceRole string
 }
 
-func sameCapturePermissions(left, right domain.Config) bool {
-	return reflect.DeepEqual(capturePermissions(left), capturePermissions(right))
-}
-
 func capturePermissions(cfg domain.Config) capturePermissionPolicy {
 	pipeline := activePipeline(cfg)
 	if pipeline == nil {
@@ -91,4 +87,50 @@ func (m *Manager) permissionCurrent(generation uint64) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return generation != 0 && generation == m.permissionGeneration
+}
+
+func commandPermissionAllowed(policy capturePermissionPolicy, command domain.CommandConfig) bool {
+	for _, allowed := range policy.Commands {
+		if allowed.ID == command.ID && allowed.Action == command.Action && allowed.EntryNodeID == command.EntryNodeID && allowed.CaptureScreen == command.CaptureScreen {
+			return true
+		}
+	}
+	return false
+}
+
+func sourcePermissionAllowed(policy capturePermissionPolicy, source domain.EventSource) bool {
+	for _, allowed := range policy.Sources {
+		if allowed.ID == source.ID && allowed.Kind == source.Kind && allowed.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+// FencePermissions invalidates capture/action closures before configuration save
+// waits for existing turns. It also cancels sources that the proposed policy
+// explicitly disables, so no new media is captured under the old permission.
+func (m *Manager) FencePermissions(next domain.Config) {
+	nextPolicy := capturePermissions(next)
+	m.mu.Lock()
+	if !m.permissionPolicySet {
+		m.permissionPolicy = capturePermissions(m.cfg)
+		m.permissionPolicySet = true
+	}
+	if reflect.DeepEqual(m.permissionPolicy, nextPolicy) {
+		m.mu.Unlock()
+		return
+	}
+	m.permissionGeneration++
+	m.permissionPolicy = nextPolicy
+	var revoked []*sourceRuntime
+	for _, runtime := range m.sources {
+		if !sourcePermissionAllowed(nextPolicy, runtime.cfg) {
+			revoked = append(revoked, runtime)
+		}
+	}
+	m.mu.Unlock()
+	for _, runtime := range revoked {
+		runtime.cancel()
+	}
 }

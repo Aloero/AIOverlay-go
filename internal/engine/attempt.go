@@ -20,16 +20,23 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 		}
 		r.emit(ev)
 	}
+	semHeld := false
 	select {
 	case r.sem <- struct{}{}:
-		defer func() { <-r.sem }()
+		semHeld = true
 	case <-ctx.Done():
 		return "", domain.OutcomeCancelled, ctx.Err()
 	}
 	if ctx.Err() != nil {
 		return "", domain.OutcomeCancelled, ctx.Err()
 	}
+	defer func() {
+		if semHeld {
+			<-r.sem
+		}
+	}()
 	var lease CallLease
+	leaseHeld := false
 	if r.opt.BeforeCall != nil {
 		var gateErr error
 		lease, gateErr = r.opt.BeforeCall(ctx)
@@ -37,7 +44,12 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 			return "", providers.OutcomeOf(gateErr), gateErr
 		}
 		if lease != nil {
-			defer lease.Release()
+			leaseHeld = true
+			defer func() {
+				if leaseHeld {
+					lease.Release()
+				}
+			}()
 		}
 	}
 	if ctx.Err() != nil {
@@ -85,25 +97,15 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	events, errs := p.Stream(actx, req, key.Secret)
 	defer func() {
 		cancel()
-		// Channel closure is the provider completion contract. Drain after cancel
-		// so cooperative workers can release connections and runtime leases.
-		timer := time.NewTimer(1500 * time.Millisecond)
-		defer timer.Stop()
-		for events != nil || errs != nil {
-			select {
-			case _, ok := <-events:
-				if !ok {
-					events = nil
-				}
-			case _, ok := <-errs:
-				if !ok {
-					errs = nil
-				}
-			case <-timer.C:
-				emit(domain.TraceEvent{Kind: "worker_cleanup_timeout", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeProviderUnavailable, Message: "Provider did not acknowledge cancellation within 1500ms"})
-				return
-			}
+		remainingEvents, remainingErrors, complete := drainProviderChannels(events, errs, 1500*time.Millisecond)
+		if complete {
+			return
 		}
+		emit(domain.TraceEvent{Kind: "worker_cleanup_timeout", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeProviderUnavailable, Message: "Provider did not acknowledge cancellation within 1500ms; concurrency remains reserved until local teardown completes"})
+		heldLease := lease
+		semHeld = false
+		leaseHeld = false
+		go holdAttemptResourcesUntilProviderStops(r.sem, heldLease, remainingEvents, remainingErrors)
 	}()
 	buffered := false
 	if mode, ok := p.(interface{ Incremental() bool }); ok {
@@ -231,7 +233,7 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 			return "", outcome, err
 		}
 	}
-	if strings.TrimSpace(text.String()) == "" {
+	if strings.TrimSpace(text.String()) == "" && !allowsEmptyModelResult(pool) {
 		err := fmt.Errorf("empty response")
 		emit(domain.TraceEvent{Kind: "attempt_end", NodeID: n.ID, Attempt: attempt, Outcome: domain.OutcomeInvalidResponse, Message: err.Error(), DurationMS: time.Since(started).Milliseconds()})
 		r.engine.recordModel(m, domain.OutcomeInvalidResponse, 0, time.Since(started))
@@ -263,4 +265,50 @@ func (r *runner) singleAttempt(ctx context.Context, n domain.Node, pool domain.M
 	r.successes[n.ID+"/"+m.ID] = attempt
 	r.traceMu.Unlock()
 	return r.redact.text(strings.TrimSpace(text.String())), domain.OutcomeSuccess, nil
+}
+
+func allowsEmptyModelResult(pool domain.ModelPoolConfig) bool {
+	return pool.Task == "transcribe" || pool.ResultName == "audio.text"
+}
+
+func drainProviderChannels(events <-chan providers.Event, errs <-chan error, timeout time.Duration) (<-chan providers.Event, <-chan error, bool) {
+	if events == nil && errs == nil {
+		return nil, nil, true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case _, ok := <-errs:
+			if !ok {
+				errs = nil
+			}
+		case <-timer.C:
+			return events, errs, false
+		}
+	}
+	return nil, nil, true
+}
+
+func holdAttemptResourcesUntilProviderStops(sem chan struct{}, lease CallLease, events <-chan providers.Event, errs <-chan error) {
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case _, ok := <-errs:
+			if !ok {
+				errs = nil
+			}
+		}
+	}
+	<-sem
+	if lease != nil {
+		lease.Release()
+	}
 }

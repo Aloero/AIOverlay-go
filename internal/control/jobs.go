@@ -48,14 +48,20 @@ type queuedJob struct {
 
 var jobSequence atomic.Uint64
 
+type jobPresentationState struct {
+	job     Job
+	prompts []engine.PromptSnapshot
+}
+
 type JobManager struct {
-	admission sync.Mutex
-	prompts   []engine.PromptSnapshot
-	mu        sync.Mutex
-	job       Job
-	cancel    context.CancelFunc
-	done      chan struct{}
-	pending   *queuedJob
+	admission           sync.Mutex
+	prompts             []engine.PromptSnapshot
+	mu                  sync.Mutex
+	job                 Job
+	cancel              context.CancelFunc
+	done                chan struct{}
+	pending             *queuedJob
+	restoreAfterCurrent *jobPresentationState
 }
 
 func (j *JobManager) Snapshot() Job {
@@ -209,14 +215,14 @@ func (j *JobManager) runTask(ctx context.Context, cancel context.CancelCauseFunc
 		OnDelta: func(delta string) {
 			j.mu.Lock()
 			defer j.mu.Unlock()
-			if j.job.ID == id && !j.job.Cleared {
+			if j.job.ID == id && !j.job.Cleared && !j.job.CancelRequested {
 				j.job.Text += delta
 			}
 		},
 		OnReset: func() {
 			j.mu.Lock()
 			defer j.mu.Unlock()
-			if j.job.ID == id {
+			if j.job.ID == id && !j.job.CancelRequested {
 				j.job.Text = ""
 			}
 		},
@@ -253,6 +259,12 @@ func (j *JobManager) finishTask(id string, result engine.Result, report *Benchma
 			j.job.Text = result.Text
 		}
 	}
+	if j.restoreAfterCurrent != nil && !isManualPresentationJob(j.job) {
+		restore := j.restoreAfterCurrent
+		j.restoreAfterCurrent = nil
+		j.job = restore.job
+		j.prompts = append([]engine.PromptSnapshot(nil), restore.prompts...)
+	}
 	pending := j.pending
 	j.pending = nil
 	if pending == nil {
@@ -260,6 +272,11 @@ func (j *JobManager) finishTask(id string, result engine.Result, report *Benchma
 		j.job.QueuedPurpose = ""
 		j.mu.Unlock()
 		return
+	}
+	if isManualPresentationJob(j.job) && !purposePresentsInOverlay(pending.purpose) {
+		copyJob := j.job
+		copyJob.Trace = domain.CloneTrace(j.job.Trace)
+		j.restoreAfterCurrent = &jobPresentationState{job: copyJob, prompts: append([]engine.PromptSnapshot(nil), j.prompts...)}
 	}
 	j.mu.Unlock()
 	_, _ = j.startTaskPurposeIDWithoutAdmission(pending.parent, pending.pipeline, pending.purpose, pending.id, pending.run, pending.cancelPrepare)
@@ -277,6 +294,7 @@ func (j *JobManager) Clear() {
 		j.pending.cancelPrepare()
 	}
 	j.pending = nil
+	j.restoreAfterCurrent = nil
 	j.job.QueuedID = ""
 	j.job.QueuedPurpose = ""
 	j.job.Cleared = true
@@ -401,3 +419,7 @@ func (s *Server) StartScreenLegacy() (string, error) {
 func (s *Server) ClearRun() { s.jobs.Clear() }
 
 func (s *Server) StartScreen() (string, error) { return s.StartCommand("analyze") }
+
+func purposePresentsInOverlay(purpose string) bool {
+	return isManualPresentationJob(Job{ID: "purpose", Purpose: purpose})
+}

@@ -31,6 +31,12 @@ func (a *App) PrepareCommand(ctx context.Context, action string, capture session
 	}
 	return a.sessions.PrepareCommandWithCapture(ctx, action, capture)
 }
+func (a *App) ValidatePreparedCommand(prepared session.PreparedCommand) error {
+	if a.sessions == nil {
+		return fmt.Errorf("session runtime unavailable")
+	}
+	return a.sessions.ValidatePreparedCommand(prepared)
+}
 func (a *App) RecordCommandResult(prepared session.PreparedCommand, result engine.Result) bool {
 	if a.sessions == nil {
 		return false

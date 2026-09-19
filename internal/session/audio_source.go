@@ -50,7 +50,15 @@ func (m *Manager) enqueueAudioSegment(runtime *sourceRuntime, queue *audioSegmen
 	if !m.audioContextCurrent(captured.context) {
 		return
 	}
+	if captured.eventID == "" {
+		captured.eventID = fmt.Sprintf("%s-%d", runtime.cfg.ID, m.eventSeq.Add(1))
+	}
+	captured.segment.Clip.SegmentID = captured.eventID
+	if captured.context.config.ID != "" {
+		m.addPending(pendingSegment{pipelineID: captured.context.pipelineID, contextID: captured.context.config.ID, eventID: captured.eventID, generation: captured.context.generation, start: captured.segment.Started, end: captured.segment.Ended})
+	}
 	if err := queue.TryPush(captured); err != nil {
+		m.finishPending(captured.eventID)
 		m.recordAudioGap(captured.context, runtime, captured.segment.Ended, err.Error()+": transcript gap recorded")
 	}
 }
@@ -82,7 +90,9 @@ func (m *Manager) runAudio(ctx context.Context, pipelineID string, runtime *sour
 		captureErr = m.produceAudioSegments(ctx, pipelineID, runtime, capture, queue)
 	}()
 	// done must acknowledge native teardown, not just cancellation of the queue
-	// consumer. Manager's stop wait stays bounded even for a stuck driver.
+	// consumer. Drain queued semantic audio only after the producer has stopped,
+	// so cancellation cannot leave a pending transcript with no gap marker.
+	defer m.discardQueuedAudioSegments(runtime, queue)
 	defer func() { <-producerDone }()
 
 	for {
@@ -130,6 +140,8 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 	}
 	segmenter := paudio.Segmenter{Config: *runtime.cfg.Audio}
 	captured := m.captureAudioContext(pipelineID, runtime)
+	capturePendingID := runtime.cfg.ID + "-capturing"
+	defer m.finishPending(capturePendingID)
 	err := capture(ctx, *runtime.cfg.Audio, func(block paudio.Block) {
 		if ctx.Err() != nil {
 			return
@@ -139,6 +151,7 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 			// Clear also discards pre-roll and the unfinished phrase. Neither may
 			// be relabelled as new speech when a later packet completes it.
 			segmenter.Reset()
+			m.finishPending(capturePendingID)
 		}
 		captured = current
 		if block.TimestampError {
@@ -148,6 +161,11 @@ func (m *Manager) produceAudioSegments(ctx context.Context, pipelineID string, r
 		}
 		for _, segment := range segmenter.Push(block) {
 			m.enqueueAudioSegment(runtime, queue, capturedAudioSegment{segment: segment, context: captured})
+		}
+		if start, active := segmenter.ActiveStart(); active && captured.config.ID != "" {
+			m.addPending(pendingSegment{pipelineID: captured.pipelineID, contextID: captured.config.ID, eventID: capturePendingID, generation: captured.generation, start: start, end: block.At})
+		} else {
+			m.finishPending(capturePendingID)
 		}
 		if updateAudioStatus(runtime, block, segmenter.Level) {
 			m.resetAudioRestartFailures(runtime.cfg.ID)
@@ -178,7 +196,15 @@ func captureResult(ctx context.Context, err error) error {
 
 func (m *Manager) processAudioSegment(parent context.Context, pipelineID string, r *sourceRuntime, captured capturedAudioSegment) {
 	seg := captured.segment
-	if !m.sourceCurrent(r.cfg.ID, r.epoch) || !m.audioContextCurrent(captured.context) {
+	if !m.sourceCurrent(r.cfg.ID, r.epoch) {
+		m.finishPending(captured.eventID)
+		if m.audioContextCurrent(captured.context) {
+			m.recordAudioGap(captured.context, r, seg.Ended, "audio segment discarded because the source stopped before processing")
+		}
+		return
+	}
+	if !m.audioContextCurrent(captured.context) {
+		m.finishPending(captured.eventID)
 		return
 	}
 	m.mu.RLock()
@@ -199,7 +225,12 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 		}
 	}
 	clip := seg.Clip
-	clip.SegmentID = fmt.Sprintf("%s-%d", r.cfg.ID, m.eventSeq.Add(1))
+	if clip.SegmentID == "" {
+		clip.SegmentID = captured.eventID
+	}
+	if clip.SegmentID == "" {
+		clip.SegmentID = fmt.Sprintf("%s-%d", r.cfg.ID, m.eventSeq.Add(1))
+	}
 	clip.StartedAt = seg.Started
 	clip.EndedAt = seg.Ended
 	intent := r.cfg.Intent
@@ -220,4 +251,12 @@ func (m *Manager) processAudioSegment(parent context.Context, pipelineID string,
 		m.addPending(pendingSegment{pipelineID: pipelineID, contextID: ctxCfg.ID, eventID: clip.SegmentID, generation: gen, start: seg.Started, end: seg.Ended})
 	}
 	m.enqueueBackgroundTurn(r, backgroundTurn{pipelineID: pipelineID, ctxCfg: ctxCfg, generation: gen, input: input, at: seg.Ended})
+}
+
+func (m *Manager) discardQueuedAudioSegments(runtime *sourceRuntime, queue *audioSegmentQueue) {
+	for captured := range queue.items {
+		queue.Release(captured)
+		m.finishPending(captured.eventID)
+		m.recordAudioGap(captured.context, runtime, captured.segment.Ended, "audio segment discarded because the source stopped before processing")
+	}
 }

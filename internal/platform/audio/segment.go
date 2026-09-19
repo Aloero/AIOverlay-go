@@ -19,6 +19,8 @@ type Segmenter struct {
 	pending, pre       []int16
 	pendingOverlap     int
 	carryOverlap       bool
+	carryStart         time.Time
+	carryEnd           time.Time
 	started, lastVoice time.Time
 	silence            int
 	Level              float64
@@ -43,6 +45,10 @@ func (s *Segmenter) Push(b Block) []Segment {
 		s.Reset()
 		s.rate = b.Rate
 	}
+	if len(b.Samples) == 0 && s.carryOverlap && b.At.After(s.carryEnd) {
+		s.clearCarryOverlap()
+		s.pre = nil
+	}
 	chunk := s.rate / 50
 	for offset := 0; offset < len(b.Samples); offset += chunk {
 		end := min(offset+chunk, len(b.Samples))
@@ -55,15 +61,24 @@ func (s *Segmenter) Push(b Block) []Segment {
 		}
 		s.Level = math.Sqrt(energy / float64(len(p)))
 		voice := s.Level >= s.Config.Threshold
+		if s.carryOverlap {
+			maxGap := time.Duration(max(1, len(p))) * time.Second / time.Duration(s.rate)
+			if !voice || at.After(s.carryEnd.Add(maxGap)) {
+				s.clearCarryOverlap()
+				s.pre = nil
+			}
+		}
 		if voice {
 			if len(s.pending) == 0 {
 				s.pending = append(s.pending, s.pre...)
 				if s.carryOverlap {
 					s.pendingOverlap = len(s.pre)
+					s.started = s.carryStart
+				} else {
+					s.started = at.Add(-time.Duration(len(s.pre)) * time.Second / time.Duration(s.rate))
 				}
-				s.started = at.Add(-time.Duration(len(s.pre)) * time.Second / time.Duration(s.rate))
 				s.pre = nil
-				s.carryOverlap = false
+				s.clearCarryOverlap()
 			}
 			s.lastVoice = at.Add(time.Duration(len(p)) * time.Second / time.Duration(s.rate))
 			s.silence = 0
@@ -85,7 +100,7 @@ func (s *Segmenter) Push(b Block) []Segment {
 			}
 		} else {
 			s.pre = append(s.pre, p...)
-			cap := s.rate * segmentOverlapMS / 1000
+			cap := s.preRollLimit()
 			if len(s.pre) > cap {
 				copy(s.pre, s.pre[len(s.pre)-cap:])
 				s.pre = s.pre[:cap]
@@ -108,16 +123,49 @@ func (s *Segmenter) flushCompleted() (Segment, bool) {
 }
 
 func (s *Segmenter) flushAtLimit() (Segment, bool) {
-	overlapSamples := min(len(s.pending), s.rate*segmentOverlapMS/1000)
+	overlapSamples := s.preRollLimit()
+	if overlapSamples > len(s.pending) {
+		overlapSamples = len(s.pending)
+	}
 	overlap := append([]int16(nil), s.pending[len(s.pending)-overlapSamples:]...)
 	segment, ok := s.finishSegment()
 	if !ok {
 		return Segment{}, false
 	}
 	segment.Clip.Final = true
-	s.pre = overlap
-	s.carryOverlap = len(overlap) > 0
+	if len(overlap) > 0 {
+		s.pre = overlap
+		s.carryOverlap = true
+		s.carryEnd = segment.Ended
+		s.carryStart = segment.Ended.Add(-time.Duration(len(overlap)) * time.Second / time.Duration(s.rate))
+	}
 	return segment, true
+}
+
+func (s *Segmenter) preRollLimit() int {
+	if s.rate <= 0 {
+		return 0
+	}
+	limit := s.rate * segmentOverlapMS / 1000
+	maxSamples := s.rate * s.Config.SegmentMS / 1000
+	chunk := max(1, s.rate/50)
+	if maxSamples > 0 && limit > maxSamples-chunk {
+		limit = max(0, maxSamples-chunk)
+	}
+	if limit > 0 {
+		limit -= limit % chunk
+	}
+	return limit
+}
+
+func (s *Segmenter) clearCarryOverlap() {
+	s.carryOverlap = false
+	s.carryStart = time.Time{}
+	s.carryEnd = time.Time{}
+}
+
+func (s *Segmenter) ActiveStart() (time.Time, bool) {
+	return s.started, !s.started.IsZero()
 }
 
 // Interrupt closes the current semantic span without pretending it ended on a
@@ -125,7 +173,7 @@ func (s *Segmenter) flushAtLimit() (Segment, bool) {
 func (s *Segmenter) Interrupt() (Segment, bool) {
 	segment, ok := s.finishSegment()
 	s.pre = nil
-	s.carryOverlap = false
+	s.clearCarryOverlap()
 	s.Level = 0
 	return segment, ok
 }
@@ -167,6 +215,6 @@ func (s *Segmenter) resetSpeech() {
 func (s *Segmenter) Reset() {
 	s.resetSpeech()
 	s.pre = nil
-	s.carryOverlap = false
+	s.clearCarryOverlap()
 	s.Level = 0
 }

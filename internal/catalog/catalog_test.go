@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -59,6 +60,11 @@ func credential(id, secret string) domain.Credential {
 }
 
 func TestOpenCodeFreeReadyUsesBundledRuntimeList(t *testing.T) {
+	runtime := filepath.Join(t.TempDir(), "opencode-fixture.exe")
+	if err := os.WriteFile(runtime, []byte("fixture runtime payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AIOVERLAY_OPENCODE_BIN", runtime)
 	path := filepath.Join("..", "..", "runtime", "catalog", "models-dev-api.json")
 	s, err := New(path)
 	if err != nil {

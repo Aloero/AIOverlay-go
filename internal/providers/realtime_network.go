@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -75,7 +74,7 @@ func (c realtimeConnector) tlsConfiguration(serverName string) *tls.Config {
 func parseRealtimeEndpoint(raw string) (*url.URL, error) {
 	endpoint, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("realtime endpoint: %w", err)
+		return nil, fmt.Errorf("realtime endpoint is invalid")
 	}
 	if endpoint.Scheme != "wss" || endpoint.Hostname() == "" || endpoint.User != nil {
 		return nil, fmt.Errorf("realtime endpoint must be a credential-free wss URL")
@@ -128,11 +127,11 @@ func dialHTTPConnect(ctx context.Context, dial dialContextFunc, proxy *url.URL, 
 	response, err := http.ReadResponse(bufio.NewReader(connection), request)
 	if err != nil {
 		connection.Close()
-		return nil, fmt.Errorf("AI VPN CONNECT response: %w", err)
+		return nil, fmt.Errorf("AI VPN CONNECT response is invalid")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		connection.Close()
-		return nil, fmt.Errorf("AI VPN CONNECT rejected: %s", strings.TrimSpace(response.Status))
+		return nil, fmt.Errorf("AI VPN CONNECT rejected: HTTP %d", response.StatusCode)
 	}
 	return connection, nil
 }

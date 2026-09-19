@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -15,6 +16,11 @@ import (
 
 func studioTestApp(t *testing.T) *App {
 	t.Helper()
+	runtimeFixture := filepath.Join(t.TempDir(), "opencode-fixture.exe")
+	if err := os.WriteFile(runtimeFixture, []byte("fixture runtime payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AIOVERLAY_OPENCODE_BIN", runtimeFixture)
 	p := filepath.Join(t.TempDir(), "config.json")
 	if err := config.NewStore(p).Save(config.Default()); err != nil {
 		t.Fatal(err)

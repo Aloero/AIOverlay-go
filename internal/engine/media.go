@@ -107,9 +107,9 @@ func (r *runner) decide(ctx context.Context, n domain.Node, v nodeValue) (nodeVa
 	if r.input.Intent == "context" {
 		return v, domain.OutcomeContextOnly, nil
 	}
-	raw, _, err := r.runPool(context.WithValue(ctx, silentKey{}, true), n, v)
+	raw, outcome, err := r.runPool(context.WithValue(ctx, silentKey{}, true), n, v)
 	if err != nil {
-		return v, domain.OutcomeInvalidResponse, err
+		return v, outcome, err
 	}
 	d, err := parseDecision(raw.text)
 	if err != nil {
