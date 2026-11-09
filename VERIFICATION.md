@@ -368,3 +368,14 @@ dialog if even that paints blank. Quick dismissals (<15 s, not app shutdown)
 climb the ladder regardless of request counts; 45+ second sessions reset it.
 Automated: full check suite, Windows cross-build. Not run: capture on the
 affected GPU (the user's next trace will contain presentation_check events).
+
+## Heuristics removed; Studio document stays in-process (2026-11-09)
+
+Per user decision the presentation heuristics (render ladder, PrintWindow
+uniformity check, GPU-argument fallbacks, readiness-probe restart) were
+deleted from the desktop window; a loopback-URL rewrite of the Studio page was
+reviewed and declined. The window again loads the in-process `DesktopHTML()`
+document through `SetHtml`; the lightweight `studio-diagnostics.json` trace is
+kept as pure telemetry (no browser-argument writes, no restarts).
+Automated: full check suite, Windows cross-build. Not run: physical
+white-window reproduction.
