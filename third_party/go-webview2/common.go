@@ -81,4 +81,10 @@ type WebView interface {
 	// f must be a function
 	// f must return either value and error or just error
 	Bind(name string, f interface{}) error
+
+	// OnNavigationCompleted registers a callback invoked on the UI thread each
+	// time the top-level document finishes navigating. webErrorStatus is a
+	// WebView2 COREWEBVIEW2_WEB_ERROR_STATUS value and 0 when isSuccess holds.
+	// Registering replaces the previous callback; nil unregisters.
+	OnNavigationCompleted(fn func(isSuccess bool, webErrorStatus int32))
 }

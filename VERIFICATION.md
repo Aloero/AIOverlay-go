@@ -312,3 +312,15 @@ before any dialog appears; in remote sessions software composition and the
 local-only capture-exclusion skip are applied from the first session. A second
 silent session reports itself through the native dialog instead of looping.
 Automated: Windows-target vet/build. Not run: physical GPU-driver reproduction.
+
+## Studio diagnostics file (2026-11-09)
+
+Because the blank Studio window is environment-specific and cannot be
+reproduced from the development machine, every Studio session now appends a
+timestamped trace (WebView2 version, remote-session flag, browser arguments,
+navigation success/webErrorStatus from the vendored go-webview2 fork,
+window rect, protection status, readiness result and fallback decision) to
+`studio-diagnostics.json` next to `config.json`. The file contains no keys,
+prompts or request bodies and is written with owner-only permissions.
+Automated: Windows-target vet/build, full check suite. Not run: capture of a
+real trace on affected hardware (requires the user's machine).

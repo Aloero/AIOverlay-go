@@ -56,6 +56,7 @@ type webview struct {
 	minsz      w32.Point
 	m          sync.Mutex
 	bindings   map[string]interface{}
+	navFn      func(bool, int32)
 	destroyed  bool
 	dispatchq  []func()
 }
@@ -104,6 +105,20 @@ func NewWithOptions(options WebViewOptions) WebView {
 
 	chromium := edge.NewChromium()
 	chromium.MessageCallback = w.msgcb
+	chromium.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, args *edge.ICoreWebView2NavigationCompletedEventArgs) {
+		w.m.Lock()
+		fn := w.navFn
+		w.m.Unlock()
+		if fn == nil || args == nil {
+			return
+		}
+		isSuccess, err := args.IsSuccess()
+		if err != nil {
+			return
+		}
+		status, _ := args.WebErrorStatus()
+		fn(isSuccess, status)
+	}
 	chromium.DataPath = options.DataPath
 	chromium.SetPermission(edge.CoreWebView2PermissionKindClipboardRead, edge.CoreWebView2PermissionStateAllow)
 
@@ -434,6 +449,12 @@ func (w *webview) Navigate(url string) {
 
 func (w *webview) SetHtml(html string) {
 	w.browser.NavigateToString(html)
+}
+
+func (w *webview) OnNavigationCompleted(fn func(isSuccess bool, webErrorStatus int32)) {
+	w.m.Lock()
+	w.navFn = fn
+	w.m.Unlock()
 }
 
 func (w *webview) SetTitle(title string) {

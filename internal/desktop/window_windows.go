@@ -34,6 +34,7 @@ var setWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
 var callWindowProc = user32.NewProc("CallWindowProcW")
 var defWindowProc = user32.NewProc("DefWindowProcW")
 var getSystemMetrics = user32.NewProc("GetSystemMetrics")
+var getWindowRect = user32.NewProc("GetWindowRect")
 
 const (
 	gwlpWndProc        = -4
@@ -64,6 +65,8 @@ type desktopWindow struct {
 	appClosing      atomic.Bool
 	blank           atomic.Bool
 	gpuFallbackUsed atomic.Bool
+	diag            *studioDiag
+	diagSessions    atomic.Uint64
 	openCh          chan struct{}
 	closeCh         chan struct{}
 }
@@ -71,6 +74,77 @@ type desktopWindow struct {
 // errStudioBlank ends a session whose document never answered the readiness
 // probe so Run can retry once with software composition.
 var errStudioBlank = errors.New("studio document did not respond")
+
+// studioDiag keeps a timestamped trace of Studio window creation next to
+// config.json. A blank window on a user machine is environment-dependent and
+// cannot be reproduced remotely, so the build reports what WebView2 actually
+// did instead of guessing. Events carry no keys, prompts or request bodies.
+type studioDiag struct {
+	mu      sync.Mutex
+	path    string
+	started time.Time
+	events  []map[string]any
+}
+
+func newStudioDiag(configPath string) *studioDiag {
+	dir := filepath.Dir(configPath)
+	if dir == "" || dir == "." {
+		dir, _ = os.Getwd()
+	}
+	return &studioDiag{path: filepath.Join(dir, "studio-diagnostics.json"), started: time.Now()}
+}
+
+// Path returns the diagnostics file location for user-visible messages.
+func (d *studioDiag) Path() string {
+	if d == nil {
+		return "studio-diagnostics.json"
+	}
+	return d.path
+}
+
+func (d *studioDiag) record(kind string, data map[string]any) {
+	if d == nil {
+		return
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	d.mu.Lock()
+	d.events = append(d.events, map[string]any{"at": time.Now().Format(time.RFC3339Nano), "kind": kind, "data": data})
+	if n := len(d.events); n > 300 {
+		d.events = d.events[n-300:]
+	}
+	d.mu.Unlock()
+	d.writeNow()
+}
+
+func (d *studioDiag) writeNow() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	raw, err := json.MarshalIndent(map[string]any{
+		"started": d.started.Format(time.RFC3339),
+		"pid":     os.Getpid(),
+		"events":  d.events,
+	}, "", "  ")
+	d.mu.Unlock()
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(d.path, raw, 0o600)
+}
+
+type diagRect struct{ Left, Top, Right, Bottom int32 }
+
+func windowRectForDiag(v webview.WebView) any {
+	var r diagRect
+	ok, _, _ := getWindowRect.Call(uintptr(v.Window()), uintptr(unsafe.Pointer(&r)))
+	if ok == 0 {
+		return "unavailable"
+	}
+	return []int{int(r.Left), int(r.Top), int(r.Right), int(r.Bottom)}
+}
 
 func New(o Options) Window {
 	return &desktopWindow{options: o, openCh: make(chan struct{}, 1), closeCh: make(chan struct{}, 1)}
@@ -82,7 +156,23 @@ func (w *desktopWindow) Run(ctx context.Context) error {
 	w.mu.Lock()
 	w.ctx = ctx
 	initiallyVisible := w.options.Visible
+	if w.diag == nil {
+		w.diag = newStudioDiag(w.options.ConfigPath)
+	}
+	diag := w.diag
 	w.mu.Unlock()
+	start := map[string]any{
+		"autoOpen":      initiallyVisible,
+		"remoteSession": isRemoteSession(),
+		"gpuFallback":   os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"),
+	}
+	if version, err := webviewloader.GetInstalledVersion(); err != nil {
+		start["webview2Error"] = err.Error()
+	} else {
+		start["webview2Version"] = version
+	}
+	diag.record("process_start", start)
+	defer diag.writeNow()
 
 	var life sessionLifecycle
 	var sessionDone chan error
@@ -132,6 +222,7 @@ func (w *desktopWindow) Run(ctx context.Context) error {
 				continue
 			}
 			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				w.diag.record("session_failed", map[string]any{"error": err.Error()})
 				ShowError("AIOverlay · Pipeline Studio", err.Error())
 			}
 			if restart && ctx.Err() == nil {
@@ -160,6 +251,7 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 		return ctx.Err()
 	}
 	if _, err := webviewloader.GetInstalledVersion(); err != nil {
+		w.diag.record("webview2_missing", map[string]any{"error": err.Error()})
 		return fmt.Errorf("для встроенного интерфейса нужен Microsoft Edge WebView2 Runtime. Запустите Install-WebView2.ps1 из папки приложения, затем снова откройте Studio: %w", err)
 	}
 	// Each lazy session gets an isolated temporary profile. Destroying the
@@ -184,12 +276,22 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	if remote {
 		os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu --disable-gpu-compositing")
 	}
+	w.diag.record("session_begin", map[string]any{
+		"index":       w.diagSessions.Add(1),
+		"remote":      remote,
+		"gpuFallback": w.gpuFallbackUsed.Load(),
+		"browserArgs": os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"),
+		"stealth":     options.Stealth,
+		"htmlBytes":   len(html),
+	})
 	pageReady := make(chan struct{})
 	var readyOnce sync.Once
 	v := webview.NewWithOptions(webview.WebViewOptions{Debug: false, DataPath: profile, AutoFocus: true, WindowOptions: webview.WindowOptions{Title: options.Title, Width: 1320, Height: 880, Center: false, Hidden: true}})
 	if v == nil {
+		w.diag.record("view_create_failed", map[string]any{"browserArgs": os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")})
 		return fmt.Errorf("не удалось создать WebView2. Установите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1 и повторите открытие Studio")
 	}
+	w.diag.record("view_created", map[string]any{"hwnd": fmt.Sprintf("0x%x", uintptr(v.Window()))})
 	w.mu.Lock()
 	w.view = v
 	w.origWndProc = 0
@@ -235,7 +337,10 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 			switch r.Path {
 			case "/desktop/ready":
 				// The injected binding script proves the document is alive.
-				readyOnce.Do(func() { close(pageReady) })
+				readyOnce.Do(func() {
+					close(pageReady)
+					w.diag.record("renderer_ready", nil)
+				})
 				reply = Reply{OK: true, Data: json.RawMessage(`{}`)}
 			case "/desktop/close", "/desktop/hide": // hide kept for older embedded UI bundles
 				closeAfterReply = true
@@ -262,8 +367,22 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var navSeen, navOK atomic.Bool
+	var navStatus atomic.Int32
+	v.OnNavigationCompleted(func(isSuccess bool, status int32) {
+		navSeen.Store(true)
+		navOK.Store(isSuccess)
+		navStatus.Store(status)
+		w.diag.record("navigation_completed", map[string]any{"success": isSuccess, "webErrorStatus": status})
+	})
 	v.SetHtml(html)
+	w.diag.record("html_set", map[string]any{"bytes": len(html)})
 	showWindow.Call(uintptr(v.Window()), 5)
+	vis, _, _ := getVisible.Call(uintptr(v.Window()))
+	w.mu.Lock()
+	prot := w.protection
+	w.mu.Unlock()
+	w.diag.record("window_shown", map[string]any{"visible": vis != 0, "rect": windowRectForDiag(v), "protection": prot})
 	// Probe the loaded document through the injected binding. If nothing ever
 	// answers, the window is white for the user; say so explicitly instead of
 	// failing silently.
@@ -282,13 +401,22 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 			// white without failing navigation. Once per process, destroy the
 			// session so Run restarts it with software composition; a second
 			// blank session reports itself instead of looping.
+			data := map[string]any{"timeoutMs": 8000, "navigationSeen": navSeen.Load(), "browserArgs": os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"), "rect": windowRectForDiag(v)}
+			if navSeen.Load() {
+				data["navigationSuccess"] = navOK.Load()
+				data["webErrorStatus"] = navStatus.Load()
+			}
 			if !w.gpuFallbackUsed.Swap(true) {
+				data["decision"] = "restart-with-software-composition"
+				w.diag.record("renderer_timeout", data)
 				os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu --disable-gpu-compositing")
 				w.blank.Store(true)
 				v.Dispatch(func() { v.Destroy() })
 				return
 			}
-			ShowError("AIOverlay · Pipeline Studio", "Окно Studio открылось, но интерфейс не загрузился даже в режиме программной отрисовки. Обновите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1. При работе через удалённый рабочий стол помогает пересоздание сеанса RDP или локальный запуск AIOverlay.")
+			data["decision"] = "report"
+			w.diag.record("renderer_timeout", data)
+			ShowError("AIOverlay · Pipeline Studio", "Окно Studio открылось, но интерфейс не загрузился даже в режиме программной отрисовки. Обновите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1. При работе через удалённый рабочий стол помогает пересоздание сеанса RDP или локальный запуск AIOverlay.\n\nПодробный отчёт сохранён в файле studio-diagnostics.json рядом с config.json — приложите его к обращению автору.")
 		}
 	}()
 	go func() {
