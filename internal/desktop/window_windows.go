@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -25,7 +26,6 @@ import (
 var user32 = syscall.NewLazyDLL("user32.dll")
 var showWindow = user32.NewProc("ShowWindow")
 var foreground = user32.NewProc("SetForegroundWindow")
-var affinity = user32.NewProc("SetWindowDisplayAffinity")
 var getVisible = user32.NewProc("IsWindowVisible")
 var isIconic = user32.NewProc("IsIconic")
 var messageBox = user32.NewProc("MessageBoxW")
@@ -34,6 +34,8 @@ var callWindowProc = user32.NewProc("CallWindowProcW")
 var defWindowProc = user32.NewProc("DefWindowProcW")
 var getSystemMetrics = user32.NewProc("GetSystemMetrics")
 var getWindowRect = user32.NewProc("GetWindowRect")
+var getDpiForSystem = user32.NewProc("GetDpiForSystem")
+var systemParametersInfo = user32.NewProc("SystemParametersInfoW")
 
 const (
 	gwlpWndProc        = -4
@@ -62,8 +64,12 @@ type desktopWindow struct {
 	appClosing   atomic.Bool
 	diag         *studioDiag
 	diagSessions atomic.Uint64
-	openCh       chan struct{}
-	closeCh      chan struct{}
+	// rendererReady is set by the first bridge call of the current session.
+	// Until then no page exists that could hold an unsaved draft or answer a
+	// close request, so the native close button must not depend on it.
+	rendererReady atomic.Bool
+	openCh        chan struct{}
+	closeCh       chan struct{}
 }
 
 // studioDiag keeps a timestamped trace of Studio window creation next to
@@ -165,6 +171,7 @@ func (w *desktopWindow) Run(ctx context.Context) error {
 	}
 	diag.record("process_start", start)
 	defer diag.writeNow()
+	go sweepStaleProfiles()
 
 	var life sessionLifecycle
 	var sessionDone chan error
@@ -250,7 +257,7 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	// Each lazy session gets an isolated temporary profile. Destroying the
 	// session releases WebView2 and deletes its profile; portable state remains
 	// in config.json and Go-owned trace state.
-	profile, err := os.MkdirTemp("", "aioverlay-studio-")
+	profile, err := os.MkdirTemp("", studioProfilePrefix+"*")
 	if err != nil {
 		return err
 	}
@@ -262,14 +269,26 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	w.mu.Lock()
 	options := w.options
 	w.mu.Unlock()
+	w.rendererReady.Store(false)
+	geometry, placed := studioWindowGeometry()
 	w.diag.record("session_begin", map[string]any{
 		"index":       w.diagSessions.Add(1),
 		"document":    "in-process-document",
 		"remote":      isRemoteSession(),
 		"browserArgs": os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"),
 		"htmlBytes":   len(html),
+		"geometry":    geometry,
 	})
-	v := webview.NewWithOptions(webview.WebViewOptions{Debug: false, DataPath: profile, AutoFocus: true, WindowOptions: webview.WindowOptions{Title: options.Title, Width: 1320, Height: 880, Center: false, Hidden: true}})
+	window := webview.WindowOptions{Title: options.Title, Width: studioWidthDIP, Height: studioHeightDIP}
+	if placed {
+		window.Width, window.Height = uint(geometry.Width), uint(geometry.Height)
+		window.Positioned, window.Left, window.Top = true, geometry.X, geometry.Y
+	}
+	// The window is created visible, before the controller, which is the
+	// standard WebView2 hosting order. Every later hide/show (capture, minimize,
+	// reopen) is forwarded to the controller by the vendored webview, so the
+	// page never keeps presenting only the default background (the white window).
+	v := webview.NewWithOptions(webview.WebViewOptions{Debug: false, DataPath: profile, AutoFocus: true, WindowOptions: window, Background: &studioBackground})
 	if v == nil {
 		w.diag.record("view_create_failed", map[string]any{"browserArgs": os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")})
 		return fmt.Errorf("не удалось создать WebView2. Установите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1 и повторите открытие Studio")
@@ -299,8 +318,11 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	v.SetSize(860, 560, webview.HintMin)
-	w.fitToWorkArea(v)
+	if placed {
+		v.SetSize(geometry.MinWidth, geometry.MinHeight, webview.HintMin)
+	} else {
+		v.SetSize(studioMinWidthDIP, studioMinHeightDIP, webview.HintMin)
+	}
 	w.applyIdentity(v)
 	// Studio is deliberately never hidden from screen capture: it is a config
 	// editor the user opens, edits and closes, and WDA_EXCLUDEFROMCAPTURE on a
@@ -310,7 +332,10 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	err = v.Bind("studioDispatch", func(r Request) error {
 		// Bind callbacks execute on the UI thread. All potentially slow work is
 		// scheduled in Go and delivered with Dispatch; never block the message loop.
-		firstRequest.Do(func() { w.diag.record("renderer_ready", nil) })
+		firstRequest.Do(func() {
+			w.rendererReady.Store(true)
+			w.diag.record("renderer_ready", nil)
+		})
 		select {
 		case semaphore <- struct{}{}:
 		default:
@@ -353,7 +378,7 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	})
 	v.SetHtml(html)
 	w.diag.record("document_set", map[string]any{"bytes": len(html)})
-	showWindow.Call(uintptr(v.Window()), 5)
+	foreground.Call(uintptr(v.Window()))
 	vis, _, _ := getVisible.Call(uintptr(v.Window()))
 	w.diag.record("window_shown", map[string]any{"visible": vis != 0, "rect": windowRectForDiag(v)})
 	go func() {
@@ -379,6 +404,13 @@ func desktopSubclassWndProc(hwnd uintptr, message uint32, wparam, lparam uintptr
 	}
 	w := value.(*desktopWindow)
 	if message == wmCloseDesktop && !w.appClosing.Load() {
+		if !w.rendererReady.Load() {
+			// The document never reached the bridge (failed load, missing
+			// runtime feature): there is no draft to protect and nobody to
+			// answer, so close the session instead of ignoring the button.
+			w.Close()
+			return 0
+		}
 		// Ask the page to save a valid draft first. It will call /desktop/close,
 		// which tears down this WebView2 session without exiting AIOverlay.
 		go w.requestCloseFromPage()
@@ -524,21 +556,25 @@ func (w *desktopWindow) Capture(fn func() ([]byte, error)) ([]byte, error) {
 	return fn()
 }
 
-// Keep the complete Studio window reachable on small monitors and scaled desktops.
-func (w *desktopWindow) fitToWorkArea(v webview.WebView) {
+// studioBackground matches the Studio theme (--bg) so the frames before the
+// first paint are dark instead of the WebView2 default white.
+var studioBackground = webview.Color{R: 0x11, G: 0x15, B: 0x1d}
+
+// studioWindowGeometry keeps the complete Studio window reachable on small
+// monitors and scales it on high-DPI desktops (the process is per-monitor v2
+// aware, so Win32 sizes are physical pixels).
+func studioWindowGeometry() (studioGeometry, bool) {
 	var r struct{ Left, Top, Right, Bottom int32 }
-	ok, _, _ := user32.NewProc("SystemParametersInfoW").Call(0x30, 0, uintptr(unsafe.Pointer(&r)), 0)
-	if ok == 0 {
-		return
+	if ok, _, _ := systemParametersInfo.Call(0x30, 0, uintptr(unsafe.Pointer(&r)), 0); ok == 0 { // SPI_GETWORKAREA
+		return studioGeometry{}, false
 	}
-	width := min(1320, int(r.Right-r.Left)-24)
-	height := min(880, int(r.Bottom-r.Top)-24)
-	if width < 480 || height < 360 {
-		return
+	dpi := 96
+	if getDpiForSystem.Find() == nil {
+		if v, _, _ := getDpiForSystem.Call(); v != 0 {
+			dpi = int(v)
+		}
 	}
-	v.SetSize(min(860, width), min(560, height), webview.HintMin)
-	x, y := int(r.Left)+(int(r.Right-r.Left)-width)/2, int(r.Top)+(int(r.Bottom-r.Top)-height)/2
-	user32.NewProc("SetWindowPos").Call(uintptr(v.Window()), 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0x4|0x10)
+	return studioGeometryFor(workArea{Left: int(r.Left), Top: int(r.Top), Right: int(r.Right), Bottom: int(r.Bottom)}, dpi)
 }
 
 func (w *desktopWindow) applyIdentity(v webview.WebView) {
@@ -614,10 +650,12 @@ type openFileName struct {
 
 func saveDialog(owner uintptr, dir string) (string, error) {
 	buf := make([]uint16, 32768)
-	copy(buf, syscall.StringToUTF16("AIOverlay-config.json"))
-	filter := syscall.StringToUTF16("JSON configuration")
-	filter = append(filter, syscall.StringToUTF16("*.json")...)
-	filter = append(filter, 0)
+	name, _ := syscall.UTF16FromString("AIOverlay-config.json")
+	copy(buf, name)
+	// Filter pairs are NUL-separated and the list ends with a double NUL.
+	filter, _ := syscall.UTF16FromString("JSON configuration")
+	pattern, _ := syscall.UTF16FromString("*.json")
+	filter = append(append(filter, pattern...), 0)
 	title, _ := syscall.UTF16PtrFromString("Экспорт конфигурации с API-ключами")
 	ext, _ := syscall.UTF16PtrFromString("json")
 	initial, _ := syscall.UTF16PtrFromString(dir)
@@ -662,15 +700,50 @@ func initializeSTA() (func(), error) {
 		ole.NewProc("CoUninitialize").Call()
 	}, nil
 }
+
+const studioProfilePrefix = "aioverlay-studio-"
+
+// cleanupProfile removes the per-session WebView2 profile. The browser
+// processes exit asynchronously after the controller closes and keep files
+// locked for a while, so a short synchronous attempt is followed by a longer
+// background retry instead of leaking tens of megabytes per Studio session.
 func cleanupProfile(path string) {
-	var err error
-	for i := 0; i < 25; i++ {
-		if err = os.RemoveAll(path); err == nil {
+	for i := 0; i < 10; i++ {
+		if os.RemoveAll(path) == nil {
 			return
 		}
 		time.Sleep(80 * time.Millisecond)
 	}
-	log.Printf("Studio profile cleanup pending: %v", err)
+	go func() {
+		var err error
+		for i := 0; i < 60; i++ {
+			time.Sleep(time.Second)
+			if err = os.RemoveAll(path); err == nil {
+				return
+			}
+		}
+		log.Printf("Studio profile cleanup pending: %v", err)
+	}()
+}
+
+// sweepStaleProfiles deletes Studio profiles left behind by a previous crash or
+// forced exit. Only day-old directories are touched, so a profile in use by a
+// concurrently running instance is never removed.
+func sweepStaleProfiles() {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), studioProfilePrefix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || time.Since(info.ModTime()) < 24*time.Hour {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(os.TempDir(), entry.Name()))
+	}
 }
 
 // CaptureBackground never blinks Studio. If an open visible Studio cannot be

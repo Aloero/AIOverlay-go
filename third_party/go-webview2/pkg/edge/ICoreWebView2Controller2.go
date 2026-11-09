@@ -40,13 +40,13 @@ type ICoreWebView2Controller2 struct {
 }
 
 func (i *ICoreWebView2Controller2) AddRef() uintptr {
-	r, _, _ := i.vtbl.AddRef.Call()
+	r, _, _ := i.vtbl.AddRef.Call(uintptr(unsafe.Pointer(i)))
 	return r
 }
 
 func (i *ICoreWebView2Controller2) GetDefaultBackgroundColor() (*COREWEBVIEW2_COLOR, error) {
 	var err error
-	var backgroundColor *COREWEBVIEW2_COLOR
+	var backgroundColor COREWEBVIEW2_COLOR
 	_, _, err = i.vtbl.GetDefaultBackgroundColor.Call(
 		uintptr(unsafe.Pointer(i)),
 		uintptr(unsafe.Pointer(&backgroundColor)),
@@ -54,7 +54,7 @@ func (i *ICoreWebView2Controller2) GetDefaultBackgroundColor() (*COREWEBVIEW2_CO
 	if err != windows.ERROR_SUCCESS {
 		return nil, err
 	}
-	return backgroundColor, nil
+	return &backgroundColor, nil
 }
 
 func (i *ICoreWebView2Controller2) PutDefaultBackgroundColor(backgroundColor COREWEBVIEW2_COLOR) error {

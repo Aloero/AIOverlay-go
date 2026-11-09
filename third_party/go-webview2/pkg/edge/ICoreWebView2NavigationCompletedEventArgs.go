@@ -18,7 +18,7 @@ type ICoreWebView2NavigationCompletedEventArgs struct {
 }
 
 func (i *ICoreWebView2NavigationCompletedEventArgs) AddRef() uintptr {
-	r, _, _ := i.vtbl.AddRef.Call()
+	r, _, _ := i.vtbl.AddRef.Call(uintptr(unsafe.Pointer(i)))
 	return r
 }
 

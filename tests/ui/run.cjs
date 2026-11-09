@@ -14,9 +14,14 @@ async function waitReady(base){for(let i=0;i<100;i++){try{if((await fetch(base+'
   fixture.control_center.listen_address='127.0.0.1:'+await port();
   const cfg=path.join(temp,'config.json'),binary=path.join(temp,process.platform==='win32'?'aio-test.exe':'aio-test');
   fs.writeFileSync(cfg,JSON.stringify(fixture,null,2));
+  // OpenCode catalog routes are Ready only with a usable runtime file, and
+  // runtime/opencode/opencode.exe is a Git LFS object (a pointer in checkouts
+  // without LFS, including CI). A stub keeps the suites independent of the
+  // checkout; it is never executed because the suites forbid model requests.
+  const opencode=path.join(temp,'opencode-stub.exe');fs.writeFileSync(opencode,'aioverlay ui-test runtime stub\n');
   let result=spawnSync(go,['build','-o',binary,'./cmd/aioverlay'],{cwd:root,stdio:'inherit',timeout:120000});
   if(result.error||result.status!==0)throw result.error||Error('Go test host build failed');
-  server=spawn(binary,['--headless','--headless-token',token,'--config',cfg],{cwd:root,stdio:['ignore','pipe','pipe']});
+  server=spawn(binary,['--headless','--headless-token',token,'--config',cfg],{cwd:root,env:{...process.env,AIOVERLAY_OPENCODE_BIN:opencode},stdio:['ignore','pipe','pipe']});
   let logs='';server.stdout.on('data',v=>logs+=v);server.stderr.on('data',v=>logs+=v);
   const base='http://'+fixture.control_center.listen_address;await waitReady(base);
   for(const suite of process.argv.includes('--dom-only')?['smoke.cjs','audit-regressions.cjs']:['smoke.cjs','audit-regressions.cjs','studio-features.cjs','studio-ux.cjs','studio-review.cjs','audio-context.cjs']) {

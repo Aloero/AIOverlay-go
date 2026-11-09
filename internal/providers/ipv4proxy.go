@@ -88,10 +88,5 @@ func handleProxyConn(client net.Conn) {
 	go func() { _, _ = io.Copy(client, up); done <- struct{}{} }()
 	<-done
 }
-func shutdownIPv4Proxy() {
-	if sharedIPv4Proxy.ln != nil {
-		_ = sharedIPv4Proxy.ln.Close()
-	}
-}
 
 var _ = fmt.Sprintf

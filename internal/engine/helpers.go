@@ -5,25 +5,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"aioverlay/internal/domain"
 )
 
-func enabledModels(all []domain.ModelSlot, floor float64) []domain.ModelSlot {
-	var out []domain.ModelSlot
-	for _, m := range all {
-		if !m.Enabled {
-			continue
-		}
-		if m.QualityScore < floor {
-			continue
-		}
-		out = append(out, m)
-	}
-	return out
-}
 func runValidator(v *domain.ValidatorConfig, text string) (domain.Outcome, error) {
 	if v == nil {
 		return domain.OutcomeSuccess, nil
@@ -44,13 +30,6 @@ func runValidator(v *domain.ValidatorConfig, text string) (domain.Outcome, error
 		}
 	}
 	return domain.OutcomeSuccess, nil
-}
-func renderPrompt(s, input string) string {
-	s = strings.ReplaceAll(s, "{{vision.text}}", input)
-	s = strings.ReplaceAll(s, "{{previous.output}}", input)
-	s = strings.ReplaceAll(s, "{{input.text}}", input)
-	s = strings.ReplaceAll(s, "{{screen.image}}", "[attached screenshot]")
-	return s
 }
 func findPipeline(cfg domain.Config, id string) (domain.Pipeline, bool) {
 	if id == "" {
@@ -78,12 +57,6 @@ func findNode(p domain.Pipeline, id string) (domain.Node, bool) {
 		}
 	}
 	return domain.Node{}, false
-}
-func pcMaxOutput(cfg domain.Config, id string) int {
-	if p, ok := findProvider(cfg, id); ok {
-		return p.RequestDefaults.MaxOutputTokens
-	}
-	return 0
 }
 func durationMS(v int) time.Duration {
 	if v <= 0 {

@@ -210,11 +210,21 @@ func parse(r io.Reader) ([]domain.ModelMeta, error) {
 			})
 		}
 	}
+	// Providers and models come from JSON maps (random iteration order) and
+	// display names repeat (56 pairs in the bundled catalog), so IDs break ties:
+	// otherwise catalog pages, "first match" picks and paging differ per launch.
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].ProviderName == out[j].ProviderName {
-			return out[i].ModelName < out[j].ModelName
+		a, b := out[i], out[j]
+		if a.ProviderName != b.ProviderName {
+			return a.ProviderName < b.ProviderName
 		}
-		return out[i].ProviderName < out[j].ProviderName
+		if a.ModelName != b.ModelName {
+			return a.ModelName < b.ModelName
+		}
+		if a.ProviderID != b.ProviderID {
+			return a.ProviderID < b.ProviderID
+		}
+		return a.ModelID < b.ModelID
 	})
 	return out, nil
 }

@@ -3,6 +3,7 @@ package catalog
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"aioverlay/internal/config"
@@ -83,5 +84,22 @@ func TestOpenCodeFreeReadyUsesBundledRuntimeList(t *testing.T) {
 	}
 	if !mimoReady {
 		t.Fatal("bundled MiMo should be READY")
+	}
+}
+
+func TestCatalogOrderIsDeterministicForDuplicateNames(t *testing.T) {
+	raw := `{"p":{"name":"Same","models":{"b":{"name":"Dup"},"a":{"name":"Dup"},"c":{"name":"Dup"}}},
+	"q":{"name":"Same","models":{"a":{"name":"Dup"}}}}`
+	want := []string{"p/a", "p/b", "p/c", "q/a"}
+	for i := 0; i < 50; i++ {
+		models, err := parse(strings.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j, m := range models {
+			if got := m.ProviderID + "/" + m.ModelID; got != want[j] {
+				t.Fatalf("run %d: position %d = %s, want %s", i, j, got, want[j])
+			}
+		}
 	}
 }

@@ -67,9 +67,6 @@ func (e *Engine) safeError(err error) error {
 	}
 	return &providers.RequestError{Outcome: providers.OutcomeOf(err), Message: text}
 }
-func (e *Engine) safeTraceEvent(ev domain.TraceEvent) domain.TraceEvent {
-	return (redactor{e.secrets()}).event(ev)
-}
 func (r redactor) event(ev domain.TraceEvent) domain.TraceEvent {
 	ev = domain.CloneTraceEvent(ev)
 	ev.Message = r.text(ev.Message)

@@ -44,6 +44,13 @@ var (
 	User32SetWindowPos       = user32.NewProc("SetWindowPos")
 	User32IsDialogMessage    = user32.NewProc("IsDialogMessage")
 	User32GetAncestor        = user32.NewProc("GetAncestor")
+	User32IsWindowVisible    = user32.NewProc("IsWindowVisible")
+	User32IsIconic           = user32.NewProc("IsIconic")
+	User32FillRect           = user32.NewProc("FillRect")
+
+	gdi32                 = windows.NewLazySystemDLL("gdi32")
+	Gdi32CreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
+	Gdi32DeleteObject     = gdi32.NewProc("DeleteObject")
 )
 
 const (
@@ -90,6 +97,8 @@ const (
 	WMActivate      = 0x0006
 	WMClose         = 0x0010
 	WMQuit          = 0x0012
+	WMEraseBkgnd    = 0x0014
+	WMShowWindow    = 0x0018
 	WMGetMinMaxInfo = 0x0024
 	WMNCLButtonDown = 0x00A1
 	WMMoving        = 0x0216
@@ -114,6 +123,11 @@ const (
 	WSSysMenu          = 0x00080000
 	WSMinimizeBox      = 0x00020000
 	WSOverlappedWindow = (WSOverlapped | WSCaption | WSSysMenu | WSThickFrame | WSMinimizeBox | WSMaximizeBox)
+)
+
+// WM_SIZE wParam values.
+const (
+	SizeMinimized = 1
 )
 
 const (

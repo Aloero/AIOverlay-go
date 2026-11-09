@@ -81,7 +81,6 @@ var (
 	user32                            = syscall.NewLazyDLL("user32.dll")
 	gdi32                             = syscall.NewLazyDLL("gdi32.dll")
 	kernel32                          = syscall.NewLazyDLL("kernel32.dll")
-	dwmapi                            = syscall.NewLazyDLL("dwmapi.dll")
 	wtsapi32                          = syscall.NewLazyDLL("wtsapi32.dll")
 	pRegisterClassEx                  = user32.NewProc("RegisterClassExW")
 	pCreateWindowEx                   = user32.NewProc("CreateWindowExW")
@@ -121,7 +120,6 @@ var (
 	pSetTextColor                     = gdi32.NewProc("SetTextColor")
 	pCreateSolidBrush                 = gdi32.NewProc("CreateSolidBrush")
 	pCreateFont                       = gdi32.NewProc("CreateFontW")
-	pDwmFlush                         = dwmapi.NewProc("DwmFlush")
 	pWTSRegisterSessionNotification   = wtsapi32.NewProc("WTSRegisterSessionNotification")
 	pWTSUnregisterSessionNotification = wtsapi32.NewProc("WTSUnRegisterSessionNotification")
 )
@@ -191,7 +189,6 @@ type winOverlay struct {
 	cb                                    Callbacks
 	text, meta                            string
 	ghost                                 bool
-	closed                                bool
 	className                             *uint16
 	brush, headerBrush, buttonBrush, font uintptr
 	stationaryPos                         point
@@ -582,10 +579,6 @@ func (o *winOverlay) registerHotkeys() error {
 	o.mu.RUnlock()
 	return o.replaceHotkeys(bindings)
 }
-func parseHotkey(s string) (uint32, uint32, error) {
-	b, err := hotkey.Parse(s)
-	return b.Modifiers, b.Key, err
-}
 
 func (o *winOverlay) captureAndAnalyze() {
 	if o.cb.Request != nil {
@@ -661,12 +654,6 @@ func max32(a, b int32) int32 {
 
 func wordFromInt32(v int32) uintptr { return uintptr(int64(v)) }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 func (o *winOverlay) guardLoop(ctx context.Context) {
 	privacy := time.NewTicker(2500 * time.Millisecond)
 	stationary := time.NewTicker(250 * time.Millisecond)

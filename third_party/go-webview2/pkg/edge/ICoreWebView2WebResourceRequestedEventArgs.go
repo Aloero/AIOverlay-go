@@ -20,7 +20,7 @@ type ICoreWebView2WebResourceRequestedEventArgs struct {
 }
 
 func (i *ICoreWebView2WebResourceRequestedEventArgs) AddRef() uintptr {
-	r, _, _ := i.vtbl.AddRef.Call()
+	r, _, _ := i.vtbl.AddRef.Call(uintptr(unsafe.Pointer(i)))
 	return r
 }
 

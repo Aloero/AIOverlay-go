@@ -22,6 +22,11 @@ const (
 	HintMax
 )
 
+// Color is an opaque RGB colour.
+type Color struct {
+	R, G, B uint8
+}
+
 // WebView is the interface for the webview.
 type WebView interface {
 

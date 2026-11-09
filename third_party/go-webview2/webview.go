@@ -21,7 +21,16 @@ import (
 var (
 	windowContext     = map[uintptr]interface{}{}
 	windowContextSync sync.RWMutex
+	// One callback for the shared window class: windows.NewCallback slots are a
+	// finite, never-released process resource, so creating one per window
+	// would eventually panic after enough Studio sessions.
+	wndprocCallback = windows.NewCallback(wndproc)
 )
+
+// wmSyncVisibility is posted from WM_SHOWWINDOW, which arrives before the
+// show/hide has taken effect, so the controller is updated from the final
+// window state. It is above the WM_APP dispatch message used by Run.
+const wmSyncVisibility = w32.WMApp + 0x20
 
 func getWindowContext(wnd uintptr) interface{} {
 	windowContextSync.RLock()
@@ -44,6 +53,7 @@ type browser interface {
 	Eval(script string)
 	NotifyParentWindowPositionChanged() error
 	Focus()
+	SetVisible(visible bool)
 	Close()
 }
 
@@ -57,6 +67,7 @@ type webview struct {
 	m          sync.Mutex
 	bindings   map[string]interface{}
 	navFn      func(bool, int32)
+	bgBrush    uintptr
 	destroyed  bool
 	dispatchq  []func()
 }
@@ -68,6 +79,11 @@ type WindowOptions struct {
 	Height uint
 	IconId uint
 	Center bool
+	// Positioned places the outer window at Left/Top (screen coordinates,
+	// possibly negative on secondary monitors) instead of CW_USEDEFAULT.
+	Positioned bool
+	Left       int
+	Top        int
 }
 
 type WebViewOptions struct {
@@ -85,6 +101,11 @@ type WebViewOptions struct {
 	// WindowOptions customizes the window that is created to embed the
 	// WebView2 widget.
 	WindowOptions WindowOptions
+
+	// Background, when set, paints the host window and the WebView2 default
+	// background with this opaque colour instead of white until the document
+	// renders, so a slow first frame does not look like a blank page.
+	Background *Color
 }
 
 // New creates a new webview in a new window.
@@ -120,6 +141,10 @@ func NewWithOptions(options WebViewOptions) WebView {
 		fn(isSuccess, status)
 	}
 	chromium.DataPath = options.DataPath
+	if c := options.Background; c != nil {
+		chromium.BackgroundColor = &edge.COREWEBVIEW2_COLOR{A: 255, R: c.R, G: c.G, B: c.B}
+		w.bgBrush, _, _ = w32.Gdi32CreateSolidBrush.Call(uintptr(c.R) | uintptr(c.G)<<8 | uintptr(c.B)<<16)
+	}
 	chromium.SetPermission(edge.CoreWebView2PermissionKindClipboardRead, edge.CoreWebView2PermissionStateAllow)
 
 	w.browser = chromium
@@ -256,6 +281,23 @@ func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
 			return r
 		case w32.WMSize:
 			w.browser.Resize()
+			// WebView2 is not told about minimize/restore of its parent.
+			w.syncVisibility()
+		case w32.WMShowWindow:
+			_, _, _ = w32.User32PostMessageW.Call(hwnd, wmSyncVisibility, 0, 0)
+			r, _, _ := w32.User32DefWindowProcW.Call(hwnd, msg, wp, lp)
+			return r
+		case wmSyncVisibility:
+			w.syncVisibility()
+		case w32.WMEraseBkgnd:
+			if w.bgBrush == 0 || wp == 0 {
+				r, _, _ := w32.User32DefWindowProcW.Call(hwnd, msg, wp, lp)
+				return r
+			}
+			var rc w32.Rect
+			_, _, _ = w32.User32GetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+			_, _, _ = w32.User32FillRect.Call(wp, uintptr(unsafe.Pointer(&rc)), w.bgBrush)
+			return 1
 		case w32.WMActivate:
 			if wp == w32.WAInactive {
 				break
@@ -314,7 +356,7 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 		LpszClassName: className,
 		HIcon:         windows.Handle(icon),
 		HIconSm:       windows.Handle(icon),
-		LpfnWndProc:   windows.NewCallback(wndproc),
+		LpfnWndProc:   wndprocCallback,
 	}
 	_, _, _ = w32.User32RegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 
@@ -330,7 +372,9 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	}
 
 	var posX, posY uint
-	if opts.Center {
+	if opts.Positioned {
+		posX, posY = uint(opts.Left), uint(opts.Top)
+	} else if opts.Center {
 		// get screen size
 		screenWidth, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CXSCREEN)
 		screenHeight, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CYSCREEN)
@@ -394,6 +438,18 @@ func (w *webview) Destroy() {
 		delete(windowContext, w.hwnd)
 		windowContextSync.Unlock()
 	}
+	if w.bgBrush != 0 {
+		_, _, _ = w32.Gdi32DeleteObject.Call(w.bgBrush)
+		w.bgBrush = 0
+	}
+}
+
+// syncVisibility mirrors the final host window state (shown and not
+// minimized) into the WebView2 controller. Must run on the UI thread.
+func (w *webview) syncVisibility() {
+	visible, _, _ := w32.User32IsWindowVisible.Call(w.hwnd)
+	iconic, _, _ := w32.User32IsIconic.Call(w.hwnd)
+	w.browser.SetVisible(visible != 0 && iconic == 0)
 }
 
 func (w *webview) Run() {

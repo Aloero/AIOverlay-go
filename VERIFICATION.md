@@ -379,3 +379,38 @@ document through `SetHtml`; the lightweight `studio-diagnostics.json` trace is
 kept as pure telemetry (no browser-argument writes, no restarts).
 Automated: full check suite, Windows cross-build. Not run: physical
 white-window reproduction.
+
+## Studio white window: controller visibility, DPI geometry, hermetic UI tests (2026-11-10)
+
+Root cause of the white Studio window: the window was created hidden, the
+WebView2 controller was created under it, and the later `ShowWindow` never
+reached `put_IsVisible`. WebView2 does not observe its parent's visibility, so
+on affected machines the document loaded and the bridge answered while the
+client area showed only the WebView2 default background — white, although the
+Studio theme is dark. GPU flags could not help because nothing was composited.
+The vendored webview now forwards every host transition (show/hide, including
+the capture hide/restore, and minimize/restore) to the controller, initialises
+`IsVisible` from the real parent state, and Studio is created visible at its
+final position (the standard hosting order). The default background is the
+theme colour, so a slow first frame is dark rather than white. The native close
+button closes a session whose page never reached the bridge instead of waiting
+for a page that cannot answer.
+
+Also fixed: Studio size and minimum size are scaled by system DPI (a per-monitor
+aware process at 200% previously got a quarter-size window); per-session WebView2
+profiles are retried in the background and day-old leftovers are swept instead
+of accumulating in `%TEMP%`; a new `NewCallback` per Studio session (finite
+process resource) is now created once; COM out-parameter bugs in the fork
+(permission kind, accelerator token, background colour, AddRef). Catalog order
+broke ties between 56 duplicated provider/model display names by random map
+order; IDs now make it deterministic. The DOM smoke suite depended on Git LFS
+content (`opencode.exe` pointer in non-LFS checkouts, including CI); the runner
+now supplies a never-executed runtime stub. Unused helpers reported by
+staticcheck were removed.
+
+Automated: `go test ./...` (with and without `-race`), `go vet` for darwin and
+windows/amd64, Windows cross-build, staticcheck, DOM and Chromium UI suites.
+Not run: the physical Windows Studio rendering check — please confirm on the
+affected machine that Studio paints and that `studio-diagnostics.json` shows
+`renderer_ready` with a visible window.
+

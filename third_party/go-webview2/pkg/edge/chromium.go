@@ -31,8 +31,17 @@ type Chromium struct {
 
 	environment *ICoreWebView2Environment
 
+	// visible mirrors the last IsVisible value sent to the controller so
+	// repeated WM_SIZE/WM_SHOWWINDOW notifications do not churn the browser.
+	visible      bool
+	visibleKnown bool
+
 	// Settings
 	DataPath string
+
+	// BackgroundColor, when set before Embed, replaces the WebView2 default
+	// white that is shown until the document paints its first frame.
+	BackgroundColor *COREWEBVIEW2_COLOR
 
 	// permissions
 	permissions      map[CoreWebView2PermissionKind]CoreWebView2PermissionState
@@ -154,11 +163,43 @@ func (e *Chromium) Eval(script string) {
 }
 
 func (e *Chromium) Show() error {
-	return e.controller.PutIsVisible(true)
+	e.SetVisible(true)
+	return nil
 }
 
 func (e *Chromium) Hide() error {
-	return e.controller.PutIsVisible(false)
+	e.SetVisible(false)
+	return nil
+}
+
+// SetVisible forwards the host window visibility to the controller. WebView2
+// does not observe ShowWindow on its parent HWND: a controller created under a
+// hidden window, or left visible while the window was hidden and shown again,
+// can keep presenting only its default background (a white client area) even
+// though the document loaded and scripts run. Every real host transition must
+// therefore reach put_IsVisible.
+func (e *Chromium) SetVisible(visible bool) {
+	if e.controller == nil || (e.visibleKnown && e.visible == visible) {
+		return
+	}
+	e.visible, e.visibleKnown = visible, true
+	_ = e.controller.PutIsVisible(visible)
+	if visible {
+		e.Resize()
+		_ = e.controller.NotifyParentWindowPositionChanged()
+	}
+}
+
+func (e *Chromium) applyBackgroundColor() {
+	if e.BackgroundColor == nil {
+		return
+	}
+	c2 := e.controller.GetICoreWebView2Controller2()
+	if c2 == nil {
+		return
+	}
+	defer c2.vtbl.Release.Call(uintptr(unsafe.Pointer(c2)))
+	_ = c2.PutDefaultBackgroundColor(*e.BackgroundColor)
 }
 
 func (e *Chromium) QueryInterface(_, _ uintptr) uintptr {
@@ -202,6 +243,11 @@ func (e *Chromium) CreateCoreWebView2ControllerCompleted(res uintptr, controller
 	}
 	_, _, _ = controller.vtbl.AddRef.Call(uintptr(unsafe.Pointer(controller)))
 	e.controller = controller
+	e.applyBackgroundColor()
+	// Start from the real parent state so the first Show is a transition.
+	visible, _, _ := w32.User32IsWindowVisible.Call(e.hwnd)
+	iconic, _, _ := w32.User32IsIconic.Call(e.hwnd)
+	e.SetVisible(visible != 0 && iconic == 0)
 
 	var token _EventRegistrationToken
 	_, _, _ = controller.vtbl.GetCoreWebView2.Call(
@@ -275,7 +321,7 @@ func (e *Chromium) PermissionRequested(_ *ICoreWebView2, args *iCoreWebView2Perm
 	var kind CoreWebView2PermissionKind
 	_, _, _ = args.vtbl.GetPermissionKind.Call(
 		uintptr(unsafe.Pointer(args)),
-		uintptr(kind),
+		uintptr(unsafe.Pointer(&kind)),
 	)
 	var result CoreWebView2PermissionState
 	if e.globalPermission != nil {
@@ -396,6 +442,7 @@ func (e *Chromium) Close() {
 		e.controller.vtbl.Release.Call(uintptr(unsafe.Pointer(e.controller)))
 		e.controller = nil
 	}
+	e.visibleKnown = false
 	if e.environment != nil {
 		e.environment.vtbl.Release.Call(uintptr(unsafe.Pointer(e.environment)))
 		e.environment = nil

@@ -39,7 +39,7 @@ type ICoreWebView2Controller struct {
 }
 
 func (i *ICoreWebView2Controller) AddRef() uintptr {
-	r, _, _ := i.vtbl.AddRef.Call()
+	r, _, _ := i.vtbl.AddRef.Call(uintptr(unsafe.Pointer(i)))
 	return r
 }
 
@@ -74,7 +74,7 @@ func (i *ICoreWebView2Controller) AddAcceleratorKeyPressed(eventHandler *ICoreWe
 	_, _, err = i.vtbl.AddAcceleratorKeyPressed.Call(
 		uintptr(unsafe.Pointer(i)),
 		uintptr(unsafe.Pointer(eventHandler)),
-		uintptr(unsafe.Pointer(&token)),
+		uintptr(unsafe.Pointer(token)),
 	)
 	if err != windows.ERROR_SUCCESS {
 		return err
