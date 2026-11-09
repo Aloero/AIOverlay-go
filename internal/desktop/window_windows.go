@@ -232,6 +232,112 @@ func windowRectForDiag(v webview.WebView) any {
 	return []int{int(r.Left), int(r.Top), int(r.Right), int(r.Bottom)}
 }
 
+var (
+	printWindowProc = user32.NewProc("PrintWindow")
+	getDCProc       = user32.NewProc("GetDC")
+	releaseDCProc   = user32.NewProc("ReleaseDC")
+	gdi32           = syscall.NewLazyDLL("gdi32.dll")
+	compatibleDC    = gdi32.NewProc("CreateCompatibleDC")
+	compatibleBmp   = gdi32.NewProc("CreateCompatibleBitmap")
+	selectObject    = gdi32.NewProc("SelectObject")
+	deleteDCProc    = gdi32.NewProc("DeleteDC")
+	deleteObjProc   = gdi32.NewProc("DeleteObject")
+	getDIBitsProc   = gdi32.NewProc("GetDIBits")
+)
+
+type bitmapInfoHeader struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
+
+// presentationLooksBlank rasterizes the window via PrintWindow with
+// PW_RENDERFULLCONTENT (reaching the DirectComposition tree) and reports
+// uniform output: the reported failure class paints a flat white client area
+// although navigation, scripts and bridge traffic all succeed. Must run on
+// the window's UI thread.
+func presentationLooksBlank(v webview.WebView) map[string]any {
+	out := map[string]any{}
+	hwnd := uintptr(v.Window())
+	var r diagRect
+	if ok, _, e := getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+		out["error"] = "GetWindowRect: " + e.Error()
+		return out
+	}
+	width, height := int(r.Right-r.Left), int(r.Bottom-r.Top)
+	if width < 64 || height < 64 || width > 16384 || height > 16384 {
+		out["error"] = fmt.Sprintf("invalid rect %dx%d", width, height)
+		return out
+	}
+	hdc, _, e := getDCProc.Call(hwnd)
+	if hdc == 0 {
+		out["error"] = "GetDC: " + e.Error()
+		return out
+	}
+	defer releaseDCProc.Call(hdc, hwnd)
+	memDC, _, e := compatibleDC.Call(hdc)
+	if memDC == 0 {
+		out["error"] = "CreateCompatibleDC: " + e.Error()
+		return out
+	}
+	defer deleteDCProc.Call(memDC)
+	bmp, _, e := compatibleBmp.Call(hdc, uintptr(width), uintptr(height))
+	if bmp == 0 {
+		out["error"] = "CreateCompatibleBitmap: " + e.Error()
+		return out
+	}
+	defer deleteObjProc.Call(bmp)
+	old, _, _ := selectObject.Call(memDC, bmp)
+	defer selectObject.Call(memDC, old)
+	// 2 = PW_RENDERFULLCONTENT.
+	if pw, _, e := printWindowProc.Call(hwnd, memDC, 2); pw == 0 {
+		out["error"] = "PrintWindow: " + e.Error()
+		return out
+	}
+	info := bitmapInfoHeader{Size: 40, Width: int32(width), Height: int32(-height), Planes: 1, BitCount: 32}
+	pixels := make([]byte, width*height*4)
+	if got, _, e := getDIBitsProc.Call(memDC, bmp, 0, uintptr(height), uintptr(unsafe.Pointer(&pixels[0])), uintptr(unsafe.Pointer(&info)), 0); got == 0 {
+		out["error"] = "GetDIBits: " + e.Error()
+		return out
+	}
+	// Skip the top strip (non-client title bar) and sample a grid.
+	counts := map[uint32]int{}
+	total := 0
+	for y := height * 8 / 100; y < height; y += max(1, height/64) {
+		for x := 0; x < width; x += max(1, width/64) {
+			i := (y*width + x) * 4
+			color := uint32(pixels[i]) | uint32(pixels[i+1])<<8 | uint32(pixels[i+2])<<16
+			counts[color]++
+			total++
+		}
+	}
+	if total == 0 {
+		out["error"] = "no samples"
+		return out
+	}
+	dominant, best := uint32(0), 0
+	for c, n := range counts {
+		if n > best {
+			dominant, best = c, n
+		}
+	}
+	ratio := float64(best) / float64(total)
+	out["samples"] = total
+	out["distinct"] = len(counts)
+	out["dominantRatio"] = ratio
+	out["dominantColor"] = fmt.Sprintf("%06x", dominant)
+	out["blank"] = ratio > 0.985
+	return out
+}
+
 func New(o Options) Window {
 	return &desktopWindow{options: o, openCh: make(chan struct{}, 1), closeCh: make(chan struct{}, 1)}
 }
@@ -303,6 +409,11 @@ func (w *desktopWindow) Run(ctx context.Context) error {
 			sessionCancel = nil
 			sessionDone = nil
 			restart := life.sessionEnded()
+			end := map[string]any{}
+			if err != nil {
+				end["error"] = err.Error()
+			}
+			w.diag.record("session_end", end)
 			if errors.Is(err, errStudioBlank) && ctx.Err() == nil {
 				startSession()
 				continue
@@ -510,6 +621,50 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 			ShowError("AIOverlay · Pipeline Studio", "Окно Studio открылось, но интерфейс не загрузился даже в режиме программной отрисовки. Обновите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1. При работе через удалённый рабочий стол помогает пересоздание сеанса RDP или локальный запуск AIOverlay.\n\nПодробный отчёт сохранён в файле studio-diagnostics.json рядом с config.json — приложите его к обращению автору.")
 		}
 	}()
+	// Direct presentation check: screenshot the window itself once the
+	// document is known alive. A uniform client area means the user sees a
+	// blank white/black window despite everything working, so restart once
+	// per process at the fully software rendering level.
+	go func() {
+		wait := time.NewTimer(6 * time.Second)
+		defer wait.Stop()
+		select {
+		case <-pageReady:
+			wait.Reset(2500 * time.Millisecond)
+		case <-watchDone:
+			return
+		case <-ctx.Done():
+			return
+		case <-wait.C:
+			return
+		}
+		select {
+		case <-wait.C:
+		case <-watchDone:
+			return
+		case <-ctx.Done():
+			return
+		}
+		w.dispatchSession(ctx, v, func() {
+			data := presentationLooksBlank(v)
+			blank, _ := data["blank"].(bool)
+			data["renderLevel"] = w.diag.level()
+			switch {
+			case !blank:
+				w.diag.record("presentation_check", data)
+			case !w.gpuFallbackUsed.Swap(true):
+				data["decision"] = "restart-with-software-rendering"
+				data["newLevel"] = w.diag.raise(2)
+				w.diag.record("presentation_check", data)
+				w.blank.Store(true)
+				v.Dispatch(func() { v.Destroy() })
+			default:
+				data["decision"] = "report"
+				w.diag.record("presentation_check", data)
+				ShowError("AIOverlay · Pipeline Studio", "Окно Studio отрисовывается пустым даже при программном рендеринге. Отчёт сохранён в файле studio-diagnostics.json рядом с config.json — приложите его к обращению автору.")
+			}
+		})
+	}()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -524,17 +679,16 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 		}
 		return errStudioBlank
 	}
-	// Indirect white-window signal: a live renderer with a blank presentation
-	// cannot be detected from the host, but opening Studio and closing it
-	// within seconds while the UI never fetched data is the user's reaction to
-	// one. Climb the render ladder so the next attempt skips more GPU stages;
-	// a session that did load data clears the ladder again.
+	// Indirect white-window signal: users who see a blank window close it and
+	// reopen immediately, even though the invisible document happily fetches
+	// data. Any quick dismissal (app not exiting) climbs the render ladder;
+	// a session that stayed open long enough to be actually used resets it.
 	elapsed := time.Since(sessionStart)
 	reqs := bridgeReqs.Load()
 	switch {
-	case reqs > 5:
+	case elapsed >= 45*time.Second:
 		w.diag.reset()
-	case !remote && ctx.Err() != nil && !w.appClosing.Load() && elapsed < 15*time.Second && reqs <= 2:
+	case !remote && ctx.Err() != nil && !w.appClosing.Load() && elapsed < 15*time.Second:
 		w.diag.record("suspected_blank_close", map[string]any{"elapsedMs": elapsed.Milliseconds(), "requests": reqs, "newLevel": w.diag.raise(0)})
 	}
 	if ctx.Err() != nil {

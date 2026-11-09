@@ -354,3 +354,17 @@ composition → full software rendering) for the next attempt; a session that
 fetched data resets it. A document that never answers the readiness probe
 jumps straight to software rendering. Automated: full check suite, Windows
 cross-build. Not run: confirmation on the affected GPU.
+
+## Direct blank-presentation detection via window self-screenshot (2026-11-09)
+
+The next trace proved the failure is pure presentation: navigation succeeds,
+the renderer answers and the loaded UI performs bridge data requests, yet the
+user sees white — with capture affinity already removed. Request-count
+heuristics were the wrong signal (a blank page still fetches), so Studio now
+screenshots its own window with PrintWindow(PW_RENDERFULLCONTENT) about 2.5
+seconds after readiness and measures colour uniformity: a flat client area
+restarts the session once at full software rendering and reports through a
+dialog if even that paints blank. Quick dismissals (<15 s, not app shutdown)
+climb the ladder regardless of request counts; 45+ second sessions reset it.
+Automated: full check suite, Windows cross-build. Not run: capture on the
+affected GPU (the user's next trace will contain presentation_check events).
