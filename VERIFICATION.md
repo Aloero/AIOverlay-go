@@ -267,3 +267,24 @@ ambiguous last audio/response event and is disabled unless remote storage is
 explicitly enabled. Real cloud inference and real VPN packet-trace verification
 remain `not run`; no real-provider or hardware-readiness claim follows from local
 fixtures, mocks, or a Windows-target compilation.
+
+## Overlay resize repaint, invisible request errors and Studio remote-session blanking (2026-11-09)
+
+User reports: header, answer text and the settings glyph stayed at pre-resize
+coordinates; after the clear hotkey the overlay never reappeared; Studio opened
+to a white window. Root causes and fixes. The overlay window class was
+registered without `CS_HREDRAW|CS_VREDRAW`, so Windows stretched the stale
+surface instead of repainting on resize; the class style is now set. The clear
+hotkey cancels asynchronously and the previous job may still be winding down,
+so the next request can return "a run is already active"; that error was only
+written to the meta of a hidden window and looked like a dead hotkey — request
+errors are now presented as visible overlay text with an `ERROR` state and the
+window is shown. The Studio WebView2 window applies `WDA_EXCLUDEFROMCAPTURE`
+for Stealth, and GPU composition under RDP both blank the client area to white
+for the owner; in an interactive remote session the desktop window now skips
+capture-exclusion affinity and starts WebView2 with software composition, and
+a page-readiness probe over the existing `studioDispatch` bridge turns the
+remaining silent failure into an explicit native error with recovery steps.
+Automated: Windows-target vet and build, Linux suites, `check.sh`. Not run:
+physical interactive Windows resize, hotkey-cascade and RDP/local Studio
+rendering verification — these need a real Windows session from the user.

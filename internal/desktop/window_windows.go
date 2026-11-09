@@ -33,12 +33,22 @@ var messageBox = user32.NewProc("MessageBoxW")
 var setWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
 var callWindowProc = user32.NewProc("CallWindowProcW")
 var defWindowProc = user32.NewProc("DefWindowProcW")
+var getSystemMetrics = user32.NewProc("GetSystemMetrics")
 
 const (
 	gwlpWndProc        = -4
 	wmCloseDesktop     = 0x0010
 	wmNCDestroyDesktop = 0x0082
+	smRemoteSession    = 0x1000
 )
+
+// isRemoteSession reports an interactive RDP session. There both hardware
+// GPU composition and SetWindowDisplayAffinity can present a blank (white)
+// client area, which users perceive as "Studio opens to a white screen".
+func isRemoteSession() bool {
+	m, _, _ := getSystemMetrics.Call(smRemoteSession)
+	return m != 0
+}
 
 var desktopWindowMap sync.Map
 var desktopSubclassProc = syscall.NewCallback(desktopSubclassWndProc)
@@ -157,6 +167,15 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	w.mu.Lock()
 	options := w.options
 	w.mu.Unlock()
+	// WebView2 honours this environment variable when it creates the browser
+	// environment. Under RDP, GPU composition frequently paints the window
+	// white; software output stays reliable there.
+	remote := isRemoteSession()
+	if remote {
+		os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu --disable-gpu-compositing")
+	}
+	pageReady := make(chan struct{})
+	var readyOnce sync.Once
 	v := webview.NewWithOptions(webview.WebViewOptions{Debug: false, DataPath: profile, AutoFocus: true, WindowOptions: webview.WindowOptions{Title: options.Title, Width: 1320, Height: 880, Center: false, Hidden: true}})
 	if v == nil {
 		return fmt.Errorf("не удалось создать WebView2. Установите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1 и повторите открытие Studio")
@@ -204,6 +223,10 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 			closeAfterReply := false
 			var reply Reply
 			switch r.Path {
+			case "/desktop/ready":
+				// The injected binding script proves the document is alive.
+				readyOnce.Do(func() { close(pageReady) })
+				reply = Reply{OK: true, Data: json.RawMessage(`{}`)}
 			case "/desktop/close", "/desktop/hide": // hide kept for older embedded UI bundles
 				closeAfterReply = true
 				reply = Reply{OK: true, Data: json.RawMessage(`{}`)}
@@ -231,6 +254,23 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	}
 	v.SetHtml(html)
 	showWindow.Call(uintptr(v.Window()), 5)
+	// Probe the loaded document through the injected binding. If nothing ever
+	// answers, the window is white for the user; say so explicitly instead of
+	// failing silently.
+	w.dispatchSession(ctx, v, func() {
+		v.Eval(`window.studioDispatch && window.studioDispatch({id:"native-ready",path:"/desktop/ready",method:"POST"})`)
+	})
+	go func() {
+		timer := time.NewTimer(8 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-pageReady:
+		case <-watchDone:
+		case <-ctx.Done():
+		case <-timer.C:
+			ShowError("AIOverlay · Pipeline Studio", "Окно Studio открылось, но интерфейс не загрузился. Обновите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1. При работе через удалённый рабочий стол также помогает пересоздание сеанса RDP или локальный запуск AIOverlay.")
+		}
+	}()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -357,6 +397,15 @@ func (w *desktopWindow) SetStealth(on bool) {
 	}
 }
 func (w *desktopWindow) applyStealth(v webview.WebView, on bool) {
+	// WDA_EXCLUDEFROMCAPTURE blanks DirectComposition content in remote
+	// sessions, turning Studio into a white window for its owner. Privacy
+	// protection is skipped there; local sessions keep it unchanged.
+	if on && isRemoteSession() {
+		w.mu.Lock()
+		w.protection = platform.ProtectionStatus{Requested: true, Applied: false, Mode: "suppressed-remote-session", CheckedAt: time.Now()}
+		w.mu.Unlock()
+		return
+	}
 	status := platform.ApplyWindowProtection(uintptr(v.Window()), on)
 	w.mu.Lock()
 	w.protection = status

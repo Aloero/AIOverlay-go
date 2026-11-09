@@ -28,6 +28,8 @@ const (
 	wmLButtonDblClk       = 0x0203
 	wmRButtonUp           = 0x0205
 	wmContextMenu         = 0x007B
+	csVRedraw             = 0x0001
+	csHRedraw             = 0x0002
 	wsPopup               = 0x80000000
 	wsExTopmost           = 0x00000008
 	wsExTransparent       = 0x00000020
@@ -267,7 +269,10 @@ func (o *winOverlay) createWindow() error {
 	inst, _, _ := pGetModuleHandle.Call(0)
 	name, _ := syscall.UTF16PtrFromString("AIOverlayGoWindowClass")
 	o.className = name
-	wc := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: syscall.NewCallback(globalWndProc), Instance: inst, ClassName: name}
+	// CS_HREDRAW|CS_VREDRAW: without them Windows stretches the stale surface
+	// on resize, leaving the header, answer text and settings button at their
+	// pre-resize coordinates.
+	wc := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), Style: csHRedraw | csVRedraw, WndProc: syscall.NewCallback(globalWndProc), Instance: inst, ClassName: name}
 	pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc)))
 	style := uintptr(wsExTopmost | wsExToolWindow | wsExLayered | wsExNoActivate)
 	if o.ghost {
@@ -624,7 +629,12 @@ func (o *winOverlay) captureAndAnalyze() {
 		o.stationaryFired = true
 		o.mu.Unlock()
 		if err := o.cb.Request(); err != nil {
-			o.SetMeta(err.Error())
+			// The window may be hidden (e.g. right after the clear hotkey
+			// cancelled a run that was still winding down). An error nobody can
+			// see looks like a dead hotkey, so present it visibly.
+			o.SetText("Не удалось запустить запрос\n" + err.Error())
+			o.SetMeta("ERROR")
+			o.Show()
 		}
 		return
 	}
