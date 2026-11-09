@@ -339,3 +339,18 @@ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and destroyed the maintained
 application-identity switch; all writers now merge arguments.
 Automated: Windows-target vet/build, full check suite. Not run: confirmation
 on the affected GPU (requires the user's report after the next test).
+
+## Studio window is never capture-hidden; render ladder replaces GPU guesses (2026-11-09)
+
+User decision: Studio is a standalone config editor (opened, edited, closed on
+demand) and must not hide itself — `stealth` applies to the overlay only. All
+display-affinity/composition attributes were removed from the Studio window;
+a visible Studio now always pauses background screen capture instead of risking
+settings in a screenshot. Because blank presentation with a live renderer
+cannot be detected from the host, Studio keeps a persisted render ladder in
+`studio-diagnostics.json`: a session that opened, loaded nothing (≤2 bridge
+requests) and was closed within 15 seconds climbs one step (software
+composition → full software rendering) for the next attempt; a session that
+fetched data resets it. A document that never answers the readiness probe
+jumps straight to software rendering. Automated: full check suite, Windows
+cross-build. Not run: confirmation on the affected GPU.

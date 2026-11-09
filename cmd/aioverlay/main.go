@@ -42,7 +42,7 @@ func main() {
 		server.SetDevelopmentToken(*devToken)
 	}
 	defer server.CancelRun()
-	studio := desktop.New(desktop.Options{Title: cfg.App.Name + " · Pipeline Studio", Visible: cfg.ControlCenter.AutoOpen && !*hidden, Stealth: cfg.Overlay.Stealth, Handler: server.DesktopHandler(), ConfigPath: *configPath, Quit: cancel, HotkeyEditor: func(active bool) {
+	studio := desktop.New(desktop.Options{Title: cfg.App.Name + " · Pipeline Studio", Visible: cfg.ControlCenter.AutoOpen && !*hidden, Handler: server.DesktopHandler(), ConfigPath: *configPath, Quit: cancel, HotkeyEditor: func(active bool) {
 		if server.HotkeyEditor != nil {
 			server.HotkeyEditor(active)
 		}
@@ -111,7 +111,6 @@ func main() {
 				}
 			}, nil
 		})
-		a.OnConfigChanged(func(next domain.Config) { studio.SetStealth(next.Overlay.Stealth) })
 		if editor, ok := ov.(interface{ SetHotkeyEditor(bool) }); ok {
 			server.HotkeyEditor = editor.SetHotkeyEditor
 		}

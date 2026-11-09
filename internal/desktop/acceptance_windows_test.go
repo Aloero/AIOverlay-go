@@ -20,7 +20,7 @@ func TestWindowsStudioRepeatedOpenCloseReleasesHWND(t *testing.T) {
 	if _, err := webviewloader.GetInstalledVersion(); err != nil {
 		t.Fatal(err)
 	}
-	w := New(Options{Title: "AIOverlay lifecycle acceptance", Stealth: true, Handler: http.HandlerFunc(func(out http.ResponseWriter, r *http.Request) {
+	w := New(Options{Title: "AIOverlay lifecycle acceptance", Handler: http.HandlerFunc(func(out http.ResponseWriter, r *http.Request) {
 		out.Header().Set("Content-Type", "application/json")
 		out.Write([]byte(`{}`))
 	})}).(*desktopWindow)

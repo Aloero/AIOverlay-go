@@ -18,7 +18,6 @@ import (
 	"time"
 	"unsafe"
 
-	"aioverlay/internal/platform"
 	assets "aioverlay/web"
 	webview "github.com/jchv/go-webview2"
 	"github.com/jchv/go-webview2/webviewloader"
@@ -62,7 +61,6 @@ type desktopWindow struct {
 	ctx             context.Context
 	captureMu       sync.Mutex
 	origWndProc     uintptr
-	protection      platform.ProtectionStatus
 	appClosing      atomic.Bool
 	blank           atomic.Bool
 	gpuFallbackUsed atomic.Bool
@@ -81,10 +79,11 @@ var errStudioBlank = errors.New("studio document did not respond")
 // cannot be reproduced remotely, so the build reports what WebView2 actually
 // did instead of guessing. Events carry no keys, prompts or request bodies.
 type studioDiag struct {
-	mu      sync.Mutex
-	path    string
-	started time.Time
-	events  []map[string]any
+	mu         sync.Mutex
+	path       string
+	started    time.Time
+	escalation int
+	events     []map[string]any
 }
 
 func newStudioDiag(configPath string) *studioDiag {
@@ -92,7 +91,75 @@ func newStudioDiag(configPath string) *studioDiag {
 	if dir == "" || dir == "." {
 		dir, _ = os.Getwd()
 	}
-	return &studioDiag{path: filepath.Join(dir, "studio-diagnostics.json"), started: time.Now()}
+	d := &studioDiag{path: filepath.Join(dir, "studio-diagnostics.json"), started: time.Now()}
+	// The render ladder survives process restarts: a machine whose GPU path
+	// blanks Studio should not have to rediscover software rendering daily.
+	if raw, err := os.ReadFile(d.path); err == nil {
+		var saved struct {
+			RenderEscalation *int `json:"renderEscalation"`
+		}
+		if json.Unmarshal(raw, &saved) == nil && saved.RenderEscalation != nil {
+			d.escalation = maxInt(0, minInt(2, *saved.RenderEscalation))
+		}
+	}
+	return d
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// renderArgs returns browser arguments for the current ladder level:
+// 0 default, 1 software composition, 2 fully software rendering.
+func (d *studioDiag) renderArgs() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch d.escalation {
+	case 1:
+		return "--disable-gpu-compositing"
+	case 2:
+		return "--disable-gpu --disable-gpu-compositing"
+	}
+	return ""
+}
+
+func (d *studioDiag) level() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.escalation
+}
+
+// raise moves the render ladder up one step (or jumps to software rendering
+// for documents that never respond at all) and persists it.
+func (d *studioDiag) raise(to int) int {
+	d.mu.Lock()
+	if to == 2 {
+		d.escalation = 2
+	} else if d.escalation < 2 {
+		d.escalation++
+	}
+	level := d.escalation
+	d.mu.Unlock()
+	return level
+}
+
+func (d *studioDiag) reset() {
+	d.mu.Lock()
+	changed := d.escalation != 0
+	d.escalation = 0
+	d.mu.Unlock()
+	if changed {
+		d.record("render_ladder_reset", map[string]any{"reason": "session worked with data requests"})
+	}
 }
 
 // Path returns the diagnostics file location for user-visible messages.
@@ -125,9 +192,10 @@ func (d *studioDiag) writeNow() {
 	}
 	d.mu.Lock()
 	raw, err := json.MarshalIndent(map[string]any{
-		"started": d.started.Format(time.RFC3339),
-		"pid":     os.Getpid(),
-		"events":  d.events,
+		"started":          d.started.Format(time.RFC3339),
+		"pid":              os.Getpid(),
+		"renderEscalation": d.escalation,
+		"events":           d.events,
 	}, "", "  ")
 	d.mu.Unlock()
 	if err != nil {
@@ -293,20 +361,15 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	remote := isRemoteSession()
 	if remote {
 		appendBrowserArgs("--disable-gpu --disable-gpu-compositing")
-	} else if options.Stealth {
-		// WDA_EXCLUDEFROMCAPTURE on a DirectComposition tree has a known
-		// driver bug class: the window presents blank (white) locally while
-		// navigation and scripts succeed — exactly the trace users report.
-		// Presenting through the HWND swap-chain keeps capture protection
-		// active and rendering reliable.
-		appendBrowserArgs("--disable-direct-composition")
+	} else if extra := w.diag.renderArgs(); extra != "" {
+		appendBrowserArgs(extra)
 	}
 	w.diag.record("session_begin", map[string]any{
 		"index":       w.diagSessions.Add(1),
 		"remote":      remote,
 		"gpuFallback": w.gpuFallbackUsed.Load(),
+		"renderLevel": w.diag.level(),
 		"browserArgs": os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"),
-		"stealth":     options.Stealth,
 		"htmlBytes":   len(html),
 	})
 	pageReady := make(chan struct{})
@@ -324,6 +387,8 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	w.installCloseToUnload(v)
 	watchDone := make(chan struct{})
 	var requests sync.WaitGroup
+	var bridgeReqs atomic.Int64
+	sessionStart := time.Now()
 	defer func() {
 		endSession()
 		close(watchDone)
@@ -343,11 +408,15 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	v.SetSize(860, 560, webview.HintMin)
 	w.fitToWorkArea(v)
 	w.applyIdentity(v)
-	w.applyStealth(v, options.Stealth)
+	// Studio is deliberately never hidden from screen capture: it is a config
+	// editor the user opens, edits and closes, and WDA_EXCLUDEFROMCAPTURE on a
+	// WebView2 window can blank presentation on some drivers. Stealth applies
+	// to the overlay only.
 	semaphore := make(chan struct{}, 8)
 	err = v.Bind("studioDispatch", func(r Request) error {
 		// Bind callbacks execute on the UI thread. All potentially slow work is
 		// scheduled in Go and delivered with Dispatch; never block the message loop.
+		bridgeReqs.Add(1)
 		select {
 		case semaphore <- struct{}{}:
 		default:
@@ -404,10 +473,7 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	w.diag.record("html_set", map[string]any{"bytes": len(html)})
 	showWindow.Call(uintptr(v.Window()), 5)
 	vis, _, _ := getVisible.Call(uintptr(v.Window()))
-	w.mu.Lock()
-	prot := w.protection
-	w.mu.Unlock()
-	w.diag.record("window_shown", map[string]any{"visible": vis != 0, "rect": windowRectForDiag(v), "protection": prot})
+	w.diag.record("window_shown", map[string]any{"visible": vis != 0, "rect": windowRectForDiag(v)})
 	// Probe the loaded document through the injected binding. If nothing ever
 	// answers, the window is white for the user; say so explicitly instead of
 	// failing silently.
@@ -433,8 +499,8 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 			}
 			if !w.gpuFallbackUsed.Swap(true) {
 				data["decision"] = "restart-with-software-composition"
+				data["newLevel"] = w.diag.raise(2)
 				w.diag.record("renderer_timeout", data)
-				appendBrowserArgs("--disable-gpu --disable-gpu-compositing")
 				w.blank.Store(true)
 				v.Dispatch(func() { v.Destroy() })
 				return
@@ -457,6 +523,19 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 			return ctx.Err()
 		}
 		return errStudioBlank
+	}
+	// Indirect white-window signal: a live renderer with a blank presentation
+	// cannot be detected from the host, but opening Studio and closing it
+	// within seconds while the UI never fetched data is the user's reaction to
+	// one. Climb the render ladder so the next attempt skips more GPU stages;
+	// a session that did load data clears the ladder again.
+	elapsed := time.Since(sessionStart)
+	reqs := bridgeReqs.Load()
+	switch {
+	case reqs > 5:
+		w.diag.reset()
+	case !remote && ctx.Err() != nil && !w.appClosing.Load() && elapsed < 15*time.Second && reqs <= 2:
+		w.diag.record("suspected_blank_close", map[string]any{"elapsedMs": elapsed.Milliseconds(), "requests": reqs, "newLevel": w.diag.raise(0)})
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -546,10 +625,6 @@ func (w *desktopWindow) requestCloseFromPage() {
 }
 func (w *desktopWindow) showActive() {
 	w.dispatch(func(v webview.WebView) {
-		w.mu.Lock()
-		stealth := w.options.Stealth
-		w.mu.Unlock()
-		w.applyStealth(v, stealth)
 		showWindow.Call(uintptr(v.Window()), 9)
 		foreground.Call(uintptr(v.Window()))
 	})
@@ -566,34 +641,10 @@ func (w *desktopWindow) Close() {
 	default:
 	}
 }
-func (w *desktopWindow) SetStealth(on bool) {
-	w.mu.Lock()
-	w.options.Stealth = on
-	v := w.view
-	w.mu.Unlock()
-	if v != nil {
-		v.Dispatch(func() { w.applyStealth(v, on) })
-	}
-}
-func (w *desktopWindow) applyStealth(v webview.WebView, on bool) {
-	// WDA_EXCLUDEFROMCAPTURE blanks DirectComposition content in remote
-	// sessions, turning Studio into a white window for its owner. Privacy
-	// protection is skipped there; local sessions keep it unchanged.
-	if on && isRemoteSession() {
-		w.mu.Lock()
-		w.protection = platform.ProtectionStatus{Requested: true, Applied: false, Mode: "suppressed-remote-session", CheckedAt: time.Now()}
-		w.mu.Unlock()
-		return
-	}
-	status := platform.ApplyWindowProtection(uintptr(v.Window()), on)
-	w.mu.Lock()
-	w.protection = status
-	w.mu.Unlock()
-}
 func (w *desktopWindow) Diagnostics() any {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return map[string]any{"loaded": w.view != nil, "protection": w.protection}
+	return map[string]any{"loaded": w.view != nil}
 }
 
 func (w *desktopWindow) Capture(fn func() ([]byte, error)) ([]byte, error) {
@@ -797,13 +848,14 @@ func cleanupProfile(path string) {
 // CaptureBackground never blinks Studio. If an open visible Studio cannot be
 // confidently excluded from capture, the automatic source is paused instead of
 // risking screenshots of settings or secrets. Manual Capture keeps the existing
-// hide/restore path because it is an explicit user action.
+// hide/restore path because it is an explicit user action. Studio no longer
+// uses window affinity at all, so any visible Studio window pauses background
+// screen capture.
 func (w *desktopWindow) CaptureBackground(fn func() ([]byte, error)) ([]byte, error) {
 	w.captureMu.Lock()
 	defer w.captureMu.Unlock()
 	w.mu.Lock()
 	v := w.view
-	protection := w.protection
 	w.mu.Unlock()
 	if v == nil {
 		return fn()
@@ -818,8 +870,8 @@ func (w *desktopWindow) CaptureBackground(fn func() ([]byte, error)) ([]byte, er
 	})
 	select {
 	case state := <-result:
-		if state.visible && !state.minimized && !protection.Applied {
-			return nil, suppressBackgroundCapture("studio_visible_without_capture_exclusion", "Studio is visible and capture exclusion is not confirmed; background screen capture paused")
+		if state.visible && !state.minimized {
+			return nil, suppressBackgroundCapture("studio_visible_without_capture_exclusion", "Studio is visible and not capture-excluded by design; background screen capture paused")
 		}
 		return fn()
 	case <-ctx.Done():

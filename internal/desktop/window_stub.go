@@ -15,6 +15,5 @@ func (unsupported) Run(context.Context) error {
 }
 func (unsupported) Show()                                                       {}
 func (unsupported) Close()                                                      {}
-func (unsupported) SetStealth(bool)                                             {}
 func (unsupported) Capture(fn func() ([]byte, error)) ([]byte, error)           { return fn() }
 func (unsupported) CaptureBackground(fn func() ([]byte, error)) ([]byte, error) { return fn() }
