@@ -11,6 +11,16 @@ import (
 
 func excluded(name string) bool {
 	for _, part := range strings.Split(name, "/") {
+		// Source archives may be rebuilt without Git, so .gitignore is not a
+		// privacy boundary. Exclude local credentials and overrides explicitly.
+		if part == ".env" || strings.HasPrefix(part, ".env.") {
+			return true
+		}
+		for _, suffix := range []string{".local.json", ".local.yaml", ".local.yml"} {
+			if strings.HasSuffix(part, suffix) {
+				return true
+			}
+		}
 		switch part {
 		case ".git", ".build-tools", ".tooling", "node_modules", "__pycache__", ".idea", ".vscode":
 			return true

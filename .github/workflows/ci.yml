@@ -1,0 +1,61 @@
+name: Repository checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+          lfs: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            third_party/go-webview2/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/ui/package-lock.json
+
+      - name: Install UI test dependencies
+        working-directory: tests/ui
+        run: npm ci
+
+      - name: Install Chromium and system libraries
+        working-directory: tests/ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Run repository and browser checks
+        run: scripts/check.sh --race --ui
+
+      - name: Check npm dependencies for known vulnerabilities
+        working-directory: tests/ui
+        run: npm audit --audit-level=low
+
+      - name: Check Go vulnerabilities for Linux and Windows
+        shell: bash
+        run: |
+          GOBIN="$RUNNER_TEMP/aioverlay-tools" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$RUNNER_TEMP/aioverlay-tools/govulncheck" ./...
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "$RUNNER_TEMP/aioverlay-tools/govulncheck" ./...

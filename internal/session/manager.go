@@ -92,12 +92,6 @@ type SourceStatus struct {
 	ProcessPath     string  `json:"process_path,omitempty"`
 }
 
-type pendingSegment struct {
-	pipelineID, contextID, eventID string
-	sourceID                       string
-	generation                     uint64
-	start, end                     time.Time
-}
 type backgroundTurn struct {
 	pipelineID         string
 	ctxCfg             domain.ContextConfig
@@ -105,12 +99,6 @@ type backgroundTurn struct {
 	contextGenerations map[string]uint64
 	input              engine.Input
 	at                 time.Time
-}
-
-type activeBackgroundTurn struct {
-	pipelineID         string
-	contextGenerations map[string]uint64
-	cancel             context.CancelFunc
 }
 
 type sourceRuntime struct {
@@ -162,11 +150,8 @@ type Manager struct {
 	audioRestartMaxDelay  time.Duration
 	audioRestartMu        sync.Mutex
 	audioRestartFailures  map[string]int
-	pendingMu             sync.Mutex
-	pending               map[string]pendingSegment
-	pendingChanged        chan struct{}
-	activeTurnMu          sync.Mutex
-	activeTurns           map[string]activeBackgroundTurn
+	pending               pendingTranscripts
+	activeTurns           activeTurnRegistry
 }
 
 func NewManager(execute Executor) *Manager {
@@ -179,9 +164,6 @@ func NewManager(execute Executor) *Manager {
 		sources:               map[string]*sourceRuntime{},
 		sourceOverrides:       map[string]bool{},
 		turnSem:               make(chan struct{}, 3),
-		pending:               map[string]pendingSegment{},
-		pendingChanged:        make(chan struct{}),
-		activeTurns:           map[string]activeBackgroundTurn{},
 		audioRestartBaseDelay: defaultAudioRestartDelay,
 		audioRestartMaxDelay:  maxAudioRestartDelay,
 		audioRestartFailures:  map[string]int{},
@@ -787,49 +769,13 @@ func updateAudioStatus(runtime *sourceRuntime, block paudio.Block, level float64
 	return becameAlive
 }
 
-func (m *Manager) notifyPendingLocked() {
-	close(m.pendingChanged)
-	m.pendingChanged = make(chan struct{})
-}
-func (m *Manager) addPending(p pendingSegment) {
-	if p.eventID == "" || p.contextID == "" {
-		return
-	}
-	m.pendingMu.Lock()
-	m.pending[p.eventID] = p
-	m.notifyPendingLocked()
-	m.pendingMu.Unlock()
-}
-func (m *Manager) finishPending(id string) bool {
-	if id == "" {
-		return false
-	}
-	m.pendingMu.Lock()
-	_, existed := m.pending[id]
-	if existed {
-		delete(m.pending, id)
-		m.notifyPendingLocked()
-	}
-	m.pendingMu.Unlock()
-	return existed
-}
+func (m *Manager) addPending(segment pendingSegment) { m.pending.add(segment) }
+func (m *Manager) finishPending(id string) bool      { return m.pending.finish(id) }
 func (m *Manager) dropPendingForSource(runtime *sourceRuntime, reason string) {
 	if runtime == nil || runtime.cfg.ID == "" {
 		return
 	}
-	m.pendingMu.Lock()
-	dropped := make([]pendingSegment, 0)
-	for id, pending := range m.pending {
-		if pending.sourceID != runtime.cfg.ID {
-			continue
-		}
-		dropped = append(dropped, pending)
-		delete(m.pending, id)
-	}
-	if len(dropped) > 0 {
-		m.notifyPendingLocked()
-	}
-	m.pendingMu.Unlock()
+	dropped := m.pending.takeSource(runtime.cfg.ID)
 	if len(dropped) == 0 {
 		return
 	}
@@ -873,36 +819,10 @@ func (m *Manager) dropPendingForSource(runtime *sourceRuntime, reason string) {
 }
 
 func (m *Manager) waitPending(ctx context.Context, pipelineID, contextID string, generation uint64, cutoff time.Time, limit time.Duration) (bool, error) {
-	if contextID == "" || limit <= 0 {
+	if contextID == "" {
 		return true, nil
 	}
-	deadline, cancel := context.WithTimeout(ctx, limit)
-	defer cancel()
-	for {
-		m.pendingMu.Lock()
-		waiting := false
-		for _, p := range m.pending {
-			if p.pipelineID == pipelineID && p.contextID == contextID && p.generation == generation && !p.start.After(cutoff) {
-				waiting = true
-				break
-			}
-		}
-		changed := m.pendingChanged
-		m.pendingMu.Unlock()
-		if !waiting {
-			return true, nil
-		}
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-deadline.Done():
-			if ctx.Err() != nil {
-				return false, ctx.Err()
-			}
-			return false, nil
-		case <-changed:
-		}
-	}
+	return m.pending.wait(ctx, pipelineID, map[string]uint64{contextID: generation}, cutoff, limit)
 }
 
 func sourceCooldownActive(runtime *sourceRuntime, now time.Time) bool {
@@ -1201,55 +1121,22 @@ func (m *Manager) registerActiveTurn(turn backgroundTurn, cancel context.CancelF
 	if id == "" {
 		id = fmt.Sprintf("background-turn-%d", m.eventSeq.Add(1))
 	}
-	m.activeTurnMu.Lock()
-	generations := cloneGenerations(turn.contextGenerations)
+	generations := turn.contextGenerations
 	if len(generations) == 0 && turn.ctxCfg.ID != "" {
 		generations = map[string]uint64{turn.ctxCfg.ID: turn.generation}
 	}
-	m.activeTurns[id] = activeBackgroundTurn{pipelineID: turn.pipelineID, contextGenerations: generations, cancel: cancel}
-	m.activeTurnMu.Unlock()
+	m.activeTurns.add(id, activeBackgroundTurn{pipelineID: turn.pipelineID, contextGenerations: generations, cancel: cancel})
 	return id
 }
 
-func (m *Manager) unregisterActiveTurn(id string) {
-	if id == "" {
-		return
-	}
-	m.activeTurnMu.Lock()
-	delete(m.activeTurns, id)
-	m.activeTurnMu.Unlock()
-}
+func (m *Manager) unregisterActiveTurn(id string) { m.activeTurns.remove(id) }
 
 func (m *Manager) cancelContextTurns(pipelineID, contextID string, currentGeneration uint64) {
-	m.activeTurnMu.Lock()
-	var cancels []context.CancelFunc
-	for _, turn := range m.activeTurns {
-		if turn.pipelineID != pipelineID {
-			continue
-		}
-		if generation, selected := turn.contextGenerations[contextID]; selected && generation != currentGeneration {
-			cancels = append(cancels, turn.cancel)
-		}
-	}
-	m.activeTurnMu.Unlock()
-	for _, cancel := range cancels {
-		cancel()
-	}
+	m.activeTurns.cancelStale(pipelineID, contextID, currentGeneration)
 }
 
 func (m *Manager) clearPendingBeforeGeneration(pipelineID, contextID string, currentGeneration uint64) {
-	m.pendingMu.Lock()
-	changed := false
-	for id, pending := range m.pending {
-		if pending.pipelineID == pipelineID && pending.contextID == contextID && pending.generation != currentGeneration {
-			delete(m.pending, id)
-			changed = true
-		}
-	}
-	if changed {
-		m.notifyPendingLocked()
-	}
-	m.pendingMu.Unlock()
+	m.pending.clearBeforeGeneration(pipelineID, contextID, currentGeneration)
 }
 
 func backgroundOutcome(result engine.Result) domain.Outcome {

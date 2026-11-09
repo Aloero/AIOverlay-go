@@ -2,9 +2,11 @@
 
 ## Portable configuration
 
-`config.json` contains API keys and optional VPN credentials in plaintext by design. Keep it private. It is ignored by Git; only `examples/config.example.json` is a public template. Schema 2 preserves unknown fields, so a future extension can contain secrets too. Do not rely solely on names recognized by automated preflight. Review exported JSON before sharing it.
+`config.json` contains API keys and optional VPN credentials in plaintext by design. Keep it private. It is ignored by Git; only `examples/config.example.json` is a public template. The current schema (5) preserves unknown fields, so a future extension can contain secrets too. Do not rely solely on names recognized by automated preflight. Review exported JSON before sharing it.
 
 The current pre-commit hook checks staged config shapes and rejects runtime config/artifact paths and non-empty credential fields. Build preflight rejects private VPN profiles, credentials, runtime statistics, missing runtime licenses, mismatched binary SHA-256 and Git LFS pointers. It does not claim a universal secret scanner and does not rewrite Git history. The historical 0.2.5 config contains no real API keys or VPN profile; verify history again before publishing private work.
+
+Configuration writes check the final formatted JSON against the same 8 MiB limit used when reading it; a rejected write leaves the previous file intact. The HTTP configuration export accepts GET and returns `Cache-Control: no-store`. Source archive inventory explicitly excludes `.env`, `.env.*` and `*.local.json/yaml/yml`, including when the source directory has no Git metadata.
 
 ## Local interfaces
 
@@ -15,6 +17,10 @@ Production Studio communicates with Go in-process; no browser fallback, HTTP lis
 Raw provider response bodies are never used as public error strings. Structured codes and HTTP status produce normalized errors. Trace snapshots and display text redact configured credentials, including values split across incremental chunks. No redaction system can infer an unknown secret supplied under arbitrary user text; do not put secrets in prompts/labels.
 
 Cancellation owns capture and inference as one operation. A pending screenshot is discarded after cancellation. Cooperative provider workers are joined; an adapter failing to stop within 1500 ms gets a visible cleanup-timeout event. Cancellation of our transport does not prove the remote provider has stopped work or billing. Budgets count application adapter admissions, not a packet-level audit of SDK internal retries and external runtime housekeeping.
+
+Provider HTTP clients follow redirects only within the original scheme, hostname and effective port. Cross-origin redirects are stopped before credentials or request media can be sent to the next server. The policy applies to OpenAI-compatible, Gemini, transcription and local OpenCode clients.
+
+Child process shutdown releases the process group or Windows Job Object before waiting for inherited output pipes. Natural parent exit has a bounded pipe-drain wait, preventing a surviving descendant from holding shutdown indefinitely.
 
 ## Capture
 
@@ -47,3 +53,9 @@ URI import supports an explicit subset only. Unknown security/transport paramete
 ## Explicit prompt inspection (0.2.8)
 
 `/api/prompts/last` shares the existing authenticated HTTP/trusted native boundary. It is not polled or included in normal job/trace responses. Only an explicit preview action fetches last-run bounded, redacted template text. The volatile Go store is limited to 16 × 32 KiB payload, excludes image bytes, and is cleared by a new run or Clear. This is sensitive task text even after credentials are redacted; do not attach it to diagnostic reports automatically. No new persistent screenshot/prompt file is introduced.
+
+## Dependency audit · 2026-11-09
+
+The minimum application toolchain is Go 1.27.3. Source scans with govulncheck 1.9.0 reported no known vulnerabilities for Linux/amd64 and Windows/amd64 on this audit date; npm audit also reported zero findings.
+
+The separately executed, unmodified sing-box runtime was updated from official 1.14.1 to official 1.14.4, with the archive digest and extracted payload hashes verified. This removes the old runtime's standard-library findings. Its binary scan still reports 26 advisory IDs across 10 upstream dependencies. Presence of vulnerable symbols is established; reachability through AIOverlay's restricted configuration has not been established. OpenCode/Bun and native libcronet are outside govulncheck's coverage. See [the audit report](docs/audits/2026-11-09.md) and [the machine-readable runtime findings](docs/audits/2026-11-09-runtime.json).

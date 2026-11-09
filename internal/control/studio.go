@@ -9,13 +9,6 @@ import (
 	"time"
 )
 
-type StudioState struct {
-	RecentModels     []string                 `json:"recent_models"`
-	ActivePipelineID string                   `json:"active_pipeline_id"`
-	Revision         uint64                   `json:"revision"`
-	Credentials      []engine.CredentialState `json:"credentials"`
-	Version          string                   `json:"version"`
-}
 type studioBackend interface {
 	StudioState() StudioState
 	Simulate(context.Context, engine.SimulationRequest) (engine.SimulationReport, error)

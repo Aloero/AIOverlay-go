@@ -105,7 +105,7 @@ the test Chromium distribution are not bundled in AIOverlay.exe or
 in the Windows runtime archive. Their full licenses accompany the
 packages downloaded for development.
 
-sing-box v1.14.1
+sing-box v1.14.4
 ============================================================
 Bundled as an unmodified, separately executed networking runtime from the
 official SagerNet sing-box Windows amd64 release. AIOverlay does not enable
@@ -126,10 +126,10 @@ in third_party/go-webview2/PATCHES.md. This is not a fork of WebView2.
 
 External runtime source/provenance
 ============================================================
-The unmodified sing-box 1.14.1 runtime's source is available from the
-official SagerNet repository, tag v1.14.1:
-https://github.com/SagerNet/sing-box/tree/v1.14.1
-https://github.com/SagerNet/sing-box/archive/refs/tags/v1.14.1.tar.gz
+The unmodified sing-box 1.14.4 runtime's source is available from the
+official SagerNet repository, tag v1.14.4:
+https://github.com/SagerNet/sing-box/tree/v1.14.4
+https://github.com/SagerNet/sing-box/archive/refs/tags/v1.14.4.tar.gz
 The binary distribution's license notice is runtime/sing-box/LICENSE.
 Runtime files and original verified checksums are in runtime/manifest.json
 and runtime/sing-box/VERSION.txt. The optional bundled libcronet.dll is

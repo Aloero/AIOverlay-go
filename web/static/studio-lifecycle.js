@@ -43,6 +43,7 @@ async function closeStudio() {
  if(closePromise)return closePromise;
  closePromise=(async()=>{
   const active=document.activeElement;if(active?.matches('input,textarea,select'))active.dispatchEvent(new Event('change',{bubbles:true}));
+   if(importPromise)await importPromise;
   if(!await settleDialog())return false;
   if(savePromise)await savePromise;
   if(state.dirty)await saveConfig();

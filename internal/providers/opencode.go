@@ -297,7 +297,7 @@ func (s *openCodeServer) doJSON(ctx context.Context, method, path string, payloa
 	rawAuth := base64.StdEncoding.EncodeToString([]byte("opencode:" + s.password))
 	req.Header.Set("Authorization", "Basic "+rawAuth)
 	req.Header.Set("Content-Type", "application/json")
-	client := http.Client{Timeout: timeout}
+	client := http.Client{Timeout: timeout, CheckRedirect: checkProviderRedirect}
 	resp, err := client.Do(req)
 	if err != nil {
 		return networkError(err)

@@ -13,6 +13,8 @@ import (
 	"aioverlay/internal/domain"
 )
 
+const maxConfigBytes = 8 << 20
+
 type Store struct{ Path string }
 
 func NewStore(path string) *Store { return &Store{Path: path} }
@@ -42,11 +44,11 @@ func (s *Store) Load() (domain.Config, error) {
 }
 
 func Decode(r io.Reader) (domain.Config, error) {
-	raw, err := io.ReadAll(io.LimitReader(r, 8<<20+1))
+	raw, err := io.ReadAll(io.LimitReader(r, maxConfigBytes+1))
 	if err != nil {
 		return domain.Config{}, err
 	}
-	if len(raw) > 8<<20 {
+	if len(raw) > maxConfigBytes {
 		return domain.Config{}, fmt.Errorf("configuration exceeds 8 MiB")
 	}
 	if err := checkJSON(raw); err != nil {
@@ -85,6 +87,9 @@ func (s *Store) Save(cfg domain.Config) error {
 		return fmt.Errorf("encode config: %w", err)
 	}
 	data = append(data, '\n')
+	if len(data) > maxConfigBytes {
+		return fmt.Errorf("configuration exceeds 8 MiB")
+	}
 	return atomicfile.Write(s.Path, data, 0o600)
 }
 

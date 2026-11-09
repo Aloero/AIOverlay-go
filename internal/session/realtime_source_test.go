@@ -113,9 +113,9 @@ func TestRealtimeAudioSourceKeepsOneSessionForSourceLifetime(t *testing.T) {
 	if opens.Load() != 1 {
 		t.Fatalf("session opens=%d want=1", opens.Load())
 	}
-	manager.pendingMu.Lock()
-	pending := len(manager.pending)
-	manager.pendingMu.Unlock()
+	manager.pending.mu.Lock()
+	pending := len(manager.pending.segments)
+	manager.pending.mu.Unlock()
 	if pending != 0 {
 		t.Fatalf("remote-only Live audio fabricated local STT pending=%d", pending)
 	}

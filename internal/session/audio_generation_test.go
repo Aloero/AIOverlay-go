@@ -70,7 +70,7 @@ func TestClearContextRejectsAudioAlreadyInCaptureQueue(t *testing.T) {
 	captured := <-queue.items
 	queue.Release(captured)
 	manager.processAudioSegment(context.Background(), "p", runtime, captured)
-	if len(runtime.turns) != 0 || len(manager.pending) != 0 {
+	if len(runtime.turns) != 0 || len(manager.pending.segments) != 0 {
 		t.Fatal("old queued PCM was relabelled with the current context generation")
 	}
 }
@@ -160,7 +160,7 @@ func TestOldPipelineAudioCannotCrossActivePipelineSwitch(t *testing.T) {
 		t.Fatal("old pipeline PCM remained current after active pipeline switch")
 	}
 	manager.processAudioSegment(context.Background(), "p", runtime, captured)
-	if len(runtime.turns) != 0 || len(manager.pending) != 0 {
+	if len(runtime.turns) != 0 || len(manager.pending.segments) != 0 {
 		t.Fatal("old pipeline PCM crossed into the new active pipeline")
 	}
 }

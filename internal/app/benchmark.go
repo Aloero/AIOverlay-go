@@ -2,7 +2,7 @@ package app
 
 import (
 	"aioverlay/internal/benchmark"
-	"aioverlay/internal/control"
+	"aioverlay/internal/contracts"
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
 	"context"
@@ -10,15 +10,15 @@ import (
 	"time"
 )
 
-func (a *App) RunBenchmark(ctx context.Context, req control.BenchmarkRequest) (control.BenchmarkReport, error) {
+func (a *App) RunBenchmark(ctx context.Context, req contracts.BenchmarkRequest) (contracts.BenchmarkReport, error) {
 	return a.RunBenchmarkProgress(ctx, req, nil)
 }
 
 // The complete batch owns the config read lease so all rows compare the same
 // pipeline, providers and policy state. It never changes the pipeline definition.
-func (a *App) RunBenchmarkProgress(ctx context.Context, req control.BenchmarkRequest, progress func(control.BenchmarkReport)) (control.BenchmarkReport, error) {
+func (a *App) RunBenchmarkProgress(ctx context.Context, req contracts.BenchmarkRequest, progress func(contracts.BenchmarkReport)) (contracts.BenchmarkReport, error) {
 	if !a.operation.TryRLock() {
-		return control.BenchmarkReport{}, fmt.Errorf("settings are being saved")
+		return contracts.BenchmarkReport{}, fmt.Errorf("settings are being saved")
 	}
 	defer a.operation.RUnlock()
 	a.mu.RLock()
@@ -30,7 +30,7 @@ func (a *App) RunBenchmarkProgress(ctx context.Context, req control.BenchmarkReq
 	a.mu.RUnlock()
 	img, err := benchmark.ImageJPEG()
 	if err != nil {
-		return control.BenchmarkReport{}, err
+		return contracts.BenchmarkReport{}, err
 	}
 	count := req.Runs
 	if count <= 0 {
@@ -39,7 +39,7 @@ func (a *App) RunBenchmarkProgress(ctx context.Context, req control.BenchmarkReq
 	if count > 10 {
 		count = 10
 	}
-	report := control.BenchmarkReport{Requested: count, PipelineID: id, Runs: []control.BenchmarkRun{}, CheckMethod: "Exact fixture answer Q4 / 210; other prose is unverified"}
+	report := contracts.BenchmarkReport{Requested: count, PipelineID: id, Runs: []contracts.BenchmarkRun{}, CheckMethod: "Exact fixture answer Q4 / 210; other prose is unverified"}
 	durations := []int64{}
 	for i := 0; i < count; i++ {
 		if ctx.Err() != nil {
@@ -48,7 +48,7 @@ func (a *App) RunBenchmarkProgress(ctx context.Context, req control.BenchmarkReq
 		}
 		start := time.Now()
 		res, runErr := eng.Execute(ctx, id, engine.Input{ImageJPEG: img}, engine.RunOptions{})
-		row := control.BenchmarkRun{Run: i + 1, DurationMS: time.Since(start).Milliseconds(), Text: res.Text, Winner: res.Trace.Winner, Verdict: "error"}
+		row := contracts.BenchmarkRun{Run: i + 1, DurationMS: time.Since(start).Milliseconds(), Text: res.Text, Winner: res.Trace.Winner, Verdict: "error"}
 		if runErr != nil {
 			row.Text = runErr.Error()
 		} else {
@@ -75,7 +75,7 @@ func (a *App) RunBenchmarkProgress(ctx context.Context, req control.BenchmarkReq
 		report.SuccessRate = float64(report.Successful) / float64(report.Total)
 		report.Cancelled = ctx.Err() != nil
 		if progress != nil {
-			progress(control.CloneBenchmarkReport(report))
+			progress(contracts.CloneBenchmarkReport(report))
 		}
 		if report.Cancelled {
 			break

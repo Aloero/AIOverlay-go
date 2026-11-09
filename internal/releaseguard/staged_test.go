@@ -41,4 +41,17 @@ func TestStagedGuardUsesIndexAndRejectsRuntimeConfig(t *testing.T) {
 	if Staged(root) == nil {
 		t.Fatal("staged secret hidden by editing the working tree")
 	}
+	run("rm", "--cached", "-f", "examples/config.example.json")
+	os.MkdirAll(filepath.Join(root, "internal", "testdata"), 0755)
+	testdata := filepath.Join(root, "internal", "testdata", "import_contract.json")
+	os.WriteFile(testdata, []byte(`[{"input":"x://y","want":{"name":"n"}}]`), 0600)
+	run("add", "internal/testdata/import_contract.json")
+	if err := Staged(root); err != nil {
+		t.Fatalf("top-level array testdata rejected: %v", err)
+	}
+	os.WriteFile(testdata, []byte(`[{"input":`), 0600)
+	run("add", "internal/testdata/import_contract.json")
+	if Staged(root) == nil {
+		t.Fatal("broken staged JSON accepted")
+	}
 }

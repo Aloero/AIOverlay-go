@@ -36,11 +36,14 @@ func validateProvider(p domain.ProviderConfig) error {
 		}
 	} else if p.BaseURL != "" {
 		u, err := url.Parse(p.BaseURL)
+		if err != nil {
+			return fmt.Errorf("provider %s has invalid base URL", p.ID)
+		}
 		validScheme := enum(u.Scheme, "https", "http")
 		if p.Kind == domain.ProviderOpenAILive {
 			validScheme = u.Scheme == "wss" && u.RawQuery == ""
 		}
-		if err != nil || u.Hostname() == "" || !validScheme || u.User != nil || u.Fragment != "" {
+		if u.Hostname() == "" || !validScheme || u.User != nil || u.Fragment != "" {
 			return fmt.Errorf("provider %s has invalid base URL", p.ID)
 		}
 	} else if p.Kind != domain.ProviderEmbeddedOpenCode && p.Enabled {

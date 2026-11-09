@@ -1,0 +1,935 @@
+{
+  "schema": 1,
+  "generated_at": "2026-11-09T14:04:59.912498+00:00",
+  "scanner": {
+    "name": "govulncheck",
+    "version": "v1.9.0",
+    "mode": "binary"
+  },
+  "scope_note": "Reports vulnerable symbols present in binary; reachability from the application configuration was not established. Runtime binaries were not executed during these scans.",
+  "before": {
+    "sing_box_version": "1.14.1",
+    "built_with": "go1.26.8",
+    "binary_sha256": "b838de45bd0b2e6ddbed1977e4745622f7dffab3b293807ff4c6b1b640fed909",
+    "log": "build/audit-2026-11-09/runtime-vulnerability.txt",
+    "unique_advisory_count": 35,
+    "stdlib_advisory_count": 14,
+    "dependency_advisory_count": 26,
+    "dependency_module_count": 10,
+    "findings": [
+      {
+        "id": "GO-2026-6888",
+        "title": "Excessive memory allocation when decompressing crafted streams in github.com/andybalholm/brotli",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6888",
+        "affected": [
+          {
+            "module": "github.com/andybalholm/brotli",
+            "package": "github.com/andybalholm/brotli",
+            "found_version": "v1.1.0",
+            "fixed_version": "v1.2.7"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6866",
+        "title": "Check all ancestor namespace transitions when rendering raw text in html in golang.org/x/net",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6866",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.62.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6865",
+        "title": "Panic on two-block frames in github.com/klauspost/compress",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6865",
+        "affected": [
+          {
+            "module": "github.com/klauspost/compress",
+            "package": "github.com/klauspost/compress",
+            "found_version": "v1.19.1",
+            "fixed_version": "v1.20.2"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6860",
+        "title": "Avoid quadratic complexity when coalescing text nodes in html in golang.org/x/net",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6860",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.62.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6809",
+        "title": "Distrust compromised intermediate certificates in crypto/x509",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6809",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "crypto/x509",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.10"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6629",
+        "title": "Panic parsing crafted input in x/text/secure/precis in golang.org/x/text",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6629",
+        "affected": [
+          {
+            "module": "golang.org/x/text",
+            "package": "golang.org/x/text",
+            "found_version": "v0.40.0",
+            "fixed_version": "v0.41.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6617",
+        "title": "HTTP/2 server crash due to HPACK encoder race in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6617",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          },
+          {
+            "module": "stdlib",
+            "package": "net/http",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6613",
+        "title": "HTTP/1 server connection desynchronization after 2xx CONNECT response in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6613",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "net/http",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6612",
+        "title": "Double flow control refund on HTTP/2 server streams in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6612",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          },
+          {
+            "module": "stdlib",
+            "package": "net/http",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6611",
+        "title": "Excessive CPU consumption from repeated initial window changes in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6611",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          },
+          {
+            "module": "stdlib",
+            "package": "net/http",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6610",
+        "title": "HTTP/2 transport accepts malformed framing-related headers in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6610",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          },
+          {
+            "module": "stdlib",
+            "package": "net/http",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6609",
+        "title": "Lack of limit on size of parsed Range headers in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6609",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "net/http",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6608",
+        "title": "Memory limit bypass when parsing MIME headers in net/textproto, mime/multipart",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6608",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "mime/multipart",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6607",
+        "title": "Reject malformed ECH outer extension references in crypto/tls",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6607",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "crypto/tls",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6605",
+        "title": "HTTP/1 client connection desynchronization after CONNECT rejection in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6605",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "net/http/httputil",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6604",
+        "title": "Root.Mkdir(All) can follow junctions out of the root on Windows in os",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6604",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "os",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6603",
+        "title": "HTTP/2 server memory exhaustion due to Trailer headers in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6603",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          },
+          {
+            "module": "stdlib",
+            "package": "net/http",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6600",
+        "title": "Recognize yield as regexp preceder keyword in html/template",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6600",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "html/template",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6599",
+        "title": "Reset context tracking on consecutive template expressions in html/template",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6599",
+        "affected": [
+          {
+            "module": "stdlib",
+            "package": "html/template",
+            "found_version": "go1.26.8",
+            "fixed_version": "go1.26.9"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6443",
+        "title": "Server panic via missing authority or Host headers in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6443",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.82.2"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6441",
+        "title": "Bypass of xDS RBAC HTTP filter header matching in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6441",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.83.1"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6355",
+        "title": "Prevent DoS on deadlocked established channel in golang.org/x/crypto/ssh",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6355",
+        "affected": [
+          {
+            "module": "golang.org/x/crypto",
+            "package": "golang.org/x/crypto",
+            "found_version": "v0.54.0",
+            "fixed_version": "v0.56.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6354",
+        "title": "Prevent DoS on deadlocked undecided channel in golang.org/x/crypto/ssh",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6354",
+        "affected": [
+          {
+            "module": "golang.org/x/crypto",
+            "package": "golang.org/x/crypto",
+            "found_version": "v0.54.0",
+            "fixed_version": "v0.56.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6348",
+        "title": "Heap Memory Exhaustion (OOM) via HTTP/2 DATA Frame Fragmentation in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6348",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.83.1"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6303",
+        "title": "Source-address critical option not enforced for non-public-key auth callbacks in golang.org/x/crypto/ssh",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6303",
+        "affected": [
+          {
+            "module": "golang.org/x/crypto",
+            "package": "golang.org/x/crypto",
+            "found_version": "v0.54.0",
+            "fixed_version": "v0.55.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6237",
+        "title": "Denial of service via malformed IPv4 packet in github.com/insomniacslk/dhcp",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6237",
+        "affected": [
+          {
+            "module": "github.com/insomniacslk/dhcp",
+            "package": "github.com/insomniacslk/dhcp",
+            "found_version": "v0.0.0-20260220084031-5adc3eb26f91",
+            "fixed_version": "v0.0.0-20260719225207-c76316d4aa82"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6180",
+        "title": "Ignore unrelated, unauthenticated hashes in Lookup in golang.org/x/mod/sumdb",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6180",
+        "affected": [
+          {
+            "module": "golang.org/x/mod",
+            "package": "golang.org/x/mod",
+            "found_version": "v0.37.0",
+            "fixed_version": "v0.40.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6179",
+        "title": "Fix transparency log tile verification bypass in golang.org/x/mod/sumdb/tlog",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6179",
+        "affected": [
+          {
+            "module": "golang.org/x/mod",
+            "package": "golang.org/x/mod",
+            "found_version": "v0.37.0",
+            "fixed_version": "v0.40.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6061",
+        "title": "Vulnerabilities in the xDS RBAC authorization engine and the HTTP/2 transport server implementation in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6061",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.82.1"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-5932",
+        "title": "The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design, and has known security issues",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5932",
+        "affected": [
+          {
+            "module": "golang.org/x/crypto",
+            "package": "golang.org/x/crypto",
+            "found_version": "v0.54.0",
+            "fixed_version": "v0.58.1-0.20261009181718-2f1f834330b2"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-5777",
+        "title": "Chi's RealIP Middleware allows IP spoofing via unvalidated X-Forwarded-For header in github.com/go-chi/chi",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5777",
+        "affected": [
+          {
+            "module": "github.com/go-chi/chi/v5",
+            "package": "github.com/go-chi/chi/v5",
+            "found_version": "v5.2.5",
+            "fixed_version": "v5.3.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-5775",
+        "title": "Chi Middleware vulnerable to IP spoofing via X-Forwarded-For header in github.com/go-chi/chi",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5775",
+        "affected": [
+          {
+            "module": "github.com/go-chi/chi/v5",
+            "package": "github.com/go-chi/chi/v5",
+            "found_version": "v5.2.5",
+            "fixed_version": "v5.3.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-5774",
+        "title": "Chi has an IP spoofing vulnerability in middleware.RealIP in github.com/go-chi/chi",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5774",
+        "affected": [
+          {
+            "module": "github.com/go-chi/chi/v5",
+            "package": "github.com/go-chi/chi/v5",
+            "found_version": "v5.2.5",
+            "fixed_version": "v5.3.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-4945",
+        "title": "Go JOSE Panics in JWE decryption in github.com/go-jose/go-jose",
+        "url": "https://pkg.go.dev/vuln/GO-2026-4945",
+        "affected": [
+          {
+            "module": "github.com/go-jose/go-jose/v4",
+            "package": "github.com/go-jose/go-jose/v4",
+            "found_version": "v4.1.3",
+            "fixed_version": "v4.1.4"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-4762",
+        "title": "Authorization bypass in gRPC-Go via missing leading slash in :path in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-4762",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.79.3"
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "sing_box_version": "1.14.4",
+    "built_with": "go1.26.10",
+    "binary_sha256": "8f30682ee198855440d2a7fe070d5d3653793b2d01bb8c85eea88f93bbe7c8b9",
+    "log": "build/audit-2026-11-09/candidate-runtime/vulnerability-v1.14.4.txt",
+    "unique_advisory_count": 26,
+    "stdlib_advisory_count": 0,
+    "dependency_advisory_count": 26,
+    "dependency_module_count": 10,
+    "findings": [
+      {
+        "id": "GO-2026-6888",
+        "title": "Excessive memory allocation when decompressing crafted streams in github.com/andybalholm/brotli",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6888",
+        "affected": [
+          {
+            "module": "github.com/andybalholm/brotli",
+            "package": "github.com/andybalholm/brotli",
+            "found_version": "v1.1.0",
+            "fixed_version": "v1.2.7"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6866",
+        "title": "Check all ancestor namespace transitions when rendering raw text in html in golang.org/x/net",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6866",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.62.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6865",
+        "title": "Panic on two-block frames in github.com/klauspost/compress",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6865",
+        "affected": [
+          {
+            "module": "github.com/klauspost/compress",
+            "package": "github.com/klauspost/compress",
+            "found_version": "v1.19.1",
+            "fixed_version": "v1.20.2"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6860",
+        "title": "Avoid quadratic complexity when coalescing text nodes in html in golang.org/x/net",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6860",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.62.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6629",
+        "title": "Panic parsing crafted input in x/text/secure/precis in golang.org/x/text",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6629",
+        "affected": [
+          {
+            "module": "golang.org/x/text",
+            "package": "golang.org/x/text",
+            "found_version": "v0.40.0",
+            "fixed_version": "v0.41.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6617",
+        "title": "HTTP/2 server crash due to HPACK encoder race in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6617",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6612",
+        "title": "Double flow control refund on HTTP/2 server streams in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6612",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6611",
+        "title": "Excessive CPU consumption from repeated initial window changes in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6611",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6610",
+        "title": "HTTP/2 transport accepts malformed framing-related headers in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6610",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6603",
+        "title": "HTTP/2 server memory exhaustion due to Trailer headers in net/http",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6603",
+        "affected": [
+          {
+            "module": "golang.org/x/net",
+            "package": "golang.org/x/net",
+            "found_version": "v0.57.0",
+            "fixed_version": "v0.60.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6443",
+        "title": "Server panic via missing authority or Host headers in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6443",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.82.2"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6441",
+        "title": "Bypass of xDS RBAC HTTP filter header matching in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6441",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.83.1"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6355",
+        "title": "Prevent DoS on deadlocked established channel in golang.org/x/crypto/ssh",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6355",
+        "affected": [
+          {
+            "module": "golang.org/x/crypto",
+            "package": "golang.org/x/crypto",
+            "found_version": "v0.54.0",
+            "fixed_version": "v0.56.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6354",
+        "title": "Prevent DoS on deadlocked undecided channel in golang.org/x/crypto/ssh",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6354",
+        "affected": [
+          {
+            "module": "golang.org/x/crypto",
+            "package": "golang.org/x/crypto",
+            "found_version": "v0.54.0",
+            "fixed_version": "v0.56.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6348",
+        "title": "Heap Memory Exhaustion (OOM) via HTTP/2 DATA Frame Fragmentation in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6348",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.83.1"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6303",
+        "title": "Source-address critical option not enforced for non-public-key auth callbacks in golang.org/x/crypto/ssh",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6303",
+        "affected": [
+          {
+            "module": "golang.org/x/crypto",
+            "package": "golang.org/x/crypto",
+            "found_version": "v0.54.0",
+            "fixed_version": "v0.55.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6237",
+        "title": "Denial of service via malformed IPv4 packet in github.com/insomniacslk/dhcp",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6237",
+        "affected": [
+          {
+            "module": "github.com/insomniacslk/dhcp",
+            "package": "github.com/insomniacslk/dhcp",
+            "found_version": "v0.0.0-20260220084031-5adc3eb26f91",
+            "fixed_version": "v0.0.0-20260719225207-c76316d4aa82"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6180",
+        "title": "Ignore unrelated, unauthenticated hashes in Lookup in golang.org/x/mod/sumdb",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6180",
+        "affected": [
+          {
+            "module": "golang.org/x/mod",
+            "package": "golang.org/x/mod",
+            "found_version": "v0.37.0",
+            "fixed_version": "v0.40.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6179",
+        "title": "Fix transparency log tile verification bypass in golang.org/x/mod/sumdb/tlog",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6179",
+        "affected": [
+          {
+            "module": "golang.org/x/mod",
+            "package": "golang.org/x/mod",
+            "found_version": "v0.37.0",
+            "fixed_version": "v0.40.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-6061",
+        "title": "Vulnerabilities in the xDS RBAC authorization engine and the HTTP/2 transport server implementation in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-6061",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.82.1"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-5932",
+        "title": "The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design, and has known security issues",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5932",
+        "affected": [
+          {
+            "module": "golang.org/x/crypto",
+            "package": "golang.org/x/crypto",
+            "found_version": "v0.54.0",
+            "fixed_version": "v0.58.1-0.20261009181718-2f1f834330b2"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-5777",
+        "title": "Chi's RealIP Middleware allows IP spoofing via unvalidated X-Forwarded-For header in github.com/go-chi/chi",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5777",
+        "affected": [
+          {
+            "module": "github.com/go-chi/chi/v5",
+            "package": "github.com/go-chi/chi/v5",
+            "found_version": "v5.2.5",
+            "fixed_version": "v5.3.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-5775",
+        "title": "Chi Middleware vulnerable to IP spoofing via X-Forwarded-For header in github.com/go-chi/chi",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5775",
+        "affected": [
+          {
+            "module": "github.com/go-chi/chi/v5",
+            "package": "github.com/go-chi/chi/v5",
+            "found_version": "v5.2.5",
+            "fixed_version": "v5.3.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-5774",
+        "title": "Chi has an IP spoofing vulnerability in middleware.RealIP in github.com/go-chi/chi",
+        "url": "https://pkg.go.dev/vuln/GO-2026-5774",
+        "affected": [
+          {
+            "module": "github.com/go-chi/chi/v5",
+            "package": "github.com/go-chi/chi/v5",
+            "found_version": "v5.2.5",
+            "fixed_version": "v5.3.0"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-4945",
+        "title": "Go JOSE Panics in JWE decryption in github.com/go-jose/go-jose",
+        "url": "https://pkg.go.dev/vuln/GO-2026-4945",
+        "affected": [
+          {
+            "module": "github.com/go-jose/go-jose/v4",
+            "package": "github.com/go-jose/go-jose/v4",
+            "found_version": "v4.1.3",
+            "fixed_version": "v4.1.4"
+          }
+        ]
+      },
+      {
+        "id": "GO-2026-4762",
+        "title": "Authorization bypass in gRPC-Go via missing leading slash in :path in google.golang.org/grpc",
+        "url": "https://pkg.go.dev/vuln/GO-2026-4762",
+        "affected": [
+          {
+            "module": "google.golang.org/grpc",
+            "package": "google.golang.org/grpc",
+            "found_version": "v1.79.1",
+            "fixed_version": "v1.79.3"
+          }
+        ]
+      }
+    ]
+  },
+  "official_release": {
+    "release": "https://github.com/SagerNet/sing-box/releases/tag/v1.14.4",
+    "published_at": "2026-10-24T01:04:25Z",
+    "asset_id": 669527524,
+    "download": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip",
+    "published_digest": "sha256:99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df",
+    "archive_sha256": "99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df",
+    "size": 32891280,
+    "members": [
+      {
+        "path": "build/audit-2026-11-09/candidate-runtime/sing-box-1.14.4-windows-amd64/LICENSE",
+        "size": 808,
+        "sha256": "bb3805862b583aee73ad6f7805ec634747a37257a637a3069857843f05ea589c"
+      },
+      {
+        "path": "build/audit-2026-11-09/candidate-runtime/sing-box-1.14.4-windows-amd64/libcronet.dll",
+        "size": 9529344,
+        "sha256": "3217c6260fbca5f16072e0b79735742f40109a63bb0ff88fd6b96dd6b54a2928"
+      },
+      {
+        "path": "build/audit-2026-11-09/candidate-runtime/sing-box-1.14.4-windows-amd64/sing-box.exe",
+        "size": 82074624,
+        "sha256": "8f30682ee198855440d2a7fe070d5d3653793b2d01bb8c85eea88f93bbe7c8b9"
+      }
+    ]
+  },
+  "official_fix_status": {
+    "latest_stable": "v1.14.4",
+    "stdlib_findings_remaining": 0,
+    "dependencies_fixed_by_stable_update": false,
+    "checked_refs": [
+      "v1.14.4",
+      "v1.15.0-alpha.13",
+      "testing"
+    ],
+    "dependency_manifests": [
+      {
+        "ref": "v1.14.4",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-box/v1.14.4/go.mod",
+        "sha256": "e5f23c00072adeee7285fabe8ea8dab9049ed8ae5e86fbf06b7a033b6126d24c"
+      },
+      {
+        "ref": "v1.15.0-alpha.13",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-box/v1.15.0-alpha.13/go.mod",
+        "sha256": "b3892361f55268d4c0d30d76738b5bd8acbf0c862b3f699d6e7ea4ff92969e66"
+      },
+      {
+        "ref": "testing",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-box/testing/go.mod",
+        "sha256": "06eaa87410787ea811adc4c57ec7e4a104e710fd26db6f0255dc0dd755a36da0"
+      }
+    ]
+  },
+  "linux_integration_fixture": {
+    "release": "https://github.com/SagerNet/sing-box/releases/tag/v1.14.4",
+    "download": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz",
+    "published_digest": "sha256:699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968",
+    "archive_sha256": "699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968",
+    "size": 31710753,
+    "members": [
+      {
+        "path": "build/audit-2026-11-09/candidate-runtime/linux/sing-box-1.14.4-linux-amd64/LICENSE",
+        "sha256": "650d5e3b99a446fb38e820fa87a49562e0c79eab868fff58618ac487a58e554c",
+        "size": 791
+      },
+      {
+        "path": "build/audit-2026-11-09/candidate-runtime/linux/sing-box-1.14.4-linux-amd64/sing-box",
+        "sha256": "1264361b5f8868c8768f7555d3e77e20118bf503c41ac08bb290a0d99056aa3a",
+        "size": 81416421
+      },
+      {
+        "path": "build/audit-2026-11-09/candidate-runtime/linux/sing-box-1.14.4-linux-amd64/libcronet.so",
+        "sha256": "23109c55b08829bb1a68682a61a64852b1bbf243753b153cbd8f6e4ea2c05294",
+        "size": 11915768
+      }
+    ],
+    "executed": false
+  }
+}

@@ -3,7 +3,8 @@
 // are used in developer mode on TEST_SERVER; no model inference is performed.
 const {JSDOM,VirtualConsole}=require('jsdom');
 const fs=require('node:fs');const path=require('node:path');const assert=require('node:assert/strict');
-const root=path.resolve(__dirname,'../..');const base=process.env.TEST_SERVER||'http://127.0.0.1:18723';
+const root=path.resolve(__dirname,'../..');const base=process.env.TEST_SERVER;
+if(!base||!process.env.TEST_TOKEN)throw Error('Run with the isolated test runner: npm test');
 let html=fs.readFileSync(path.join(root,'web/static/index.html'),'utf8');
 html=html.replace(/<link rel="stylesheet" href="\/assets\/([^"/]+)">/g,(_,name)=>'<style>'+fs.readFileSync(path.join(root,'web/static',name),'utf8')+'</style>');
 html=html.replace(/<script src="\/assets\/([^"/]+)" defer><\/script>/g,(_,name)=>'<script>'+fs.readFileSync(path.join(root,'web/static',name),'utf8')+'</script>');

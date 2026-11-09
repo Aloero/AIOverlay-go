@@ -31,11 +31,11 @@ RUNTIMES = (
         },
     },
     {
-        "name": "sing-box v1.14.1",
-        "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-windows-amd64.zip",
-        "archive_sha256": "5197f16d492d93202dc623622149a6ed040f8eca263128f91d603f2b901baa89",
+        "name": "sing-box v1.14.4",
+        "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip",
+        "archive_sha256": "99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df",
         "files": {
-            "sing-box.exe": ("runtime/sing-box/sing-box.exe", "b838de45bd0b2e6ddbed1977e4745622f7dffab3b293807ff4c6b1b640fed909"),
+            "sing-box.exe": ("runtime/sing-box/sing-box.exe", "8f30682ee198855440d2a7fe070d5d3653793b2d01bb8c85eea88f93bbe7c8b9"),
             "libcronet.dll": ("runtime/sing-box/libcronet.dll", "3217c6260fbca5f16072e0b79735742f40109a63bb0ff88fd6b96dd6b54a2928"),
         },
     },

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -36,4 +37,37 @@ func requestTransport(ctx context.Context, resolver ProxyResolver, connectTimeou
 		}
 	}
 	return tr, nil
+}
+
+// Provider redirects may keep their path-level routing, but must not forward
+// credentials or request media to a different scheme, host, or effective port.
+// Go's default policy does not protect custom API-key headers or POST bodies.
+func checkProviderRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	if len(via) == 0 {
+		return nil
+	}
+	origin := via[0].URL
+	if !strings.EqualFold(req.URL.Scheme, origin.Scheme) ||
+		!strings.EqualFold(req.URL.Hostname(), origin.Hostname()) ||
+		effectiveProviderPort(req.URL) != effectiveProviderPort(origin) {
+		return http.ErrUseLastResponse
+	}
+	return nil
+}
+
+func effectiveProviderPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
 }

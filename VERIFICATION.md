@@ -1,10 +1,75 @@
 # Verification · AIOverlay-go 0.2.8
 
-Host: Linux amd64. The document separates current requested-scope automation,
-historical release evidence and native/external acceptance. The underlying Git
-history is preserved; R2 work continues on `feature/audio-context-029`.
+Host: Linux amd64. The latest audit below covers the working copy on 2026-11-09. Earlier dated sections are historical evidence. Current configuration schema is 5; minimum Go version is 1.27.3.
 
-## Current requested-scope checks · 2026-09-19
+## Current audit · 2026-11-09
+
+The initial Go run passed 595 test/subtest events across 22 packages with tests. After the audit fixes, `scripts/check.sh --race` passed all Go packages, race detection, module consistency/checksums, formatting, native and Windows vet, Windows amd64 cross-build, JavaScript syntax and public-config preflight.
+
+`npm test` passed 38 smoke and 9 regression checks. The complete `npm run test:all` passed 167 checks across all six DOM/Chromium suites with no JavaScript errors. Three new UI regressions first reproduced import/save data loss and now pass. Provider redirects, child-process pipe ownership, malformed provider URLs, oversized configuration writes, preprocessor admission, image snapshot ownership, configuration export and private source inventory have dedicated regressions with recorded failing/passing runs.
+
+Linux/amd64 and Windows/amd64 source scans with govulncheck 1.9.0 found no known vulnerabilities after raising Go to 1.27.3. npm audit found zero vulnerabilities. The separately bundled sing-box was updated to verified official 1.14.4. Both previously skipped tunnel integration tests passed with a verified Linux 1.14.4 runtime, together with the rest of the tunnel package under race detection. These tests use local validation and an authenticated loopback handshake, not a remote VPN endpoint.
+
+The sing-box binary scan still reports 26 advisory IDs in 10 upstream dependencies; its stdlib findings are resolved. This is a remaining distribution risk, distinct from the clean AIOverlay source scan. Full details and limits are in [the audit report](docs/audits/2026-11-09.md) and [runtime findings](docs/audits/2026-11-09-runtime.json).
+
+Local evidence is under `build/audit-2026-11-09/`: `repository-check-final.log`, `ui-full.log`, `tunnel-runtime-final.log`, the two `govulncheck-*-final.txt` files, and red/green regression logs. The new GitHub workflow passed actionlint and the shell entry point passed ShellCheck; GitHub-hosted CI was not triggered. Existing user changes were preserved. No commit/push, release archive regeneration, live provider call, remote VPN probe or physical Windows acceptance was performed.
+
+## Historical SOLID refactor checks · 2026-09-19
+
+This section records fresh checks on the uncommitted structural refactor based on
+`ea156969f22b89e5e4c72f6b1767264cb68baeb3`, on `feature/audio-context-029`.
+It is not release certification for the existing archives. Go 1.27.1, Node
+v24.18.0 and the existing Zig C compiler were used from host `/tmp` toolchains;
+no compiler or other toolchain was added to the repository.
+
+The following completed successfully after the production changes:
+
+```sh
+go test ./... -count=1 -json
+go vet ./...
+CC=/tmp/aio-zig/cc CGO_ENABLED=1 go test -race -ldflags=-linkmode=external -p=2 ./... -count=1
+go test ./internal/app ./internal/control ./internal/engine ./internal/session ./internal/config ./internal/tunnel ./internal/providers -count=20
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/aio-solid-build/AIOverlay.exe ./cmd/aioverlay
+gofmt -l cmd internal web third_party/go-webview2
+git diff --check
+```
+
+The ordinary Go run reported 595 passing test/subtest events and two explicit
+host-binary skips: `TestAuditPreserveRequiredDNSOfFullProfile` and
+`TestManagerStartsAuthenticatedLoopbackWithOverride`. The race run covered all
+Go packages supported on this Linux host. All 26 `web/static/*.js` and
+`tests/ui/*.cjs` files passed `node --check`. The formatting check had no output.
+The Windows target was cross-built only; the resulting executable was not run.
+
+Added regressions pin transport JSON fields, independent control capabilities,
+benchmark snapshot ownership, attempt terminal/timeout/lease behavior, pending
+transcript scope/wakeups and active-turn cancellation ownership. The pre-existing
+post-semaphore cancellation leak was reproduced by a deterministic local test
+before correction. Panic-unwind and timeout-callback ordering checks preserve
+existing cleanup semantics during the extraction.
+
+Seventeen source-validation cases pin valid inputs, error text and validation
+order. Twenty-three permanent VPN import fixtures were captured from the old
+implementation. A temporary differential check against that implementation also
+matched complete results and errors for 3,150 locally generated URI combinations;
+the temporary duplicate implementation was removed afterward. These are parser
+and scheduling checks, not proof of real VPN or provider behavior.
+
+The application, Chromium, physical Windows, live cloud providers, real VPN
+endpoints and local Whisper inference were not run. Provider adapters, native
+Windows code, web assets, pinned runtimes, dependency versions and configuration
+schema were not changed. Existing `dist/` and `releases/` artifacts were not
+regenerated and do not certify this working tree. The R2 plan HTML was not found
+in the supplied checkout/search path; this pass preserves the existing R2
+regressions and makes no new claim that the whole R2 plan is complete.
+
+Host logs are `/tmp/aio-solid-final-test.jsonl`,
+`/tmp/aio-solid-final-vet.log`, `/tmp/aio-solid-final-race.log`,
+`/tmp/aio-solid-final-repeat.log`, `/tmp/aio-solid-windows-build.log` and
+`/tmp/aio-solid-import-parity.log`. They are local verification evidence, not
+release payloads.
+
+## Historical requested-scope checks · 2026-09-19
 
 For the current R2 branch state, `go test ./... -count=1` and `go vet ./...`
 passed. All shipped JavaScript/CJS files passed Node syntax checks. The permanent

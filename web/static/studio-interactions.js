@@ -1,6 +1,7 @@
 'use strict';
 
 async function activatePipeline(id) {
+ if(importPromise)await importPromise;
  if(state.selectingPipeline)return;
  const p=state.config.pipelines.find(p=>p.id===id);
  if(!p?.enabled)throw new Error('Этот пайплайн отключён.');

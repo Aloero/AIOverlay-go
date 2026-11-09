@@ -33,13 +33,22 @@ func Staged(root string) error {
 		if err != nil {
 			return fmt.Errorf("read staged JSON %s", name)
 		}
+		if !json.Valid(content) {
+			return fmt.Errorf("invalid staged JSON: %s", name)
+		}
+		// Only JSON objects can be app configuration; other shapes (for example
+		// top-level testdata arrays) are committed verbatim and skipped here.
+		isConfigName := strings.Contains(strings.ToLower(filepath.Base(name)), "config")
 		var obj map[string]json.RawMessage
 		if json.Unmarshal(content, &obj) != nil {
-			return fmt.Errorf("invalid staged JSON: %s", name)
+			if isConfigName {
+				return fmt.Errorf("config-named JSON must be an object: %s", name)
+			}
+			continue
 		}
 		_, providers := obj["providers"]
 		_, pipelines := obj["pipelines"]
-		if providers || pipelines || strings.Contains(strings.ToLower(filepath.Base(name)), "config") {
+		if providers || pipelines || isConfigName {
 			if err := CheckConfigJSON(content); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}

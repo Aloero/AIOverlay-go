@@ -35,7 +35,7 @@ const keyPolicyNames = {round_robin:'Чередовать ключи',sticky_las
 const outcomes = ['success','no_action','respond','need_screen','context_only','any_error','auth_failed','rate_limited','quota_exceeded','timeout','first_token_timeout','stream_idle_timeout','network_error','model_unavailable','region_restricted','provider_unavailable','unsupported_modality','invalid_response','validation_failed','cancelled'];
 const state = {config:null, session:null, page:'pipelines', pipeline:null, node:null, edge:null, tab:'models', dirty:false, zoom:1, meta:new Map(), job:null, drag:null, connect:null, polling:false};
 const pending = new Map();
-let sequence = 0, toastTimer, configRevision = 0, savePromise;
+let sequence = 0, toastTimer, configRevision = 0, savePromise, importPromise;
 const native = () => typeof window.studioDispatch === 'function';
 
 window.__studioReply = (id, reply) => {
@@ -146,6 +146,7 @@ async function boot() {
 
 
 async function saveConfig() {
+ if(importPromise)await importPromise;
  if (!state.config) return;
  flushFocusedEditor();
  if(state.job?.running)throw new Error('Запрос выполняется. Черновик сохранится после остановки или завершения запроса.');
@@ -163,6 +164,7 @@ async function saveConfig() {
  try{await savePromise;}finally{savePromise=null;button.disabled=false;updateApplyState();refreshWorkspaceState(true).catch(failure);}
 }
 async function exportConfig() {
+ if(importPromise)await importPromise;
  if (!confirm('Экспорт включает API-ключи в открытом виде. Храните JSON как секретный файл. Продолжить?')) return;
  if (state.dirty) await saveConfig();
  if (native()) {const r = await api('/desktop/export', 'POST'); if (r.saved) notify('JSON экспортирован.'); return;}
@@ -175,8 +177,24 @@ async function importConfig(e) {
  const file = e.target.files[0]; e.target.value = ''; if (!file) return;
  if (file.size > 8*1024*1024) throw new Error('Конфигурация больше 8 МБ.');
  const value = JSON.parse((await file.text()).replace(/^\uFEFF/, ''));
+ if(importPromise)throw new Error('Дождитесь завершения текущего импорта.');
+ if(!await settleDialog())return;
+ if(importPromise)throw new Error('Дождитесь завершения текущего импорта.');
+ if(state.selectingPipeline)throw new Error('Дождитесь завершения переключения пайплайна.');
  if (!confirm('Заменить текущую конфигурацию, включая провайдеров и ключи?')) return;
- const imported=await api('/api/config/import', 'POST', value); state.config = normalizeConfig(await api('/api/config')); state.pipeline = state.config.active_pipeline_id; state.node = null; markApplied(state.config); saved(); renderPage(); hydrateMetadata(); notify(imported.autostart_disabled?`Конфигурация импортирована. Постоянный AutoStart отключён у ${imported.autostart_disabled} источников — запустите их явно после проверки.`:'Конфигурация импортирована.');
+ const prior=savePromise,revision=configRevision;
+ // Finish older writes before replacement; later saves wait for this import.
+ importPromise=(async()=>{
+  if(prior)await prior;
+  const imported=await api('/api/config/import','POST',value),config=normalizeConfig(await api('/api/config'));
+  const newerDraft=configRevision!==revision||!!dialogDraft?.isDirty();
+  if(!newerDraft){state.config=config;state.pipeline=config.active_pipeline_id;state.node=null;state.edge=null;configRevision++;}
+  markApplied(config);if(!newerDraft)saved();renderPage();hydrateMetadata();
+  const notice=imported.autostart_disabled?`Конфигурация импортирована. Постоянный AutoStart отключён у ${imported.autostart_disabled} источников — запустите их явно после проверки.`:'Конфигурация импортирована.';
+  notify(notice+(newerDraft?' Новые правки остаются в черновике.':''));
+ })();
+ updateApplyState();
+ try{await importPromise;}finally{importPromise=null;updateApplyState();}
 }
 function renderPage() {
  if (!state.config) return;

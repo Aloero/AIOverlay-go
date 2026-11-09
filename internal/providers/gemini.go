@@ -25,7 +25,7 @@ func NewGemini(cfg domain.ProviderConfig, resolver ...ProxyResolver) *Gemini {
 	if len(resolver) > 0 {
 		proxy = resolver[0]
 	}
-	return &Gemini{cfg: cfg, client: &http.Client{}, proxy: proxy}
+	return &Gemini{cfg: cfg, client: &http.Client{CheckRedirect: checkProviderRedirect}, proxy: proxy}
 }
 func (p *Gemini) ID() string { return p.cfg.ID }
 func (p *Gemini) Stream(ctx context.Context, r Request, key string) (<-chan Event, <-chan error) {

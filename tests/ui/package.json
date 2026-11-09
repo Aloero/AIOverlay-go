@@ -2,7 +2,7 @@
   "name": "aioverlay-studio-tests",
   "private": true,
   "scripts": {
-    "test": "node smoke.cjs",
+    "test": "node run.cjs --dom-only",
     "test:all": "node run.cjs",
     "test:dom": "node run.cjs --dom-only"
   },

@@ -74,6 +74,14 @@ type mediaPreprocessorResult struct {
 }
 
 func (r *runner) runMediaPreprocessors(ctx context.Context, node domain.Node, pool domain.ModelPoolConfig, input nodeValue) (nodeValue, domain.Outcome, error) {
+	// Validate the complete input before launching either branch. Once work
+	// starts, every branch must be joined before this runner can return.
+	if pool.VisionPreprocessor != nil && len(input.image) == 0 && !pool.VisionPreprocessorOptional {
+		return nodeValue{}, domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "vision preprocessor requires an image"}
+	}
+	if pool.AudioPreprocessor != nil && input.audio == nil && !pool.AudioPreprocessorOptional {
+		return nodeValue{}, domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "audio preprocessor requires audio"}
+	}
 	branches := 0
 	results := make(chan mediaPreprocessorResult, 2)
 	launch := func(kind string, preprocessor *domain.ModelPoolConfig, branchInput nodeValue) {
@@ -88,29 +96,17 @@ func (r *runner) runMediaPreprocessors(ctx context.Context, node domain.Node, po
 		}()
 	}
 
-	if pool.VisionPreprocessor != nil {
-		if len(input.image) == 0 {
-			if !pool.VisionPreprocessorOptional {
-				return nodeValue{}, domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "vision preprocessor requires an image"}
-			}
-		} else {
-			visionInput := input
-			visionInput.audio = nil
-			visionInput.transcript = ""
-			launch("vision", pool.VisionPreprocessor, visionInput)
-		}
+	if pool.VisionPreprocessor != nil && len(input.image) > 0 {
+		visionInput := input
+		visionInput.audio = nil
+		visionInput.transcript = ""
+		launch("vision", pool.VisionPreprocessor, visionInput)
 	}
-	if pool.AudioPreprocessor != nil {
-		if input.audio == nil {
-			if !pool.AudioPreprocessorOptional {
-				return nodeValue{}, domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "audio preprocessor requires audio"}
-			}
-		} else {
-			audioInput := input
-			audioInput.image = nil
-			audioInput.vision = ""
-			launch("audio", pool.AudioPreprocessor, audioInput)
-		}
+	if pool.AudioPreprocessor != nil && input.audio != nil {
+		audioInput := input
+		audioInput.image = nil
+		audioInput.vision = ""
+		launch("audio", pool.AudioPreprocessor, audioInput)
 	}
 	if branches == 0 {
 		return input, domain.OutcomeSuccess, nil

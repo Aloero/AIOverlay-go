@@ -80,6 +80,7 @@ function providerDialog(connection, onDone) {
   isDirty:()=>JSON.stringify(p)!==committed||!!$('#bulkKeys')?.value.trim(),
   discard:()=>{committed=JSON.stringify(p);if($('#bulkKeys'))$('#bulkKeys').value='';},
   save:async()=>{
+   if(importPromise)await importPromise;
    if(draft.saving)return draft.saving;
    addKeys();const button=$('#providerDone');button.disabled=true;
    // Capture values before yielding. Payload mutation cannot change an in-flight request.

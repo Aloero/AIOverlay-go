@@ -13,7 +13,7 @@ import (
 
 	"aioverlay/internal/catalog"
 	"aioverlay/internal/config"
-	"aioverlay/internal/control"
+	"aioverlay/internal/contracts"
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
 	"aioverlay/internal/providers"
@@ -249,7 +249,7 @@ func (a *App) saveConfigLockedWithSessionPolicy(cfg domain.Config, imported bool
 	return nil
 }
 
-func (a *App) Catalog(q control.CatalogQuery) (control.CatalogPage, error) {
+func (a *App) Catalog(q contracts.CatalogQuery) (contracts.CatalogPage, error) {
 	a.mu.RLock()
 	cfg := cloneConfig(a.cfg)
 	a.mu.RUnlock()
@@ -321,12 +321,12 @@ func (a *App) Catalog(q control.CatalogQuery) (control.CatalogPage, error) {
 	if end > total {
 		end = total
 	}
-	return control.CatalogPage{Items: out[off:end], Total: total, Offset: off, Limit: limit}, nil
+	return contracts.CatalogPage{Items: out[off:end], Total: total, Offset: off, Limit: limit}, nil
 }
 func (a *App) RefreshCatalog() error                           { return a.catalog.Refresh() }
 func (a *App) RefreshCatalogContext(ctx context.Context) error { return a.catalog.RefreshContext(ctx) }
 func (a *App) CatalogStatus() any                              { return a.catalog.Status() }
-func (a *App) RunTest(ctx context.Context, req control.TestRequest) (engine.Result, error) {
+func (a *App) RunTest(ctx context.Context, req contracts.TestRequest) (engine.Result, error) {
 	var image []byte
 	var err error
 	if req.ImageBase64 != "" {

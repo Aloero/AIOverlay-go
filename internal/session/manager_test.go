@@ -344,7 +344,7 @@ func TestCoalescedAudioTurnRecordsContextGap(t *testing.T) {
 	if len(snapshot.Entries) != 1 || !snapshot.Entries[0].Gap {
 		t.Fatalf("audio loss must be visible as a context gap: %+v", snapshot.Entries)
 	}
-	if _, exists := manager.pending["audio-event"]; exists {
+	if _, exists := manager.pending.segments["audio-event"]; exists {
 		t.Fatal("coalesced audio event remained pending")
 	}
 	if runtime.status.LastError != "" || runtime.status.LastDiagnostic == "" {
@@ -422,16 +422,16 @@ func TestPauseRemovesAudioPendingWhileTurnWaitsForSlot(t *testing.T) {
 	close(allowEmit)
 	<-emitted
 	waitUntil(t, func() bool {
-		manager.pendingMu.Lock()
-		defer manager.pendingMu.Unlock()
-		return len(manager.pending) == 1
+		manager.pending.mu.Lock()
+		defer manager.pending.mu.Unlock()
+		return len(manager.pending.segments) == 1
 	}, "audio segment never became pending")
 
 	manager.Pause(true)
 	waitUntil(t, func() bool {
-		manager.pendingMu.Lock()
-		defer manager.pendingMu.Unlock()
-		return len(manager.pending) == 0
+		manager.pending.mu.Lock()
+		defer manager.pending.mu.Unlock()
+		return len(manager.pending.segments) == 0
 	}, "paused source left a dead pending transcript")
 
 	snapshot := manager.contexts.Snapshot(cfg.Pipelines[0].Contexts[0], "p", time.Now().Add(time.Second))
@@ -464,9 +464,9 @@ func TestRepeatedSourceStartStopLeavesNoPendingTurns(t *testing.T) {
 		waitUntil(t, func() bool { return manager.source("a") == nil }, "source did not stop")
 	}
 
-	manager.pendingMu.Lock()
-	pending := len(manager.pending)
-	manager.pendingMu.Unlock()
+	manager.pending.mu.Lock()
+	pending := len(manager.pending.segments)
+	manager.pending.mu.Unlock()
 	if pending != 0 {
 		t.Fatalf("pending turns leaked across start/stop cycles: %d", pending)
 	}
@@ -657,9 +657,9 @@ func TestPartialTranscriptDoesNotFinishPendingUntilFinalRevision(t *testing.T) {
 	observe := manager.transcriptObserver("p", runtime, turn)
 
 	observe(engine.Observation{Kind: "audio.text", Text: "hel", SegmentID: "segment-1", Revision: 1, Final: false})
-	manager.pendingMu.Lock()
-	_, stillPending := manager.pending["segment-1"]
-	manager.pendingMu.Unlock()
+	manager.pending.mu.Lock()
+	_, stillPending := manager.pending.segments["segment-1"]
+	manager.pending.mu.Unlock()
 	if !stillPending {
 		t.Fatal("partial transcript released manual cutoff wait")
 	}
@@ -669,9 +669,9 @@ func TestPartialTranscriptDoesNotFinishPendingUntilFinalRevision(t *testing.T) {
 	}
 
 	observe(engine.Observation{Kind: "audio.text", Text: "hello", SegmentID: "segment-1", Revision: 2, Final: true})
-	manager.pendingMu.Lock()
-	_, stillPending = manager.pending["segment-1"]
-	manager.pendingMu.Unlock()
+	manager.pending.mu.Lock()
+	_, stillPending = manager.pending.segments["segment-1"]
+	manager.pending.mu.Unlock()
 	if stillPending {
 		t.Fatal("final transcript did not release manual cutoff wait")
 	}
@@ -1772,9 +1772,9 @@ func TestStoppedSourceRejectedAtBackgroundAdmissionClearsAudioPending(t *testing
 
 	manager.enqueueBackgroundTurn(runtime, turn)
 
-	manager.pendingMu.Lock()
-	pending := len(manager.pending)
-	manager.pendingMu.Unlock()
+	manager.pending.mu.Lock()
+	pending := len(manager.pending.segments)
+	manager.pending.mu.Unlock()
 	if pending != 0 {
 		t.Fatalf("rejected audio admission leaked pending entries: %d", pending)
 	}

@@ -105,3 +105,43 @@ Frontend responsibilities are split: studio-workspace owns applied/draft state, 
 Terminal trace fields describe the graph, not its last intermediate success. Structured plan IDs account for candidates/actual attempted slots/untried slots per visit. Edge IDs and typed cancellation/budget reasons support UI navigation without parsing provider error strings. Worker completion precedes summary generation.
 
 `engine.PromptSnapshot` and `control/prompt_history.go` form an opt-in inspection boundary: bounded/redacted text values, no image bytes and no automatic trace/job exposure. `prompt-preview.js` loads these only on explicit user action. `app/recent_models.go` records actual model references and persists them via the existing config save/exit lifecycle. User-edit history remains WebView-session-only.
+
+## SOLID refactor · transport contracts and state ownership
+
+`internal/contracts` owns transport-neutral application requests and reports.
+`app` no longer imports `control`. The old exported `control.CatalogQuery`,
+`CatalogPage`, `TestRequest`, benchmark types and `StudioState` remain Go type
+aliases; the existing constructor/backend API and JSON tags remain compatible.
+The benchmark snapshot copier lives with its report, with the old control helper
+retained as a forwarding function. An application-layer import test guards this
+boundary.
+
+Control session handlers consume separate capability interfaces rather than one
+16-method interface. Command execution, command preview, pause, status, context
+clear, source control, realtime responses and audio operations can be implemented
+independently. Missing capabilities still use the existing unsupported responses;
+the legacy screenshot path remains available. Tests exercise minimal concrete
+backends without embedding an unimplemented all-purpose interface.
+
+One model attempt has separate responsibilities: `attempt.go` orchestrates an
+admitted call, `attempt_request.go` constructs its request and prompt snapshot,
+`attempt_stream.go` owns stream consumption and timers, `attempt_result.go`
+records the terminal result, and `attempt_resources.go` owns semaphore/session
+leases and cancellation cleanup. Capacity transfers to a teardown waiter when a
+provider fails to close its channels within the existing cleanup limit. A
+cancelled admission releases its semaphore even if cancellation arrives just
+after acquisition; callback panics retain the previous deferred-cleanup behavior.
+Graph routing and retry policy remain outside the provider stream consumer.
+
+`session.Manager` delegates pending transcript membership/wakeups to
+`pendingTranscripts` and active-turn registration/cancellation to
+`activeTurnRegistry`. Each owns its lock and maps. Generation snapshots are copied
+on registration, and cancellation callbacks run outside the registry lock.
+Single-context and per-stage transcript waits now share one implementation with
+the same cutoff, generation and timeout semantics.
+
+Source validation is separated into context/reference, command, event-source,
+realtime, screen and budget checks while preserving validation order and error
+text. VPN share-link conversion separates URI parsing from protocol, TLS and
+transport construction. These are local refactorings: they add no provider
+protocol, runtime dependency, configuration schema, network probe or UI framework.

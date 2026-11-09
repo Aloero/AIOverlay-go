@@ -1,6 +1,7 @@
 package control
 
 import (
+	"aioverlay/internal/contracts"
 	"aioverlay/internal/engine"
 	"context"
 )
@@ -9,16 +10,11 @@ type benchmarkProgressBackend interface {
 	RunBenchmarkProgress(context.Context, BenchmarkRequest, func(BenchmarkReport)) (BenchmarkReport, error)
 }
 
+// CloneBenchmarkReport is retained for existing control callers.
 func CloneBenchmarkReport(b BenchmarkReport) BenchmarkReport {
-	b.Runs = append([]BenchmarkRun(nil), b.Runs...)
-	for i := range b.Runs {
-		if b.Runs[i].Winner != nil {
-			a := *b.Runs[i].Winner
-			b.Runs[i].Winner = &a
-		}
-	}
-	return b
+	return contracts.CloneBenchmarkReport(b)
 }
+
 func (s *Server) runBenchmark(ctx context.Context, req BenchmarkRequest, opt engine.RunOptions) (engine.Result, *BenchmarkReport, error) {
 	var report BenchmarkReport
 	var err error

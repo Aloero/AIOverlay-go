@@ -39,14 +39,15 @@ function updateApplyState(){
  const dirtyNow=appliedConfig?configDigest(state.config)!==appliedJSON:state.dirty;
  state.dirty=dirtyNow;
  const indicator=$('#saveState');if(indicator){indicator.className='save-state'+(dirtyNow?' dirty':'');indicator.innerHTML='<i></i>'+(dirtyNow?'Черновик':'Применено');}
- const save=$('#saveConfig');if(save){save.disabled=!!savePromise||!!state.job?.running;save.title=state.job?.running?'Сначала остановите текущий запрос. Черновик можно редактировать.':'Сохранить config.json и применить к следующему снимку (Ctrl+S)';}
+ const save=$('#saveConfig');if(save){save.disabled=!!savePromise||!!importPromise||!!state.job?.running;save.title=state.job?.running?'Сначала остановите текущий запрос. Черновик можно редактировать.':'Сохранить config.json и применить к следующему снимку (Ctrl+S)';}
  const applied=appliedConfig?.pipelines.find(p=>p.id===appliedConfig.active_pipeline_id),summary=$('#appliedSummary');
  if(summary){summary.textContent='Следующий снимок: '+(applied?.name||'—');summary.title='Оверлей использует сохранённую конфигурацию, а не открытый черновик.';}
  const hint=$('#applyHint');if(hint){hint.textContent=state.job?.running?'Запрос выполняется. Применение доступно после завершения.':dirtyNow?'Изменения ещё не применены.':'Сохранённая конфигурация';hint.classList.toggle('warning-text',dirtyNow);}
  const current=$('#currentExecution');if(current){const tr=state.job?.trace;current.textContent=state.job?.running?'Сейчас: '+(tr?.pipeline_name||'подготовка')+(tr?.config_revision?' · r'+tr.config_revision:''):'';current.hidden=!state.job?.running;}
- if($('#undoDraft'))$('#undoDraft').disabled=!draftHistory.undoStack.length||!!savePromise||!!dialogDraft;
- if($('#redoDraft'))$('#redoDraft').disabled=!draftHistory.redoStack.length||!!savePromise||!!dialogDraft;
- if($('#restoreDraft'))$('#restoreDraft').disabled=!dirtyNow||!!savePromise;
+ if($('#importConfig'))$('#importConfig').disabled=!!importPromise;
+ if($('#undoDraft'))$('#undoDraft').disabled=!draftHistory.undoStack.length||!!savePromise||!!importPromise||!!dialogDraft;
+ if($('#redoDraft'))$('#redoDraft').disabled=!draftHistory.redoStack.length||!!savePromise||!!importPromise||!!dialogDraft;
+ if($('#restoreDraft'))$('#restoreDraft').disabled=!dirtyNow||!!savePromise||!!importPromise;
 }
 async function refreshWorkspaceState(force=false){
  if(workspaceInfoPromise)return workspaceInfoPromise;
@@ -72,13 +73,15 @@ function initWorkspace(){
  refreshWorkspaceState(true).catch(failure);
 }
 function moveDraftHistory(direction){
- if(savePromise||dialogDraft){notify('Сначала завершите сохранение или закройте диалог.');return;}
+ if(savePromise||importPromise||dialogDraft){notify('Сначала завершите сохранение или закройте диалог.');return;}
  if(!draftHistory.move(state.config,direction))return;
  normalizeConfig(state.config);configRevision++;state.dirty=configDigest(state.config)!==appliedJSON;
  if(!state.config.pipelines.some(p=>p.id===state.pipeline))state.pipeline=state.config.active_pipeline_id;
  state.edge=null;state.node=null;state.meta.clear();renderPage();hydrateMetadata();applyWorkspaceLayout();updateApplyState();
 }
 async function restoreSavedDraft(){
+ if(importPromise)await importPromise;
+ if(savePromise)await savePromise;
  if(!await settleDialog())return;
  if(!confirm('Отбросить черновик и загрузить сохранённые настройки? Выполненные AI-запросы и история не отменяются.'))return;
  const revision=configRevision;const c=normalizeConfig(await api('/api/config'));if(configRevision!==revision){notify('Появились новые правки. Черновик не заменён.');return;}state.config=c;state.pipeline=c.active_pipeline_id;state.node=null;state.edge=null;configRevision++;markApplied(c);saved();renderPage();hydrateMetadata();applyWorkspaceLayout();

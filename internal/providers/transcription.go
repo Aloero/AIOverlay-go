@@ -88,7 +88,7 @@ func (p *Transcription) request(ctx context.Context, r Request, key string, ev c
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	resp, err := (&http.Client{Transport: tr, Timeout: timeout}).Do(req)
+	resp, err := (&http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkProviderRedirect}).Do(req)
 	if err != nil {
 		return networkError(err)
 	}

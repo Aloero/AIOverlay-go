@@ -26,7 +26,7 @@ func NewOpenAI(cfg domain.ProviderConfig, resolver ...ProxyResolver) *OpenAIComp
 	if len(resolver) > 0 {
 		proxy = resolver[0]
 	}
-	return &OpenAICompatible{cfg: cfg, client: &http.Client{}, proxy: proxy}
+	return &OpenAICompatible{cfg: cfg, client: &http.Client{CheckRedirect: checkProviderRedirect}, proxy: proxy}
 }
 func (p *OpenAICompatible) ID() string { return p.cfg.ID }
 

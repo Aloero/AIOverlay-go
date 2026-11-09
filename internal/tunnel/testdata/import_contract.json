@@ -1,0 +1,381 @@
+[
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443",
+    "want": {
+      "name": "Основной",
+      "config": {
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "type": "vless",
+        "uuid": "00000000-0000-0000-0000-000000000001"
+      },
+      "protocol": "vless",
+      "server": "vpn.example.invalid",
+      "warnings": [
+        "VLESS без TLS/REALITY: внешний туннель не шифруется этим протоколом."
+      ]
+    }
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?security=tls\u0026type=ws\u0026path=%2Fstream\u0026host=cdn.example.invalid#Primary",
+    "want": {
+      "name": "Primary",
+      "config": {
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "tls": {
+          "enabled": true,
+          "server_name": "vpn.example.invalid"
+        },
+        "transport": {
+          "headers": {
+            "Host": "cdn.example.invalid"
+          },
+          "path": "/stream",
+          "type": "ws"
+        },
+        "type": "vless",
+        "uuid": "00000000-0000-0000-0000-000000000001"
+      },
+      "protocol": "vless",
+      "server": "vpn.example.invalid",
+      "warnings": []
+    }
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?security=reality\u0026pbk=fixture-public-key\u0026sid=00\u0026type=grpc\u0026serviceName=api\u0026flow=xtls-rprx-vision",
+    "want": {
+      "name": "Основной",
+      "config": {
+        "flow": "xtls-rprx-vision",
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "tls": {
+          "enabled": true,
+          "reality": {
+            "enabled": true,
+            "public_key": "fixture-public-key",
+            "short_id": "00"
+          },
+          "server_name": "vpn.example.invalid",
+          "utls": {
+            "enabled": true,
+            "fingerprint": "chrome"
+          }
+        },
+        "transport": {
+          "service_name": "api",
+          "type": "grpc"
+        },
+        "type": "vless",
+        "uuid": "00000000-0000-0000-0000-000000000001"
+      },
+      "protocol": "vless",
+      "server": "vpn.example.invalid",
+      "warnings": []
+    }
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?security=tls\u0026type=httpupgrade\u0026path=%2Fa\u0026host=cdn.example.invalid\u0026sni=tls.example.invalid\u0026alpn=h2,http%2F1.1\u0026allowInsecure=1",
+    "want": {
+      "name": "Основной",
+      "config": {
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "tls": {
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ],
+          "enabled": true,
+          "insecure": true,
+          "server_name": "tls.example.invalid"
+        },
+        "transport": {
+          "host": "cdn.example.invalid",
+          "path": "/a",
+          "type": "httpupgrade"
+        },
+        "type": "vless",
+        "uuid": "00000000-0000-0000-0000-000000000001"
+      },
+      "protocol": "vless",
+      "server": "vpn.example.invalid",
+      "warnings": [
+        "В профиле отключена проверка сертификата TLS."
+      ]
+    }
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?security=tls\u0026type=raw\u0026fp=chrome",
+    "want": {
+      "name": "Основной",
+      "config": {
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "tls": {
+          "enabled": true,
+          "server_name": "vpn.example.invalid",
+          "utls": {
+            "enabled": true,
+            "fingerprint": "chrome"
+          }
+        },
+        "type": "vless",
+        "uuid": "00000000-0000-0000-0000-000000000001"
+      },
+      "protocol": "vless",
+      "server": "vpn.example.invalid",
+      "warnings": []
+    }
+  },
+  {
+    "input": "trojan://fixture-only@vpn.example.invalid?type=grpc\u0026serviceName=api",
+    "want": {
+      "name": "Основной",
+      "config": {
+        "password": "fixture-only",
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "tls": {
+          "enabled": true,
+          "server_name": "vpn.example.invalid"
+        },
+        "transport": {
+          "service_name": "api",
+          "type": "grpc"
+        },
+        "type": "trojan"
+      },
+      "protocol": "trojan",
+      "server": "vpn.example.invalid",
+      "warnings": []
+    }
+  },
+  {
+    "input": "hysteria2://user:fixture-only@vpn.example.invalid/?obfs=salamander\u0026obfs-password=fixture-only\u0026sni=tls.example.invalid#QUIC",
+    "want": {
+      "name": "QUIC",
+      "config": {
+        "obfs": {
+          "password": "fixture-only",
+          "type": "salamander"
+        },
+        "password": "user:fixture-only",
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "tls": {
+          "enabled": true,
+          "server_name": "tls.example.invalid"
+        },
+        "type": "hysteria2"
+      },
+      "protocol": "hysteria2",
+      "server": "vpn.example.invalid",
+      "warnings": []
+    }
+  },
+  {
+    "input": "hy2://fixture-only@vpn.example.invalid/?obfs=gecko\u0026obfs-password=fixture-only\u0026insecure=true",
+    "want": {
+      "name": "Основной",
+      "config": {
+        "obfs": {
+          "password": "fixture-only",
+          "type": "gecko"
+        },
+        "password": "fixture-only",
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "tls": {
+          "enabled": true,
+          "insecure": true,
+          "server_name": "vpn.example.invalid"
+        },
+        "type": "hysteria2"
+      },
+      "protocol": "hysteria2",
+      "server": "vpn.example.invalid",
+      "warnings": [
+        "В профиле отключена проверка сертификата TLS."
+      ]
+    }
+  },
+  {
+    "input": "{\"type\":\"vless\",\"server\":\"vpn.example.invalid\",\"server_port\":443,\"uuid\":\"00000000-0000-0000-0000-000000000001\"}",
+    "want": {
+      "name": "Основной",
+      "config": {
+        "type": "vless",
+        "server": "vpn.example.invalid",
+        "server_port": 443,
+        "uuid": "00000000-0000-0000-0000-000000000001"
+      },
+      "protocol": "vless",
+      "server": "vpn.example.invalid",
+      "warnings": []
+    }
+  },
+  {
+    "input": "",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": null
+    },
+    "error": "VPN profile is empty or exceeds 256 KiB"
+  },
+  {
+    "input": "https://fixture-only@vpn.example.invalid",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "supported links: vless://, hysteria2://, hy2://, trojan://; other profiles require sing-box JSON"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443/unexpected",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "unexpected URI path; transport path belongs in the path parameter"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?sni=a\u0026sni=b",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "duplicate share-link parameters"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?security=reality",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "REALITY public key is required"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?flow=xtls-rprx-vision",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "VLESS flow requires TLS/REALITY"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?security=none\u0026insecure=1",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": [
+        "VLESS без TLS/REALITY: внешний туннель не шифруется этим протоколом."
+      ]
+    },
+    "error": "TLS parameters supplied without TLS/REALITY"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?security=tls\u0026insecure=maybe",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "invalid TLS verification flag"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?type=tcp\u0026path=%2F",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": [
+        "VLESS без TLS/REALITY: внешний туннель не шифруется этим протоколом."
+      ]
+    },
+    "error": "transport parameters supplied for a raw TCP link"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?type=ws\u0026serviceName=api",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": [
+        "VLESS без TLS/REALITY: внешний туннель не шифруется этим протоколом."
+      ]
+    },
+    "error": "gRPC parameters supplied for another transport"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?type=grpc\u0026mode=multi",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": [
+        "VLESS без TLS/REALITY: внешний туннель не шифруется этим протоколом."
+      ]
+    },
+    "error": "only standard gRPC gun mode is supported"
+  },
+  {
+    "input": "vless://00000000-0000-0000-0000-000000000001@vpn.example.invalid:443?security=tls\u0026unsupported=fixture",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "share link has unsupported parameters; use a compatible sing-box JSON without silently dropping settings"
+  },
+  {
+    "input": "trojan://fixture-only@vpn.example.invalid?security=none",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "Trojan requires TLS"
+  },
+  {
+    "input": "hy2://fixture-only@vpn.example.invalid/?obfs-password=fixture-only",
+    "want": {
+      "name": "",
+      "config": null,
+      "protocol": "",
+      "server": "",
+      "warnings": []
+    },
+    "error": "obfuscation type is required"
+  }
+]

@@ -3,19 +3,19 @@ package app
 import (
 	"aioverlay/internal/buildinfo"
 	"aioverlay/internal/config"
-	"aioverlay/internal/control"
+	"aioverlay/internal/contracts"
 	"aioverlay/internal/engine"
 	"context"
 	"fmt"
 )
 
-func (a *App) StudioState() control.StudioState {
+func (a *App) StudioState() contracts.StudioState {
 	a.mu.RLock()
 	id := a.cfg.ActivePipelineID
 	e := a.engine
 	recent := mergeRecent(a.recentModels, a.cfg.ControlCenter.RecentModels)
 	a.mu.RUnlock()
-	return control.StudioState{RecentModels: recent, ActivePipelineID: id, Revision: e.ConfigRevision(), Credentials: e.CredentialStates(), Version: buildinfo.Version}
+	return contracts.StudioState{RecentModels: recent, ActivePipelineID: id, Revision: e.ConfigRevision(), Credentials: e.CredentialStates(), Version: buildinfo.Version}
 }
 func (a *App) Simulate(ctx context.Context, req engine.SimulationRequest) (engine.SimulationReport, error) {
 	if req.Config.Version == 0 {

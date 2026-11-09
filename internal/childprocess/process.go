@@ -4,6 +4,7 @@ package childprocess
 import (
 	"os/exec"
 	"sync"
+	"time"
 )
 
 type Process struct {
@@ -16,6 +17,11 @@ type Process struct {
 
 func Start(cmd *exec.Cmd) (*Process, error) {
 	configure(cmd)
+	// A descendant can inherit an os/exec output pipe after its parent exits.
+	// Bound that drain so Wait can finish and release the remaining process tree.
+	if cmd.WaitDelay == 0 {
+		cmd.WaitDelay = time.Second
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -46,10 +52,11 @@ func (p *Process) Stop() {
 		return
 	}
 	p.stop.Do(func() {
+		// Close the job/kill the process group before Wait waits for pipe EOF.
+		p.releaseOnce.Do(p.release)
 		if p.Alive() {
 			_ = p.cmd.Process.Kill()
 		}
 		<-p.done
-		p.releaseOnce.Do(p.release)
 	})
 }

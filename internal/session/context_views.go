@@ -62,37 +62,7 @@ func (m *Manager) snapshotContextViews(pipelineID string, configs map[string]dom
 }
 
 func (m *Manager) waitPendingContexts(ctx context.Context, pipelineID string, generations map[string]uint64, cutoff time.Time, limit time.Duration) (bool, error) {
-	if len(generations) == 0 || limit <= 0 {
-		return true, nil
-	}
-	deadline, cancel := context.WithTimeout(ctx, limit)
-	defer cancel()
-	for {
-		m.pendingMu.Lock()
-		waiting := false
-		for _, pending := range m.pending {
-			generation, selected := generations[pending.contextID]
-			if selected && pending.pipelineID == pipelineID && pending.generation == generation && !pending.start.After(cutoff) {
-				waiting = true
-				break
-			}
-		}
-		changed := m.pendingChanged
-		m.pendingMu.Unlock()
-		if !waiting {
-			return true, nil
-		}
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-deadline.Done():
-			if ctx.Err() != nil {
-				return false, ctx.Err()
-			}
-			return false, nil
-		case <-changed:
-		}
-	}
+	return m.pending.wait(ctx, pipelineID, generations, cutoff, limit)
 }
 
 func cloneGenerations(values map[string]uint64) map[string]uint64 {

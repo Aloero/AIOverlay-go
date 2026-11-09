@@ -151,14 +151,14 @@ func TestSessionMixedLifecycleSoakKeepsStateBounded(t *testing.T) {
 	}
 
 	waitUntil(t, func() bool {
-		manager.pendingMu.Lock()
-		defer manager.pendingMu.Unlock()
-		return len(manager.pending) == 0
+		manager.pending.mu.Lock()
+		defer manager.pending.mu.Unlock()
+		return len(manager.pending.segments) == 0
 	}, "pending transcripts remained after soak")
 	waitUntil(t, func() bool {
-		manager.activeTurnMu.Lock()
-		defer manager.activeTurnMu.Unlock()
-		return len(manager.activeTurns) == 0
+		manager.activeTurns.mu.Lock()
+		defer manager.activeTurns.mu.Unlock()
+		return len(manager.activeTurns.turns) == 0
 	}, "active background turns remained after soak")
 
 	snapshot := manager.contexts.Snapshot(pipeline.Contexts[0], pipeline.ID, base.Add((restartCycles+2)*time.Second))
@@ -173,12 +173,12 @@ func TestSessionMixedLifecycleSoakKeepsStateBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitUntil(t, func() bool { return manager.source("a") == nil }, "source did not stop after soak")
-	manager.pendingMu.Lock()
-	pending := len(manager.pending)
-	manager.pendingMu.Unlock()
-	manager.activeTurnMu.Lock()
-	active := len(manager.activeTurns)
-	manager.activeTurnMu.Unlock()
+	manager.pending.mu.Lock()
+	pending := len(manager.pending.segments)
+	manager.pending.mu.Unlock()
+	manager.activeTurns.mu.Lock()
+	active := len(manager.activeTurns.turns)
+	manager.activeTurns.mu.Unlock()
 	if pending != 0 || active != 0 {
 		t.Fatalf("runtime state leaked after stop: pending=%d active=%d", pending, active)
 	}

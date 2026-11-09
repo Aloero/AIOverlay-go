@@ -16,7 +16,6 @@ import (
 
 type previewLimitBackend struct {
 	*auditBackend
-	sessionBackend
 	duration time.Duration
 	deadline time.Time
 }
@@ -57,7 +56,6 @@ func TestAudioPreviewHandlerBoundsDurationBeforeComputingDeadline(t *testing.T) 
 
 type localSTTPreviewBackend struct {
 	*auditBackend
-	sessionBackend
 	providerID string
 	duration   time.Duration
 }
@@ -115,7 +113,6 @@ func TestLocalSTTPreviewHandlerRejectsMissingProviderAndInvalidAudio(t *testing.
 
 type processAudioBackend struct {
 	*auditBackend
-	sessionBackend
 }
 
 func (*processAudioBackend) AudioCapabilities() paudio.Capabilities {

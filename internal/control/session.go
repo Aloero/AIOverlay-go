@@ -15,31 +15,12 @@ import (
 	"time"
 )
 
-type sessionBackend interface {
-	PreviewCommand(string) (session.CommandPreview, error)
-	PrepareCommand(context.Context, string, session.ScreenCapture) (session.PreparedCommand, error)
-	ValidatePreparedCommand(session.PreparedCommand) error
-	RecordCommandObservation(session.PreparedCommand, engine.Observation) bool
-	RecordCommandResult(session.PreparedCommand, engine.Result) bool
-	PauseBackground(bool)
-	SetSourceRunning(string, bool) error
-	RequestRealtimeResponse(context.Context, string) (engine.Result, error)
-	BackgroundPaused() bool
-	SessionStatus() any
-	ClearConversation(string) (uint64, error)
-	AudioDevices() ([]paudio.Device, error)
-	AudioCapabilities() paudio.Capabilities
-	AudioProcesses() ([]paudio.Process, error)
-	PreviewAudio(context.Context, domain.AudioSourceConfig, time.Duration) (session.AudioPreview, error)
-	PreviewLocalSTT(context.Context, domain.AudioSourceConfig, string, time.Duration) (session.LocalSTTPreview, error)
-}
-
 func (s *Server) handleCommandPreview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	backend, ok := s.backend.(sessionBackend)
+	backend, ok := s.backend.(commandPreviewBackend)
 	if !ok {
 		http.Error(w, "session runtime unavailable", http.StatusNotImplemented)
 		return
@@ -53,16 +34,20 @@ func (s *Server) handleCommandPreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StartCommand(action string) (string, error) {
-	b, ok := s.backend.(sessionBackend)
+	if action == "session_pause" {
+		backend, ok := s.backend.(backgroundPauseBackend)
+		if !ok {
+			return "", fmt.Errorf("command runtime unavailable")
+		}
+		backend.PauseBackground(!backend.BackgroundPaused())
+		return "session-pause", nil
+	}
+	b, ok := s.backend.(commandBackend)
 	if !ok {
 		if action == "analyze" {
 			return s.StartScreenLegacy()
 		}
 		return "", fmt.Errorf("command runtime unavailable")
-	}
-	if action == "session_pause" {
-		b.PauseBackground(!b.BackgroundPaused())
-		return "session-pause", nil
 	}
 	live, ok := s.backend.(liveBackend)
 	if !ok {
@@ -107,7 +92,7 @@ func (s *Server) StartCommand(action string) (string, error) {
 }
 
 func (s *Server) StartRealtimeResponse(sourceID string) (string, error) {
-	b, ok := s.backend.(sessionBackend)
+	b, ok := s.backend.(realtimeResponseBackend)
 	if !ok {
 		return "", fmt.Errorf("session runtime unavailable")
 	}
@@ -161,7 +146,7 @@ func (s *Server) handleAudioPreview(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	b, ok := s.backend.(sessionBackend)
+	b, ok := s.backend.(audioPreviewBackend)
 	if !ok {
 		http.Error(w, "audio runtime unavailable", 501)
 		return
@@ -198,7 +183,7 @@ func (s *Server) handleLocalSTTPreview(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	backend, ok := s.backend.(sessionBackend)
+	backend, ok := s.backend.(localSTTPreviewer)
 	if !ok {
 		http.Error(w, "local STT preview unavailable", http.StatusNotImplemented)
 		return
@@ -239,7 +224,7 @@ func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if b, ok := s.backend.(sessionBackend); ok {
+	if b, ok := s.backend.(sessionStatusBackend); ok {
 		writeJSON(w, b.SessionStatus())
 		return
 	}
@@ -250,7 +235,7 @@ func (s *Server) handleSessionPause(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	b, ok := s.backend.(sessionBackend)
+	b, ok := s.backend.(backgroundPauseBackend)
 	if !ok {
 		http.Error(w, "session runtime unavailable", 501)
 		return
@@ -274,7 +259,7 @@ func (s *Server) handleContextClear(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	b, ok := s.backend.(sessionBackend)
+	b, ok := s.backend.(conversationClearBackend)
 	if !ok {
 		http.Error(w, "session runtime unavailable", 501)
 		return
@@ -298,7 +283,7 @@ func (s *Server) handleAudioCapabilities(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	backend, ok := s.backend.(sessionBackend)
+	backend, ok := s.backend.(audioCapabilityBackend)
 	if !ok {
 		http.Error(w, "audio runtime unavailable", http.StatusNotImplemented)
 		return
@@ -311,7 +296,7 @@ func (s *Server) handleAudioProcesses(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	backend, ok := s.backend.(sessionBackend)
+	backend, ok := s.backend.(audioProcessBackend)
 	if !ok {
 		http.Error(w, "audio runtime unavailable", http.StatusNotImplemented)
 		return
@@ -329,7 +314,7 @@ func (s *Server) handleAudioDevices(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	b, ok := s.backend.(sessionBackend)
+	b, ok := s.backend.(audioDeviceBackend)
 	if !ok {
 		http.Error(w, "audio runtime unavailable", 501)
 		return
@@ -384,7 +369,7 @@ func (s *Server) handleSessionSource(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	b, ok := s.backend.(sessionBackend)
+	b, ok := s.backend.(sourceControlBackend)
 	if !ok {
 		http.Error(w, "session runtime unavailable", 501)
 		return
