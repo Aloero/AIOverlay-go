@@ -100,6 +100,27 @@ func Migrate(cfg *domain.Config) error {
 				p.Context = nil
 			}
 			cfg.Version = 5
+		case 5:
+			// Schema 6 adds the explicit exit hotkey. As with visibility, a
+			// combination already used by another action is never stolen.
+			if cfg.Overlay.Hotkeys == nil {
+				cfg.Overlay.Hotkeys = map[string]string{}
+			}
+			if _, exists := cfg.Overlay.Hotkeys["quit"]; !exists {
+				candidate, _ := hotkey.Parse("Ctrl+Shift+Q")
+				available := true
+				for _, text := range cfg.Overlay.Hotkeys {
+					b, e := hotkey.Parse(text)
+					if e == nil && b == candidate {
+						available = false
+					}
+				}
+				cfg.Overlay.Hotkeys["quit"] = ""
+				if available {
+					cfg.Overlay.Hotkeys["quit"] = "Ctrl+Shift+Q"
+				}
+			}
+			cfg.Version = 6
 		default:
 			return fmt.Errorf("unsupported old config schema %d", cfg.Version)
 		}

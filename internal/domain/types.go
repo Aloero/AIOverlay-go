@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = 5
+const ConfigVersion = 6
 
 type ProviderKind string
 

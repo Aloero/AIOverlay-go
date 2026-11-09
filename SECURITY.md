@@ -2,7 +2,7 @@
 
 ## Portable configuration
 
-`config.json` contains API keys and optional VPN credentials in plaintext by design. Keep it private. It is ignored by Git; only `examples/config.example.json` is a public template. The current schema (5) preserves unknown fields, so a future extension can contain secrets too. Do not rely solely on names recognized by automated preflight. Review exported JSON before sharing it.
+`config.json` contains API keys and optional VPN credentials in plaintext by design. Keep it private. It is ignored by Git; only `examples/config.example.json` is a public template. The current schema (6) preserves unknown fields, so a future extension can contain secrets too. Do not rely solely on names recognized by automated preflight. Review exported JSON before sharing it.
 
 The current pre-commit hook checks staged config shapes and rejects runtime config/artifact paths and non-empty credential fields. Build preflight rejects private VPN profiles, credentials, runtime statistics, missing runtime licenses, mismatched binary SHA-256 and Git LFS pointers. It does not claim a universal secret scanner and does not rewrite Git history. The historical 0.2.5 config contains no real API keys or VPN profile; verify history again before publishing private work.
 

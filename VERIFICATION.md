@@ -288,3 +288,27 @@ remaining silent failure into an explicit native error with recovery steps.
 Automated: Windows-target vet and build, Linux suites, `check.sh`. Not run:
 physical interactive Windows resize, hotkey-cascade and RDP/local Studio
 rendering verification — these need a real Windows session from the user.
+
+## Tray removal and explicit quit hotkey (2026-11-09)
+
+The always-present notification-area icon was removed at the user's request:
+`Shell_NotifyIconW`, the callback message handler and the popup menu are gone;
+every former menu action keeps a hotkey (Studio, visibility, background pause)
+and exit is now the dedicated `quit` action, registered as Win32 hotkey id 9
+and defaulting to `Ctrl+Shift+Q`. Existing configurations without the key keep
+it unregistered rather than guessing a binding. Automated: hotkey grammar and
+duplicate tests, config validation, Windows-target vet/build. Not run: the
+physical quit hotkey and taskbar/tray absence verification on a real desktop.
+
+## Studio blank-window automatic software-composition retry (2026-11-09)
+
+The bundled Studio document renders correctly under headless Chromium
+(no page errors, themed shell, 19 scripts and 3 stylesheets inlined), so the
+reported white WebView2 window is an environment failure, not a bundle one.
+The readiness probe now distinguishes them: if the document never answers, the
+session is destroyed once per process and restarted with
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu --disable-gpu-compositing`
+before any dialog appears; in remote sessions software composition and the
+local-only capture-exclusion skip are applied from the first session. A second
+silent session reports itself through the native dialog instead of looping.
+Automated: Windows-target vet/build. Not run: physical GPU-driver reproduction.

@@ -14,6 +14,12 @@ func TestCanonicalCombinations(t *testing.T) {
 	if Validate(map[string]string{"control": "Ctrl+Shift+S", "analyze": "Shift+Control+S"}) == nil {
 		t.Fatal("duplicate")
 	}
+	if err := Validate(map[string]string{"control": "Ctrl+Shift+O", "quit": "Ctrl+Shift+Q"}); err != nil {
+		t.Fatalf("quit action rejected: %v", err)
+	}
+	if Validate(map[string]string{"control": "Ctrl+Shift+Q", "quit": "Ctrl+Shift+Q"}) == nil {
+		t.Fatal("duplicate with quit accepted")
+	}
 	for _, s := range []string{"garbage", "Ctrl+S+A", "Ctrl+Ctrl+O", "Ctrl+F12"} {
 		if _, e := Parse(s); e == nil {
 			t.Fatal(s)

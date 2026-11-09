@@ -54,17 +54,23 @@ var desktopWindowMap sync.Map
 var desktopSubclassProc = syscall.NewCallback(desktopSubclassWndProc)
 
 type desktopWindow struct {
-	mu          sync.Mutex
-	view        webview.WebView
-	options     Options
-	ctx         context.Context
-	captureMu   sync.Mutex
-	origWndProc uintptr
-	protection  platform.ProtectionStatus
-	appClosing  atomic.Bool
-	openCh      chan struct{}
-	closeCh     chan struct{}
+	mu              sync.Mutex
+	view            webview.WebView
+	options         Options
+	ctx             context.Context
+	captureMu       sync.Mutex
+	origWndProc     uintptr
+	protection      platform.ProtectionStatus
+	appClosing      atomic.Bool
+	blank           atomic.Bool
+	gpuFallbackUsed atomic.Bool
+	openCh          chan struct{}
+	closeCh         chan struct{}
 }
+
+// errStudioBlank ends a session whose document never answered the readiness
+// probe so Run can retry once with software composition.
+var errStudioBlank = errors.New("studio document did not respond")
 
 func New(o Options) Window {
 	return &desktopWindow{options: o, openCh: make(chan struct{}, 1), closeCh: make(chan struct{}, 1)}
@@ -121,6 +127,10 @@ func (w *desktopWindow) Run(ctx context.Context) error {
 			sessionCancel = nil
 			sessionDone = nil
 			restart := life.sessionEnded()
+			if errors.Is(err, errStudioBlank) && ctx.Err() == nil {
+				startSession()
+				continue
+			}
 			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				ShowError("AIOverlay · Pipeline Studio", err.Error())
 			}
@@ -268,7 +278,17 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 		case <-watchDone:
 		case <-ctx.Done():
 		case <-timer.C:
-			ShowError("AIOverlay · Pipeline Studio", "Окно Studio открылось, но интерфейс не загрузился. Обновите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1. При работе через удалённый рабочий стол также помогает пересоздание сеанса RDP или локальный запуск AIOverlay.")
+			// The document never answered: some GPU drivers paint the window
+			// white without failing navigation. Once per process, destroy the
+			// session so Run restarts it with software composition; a second
+			// blank session reports itself instead of looping.
+			if !w.gpuFallbackUsed.Swap(true) {
+				os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu --disable-gpu-compositing")
+				w.blank.Store(true)
+				v.Dispatch(func() { v.Destroy() })
+				return
+			}
+			ShowError("AIOverlay · Pipeline Studio", "Окно Studio открылось, но интерфейс не загрузился даже в режиме программной отрисовки. Обновите Microsoft Edge WebView2 Runtime через Install-WebView2.ps1. При работе через удалённый рабочий стол помогает пересоздание сеанса RDP или локальный запуск AIOverlay.")
 		}
 	}()
 	go func() {
@@ -279,6 +299,12 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 		}
 	}()
 	v.Run()
+	if w.blank.Swap(false) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errStudioBlank
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

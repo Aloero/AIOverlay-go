@@ -12,7 +12,7 @@ type Binding struct {
 	Key       uint32
 }
 
-var Actions = []string{"analyze", "ghost", "clear", "control", "visibility", "screen_context", "screen_decide", "session_pause"}
+var Actions = []string{"analyze", "ghost", "clear", "control", "visibility", "screen_context", "screen_decide", "session_pause", "quit"}
 
 func Parse(text string) (Binding, error) {
 	var b Binding

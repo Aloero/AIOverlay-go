@@ -24,10 +24,6 @@ const (
 	wmNCHitTest           = 0x0084
 	wmLButtonUp           = 0x0202
 	wmHotKey              = 0x0312
-	wmAppTray             = 0x800A
-	wmLButtonDblClk       = 0x0203
-	wmRButtonUp           = 0x0205
-	wmContextMenu         = 0x007B
 	csVRedraw             = 0x0001
 	csHRedraw             = 0x0002
 	wsPopup               = 0x80000000
@@ -76,18 +72,6 @@ const (
 	dibRGBColors          = 0
 	wdaExcludeFromCapture = 0x00000011
 	wcaExcludedFromDDA    = 24
-	nimAdd                = 0x00000000
-	nimDelete             = 0x00000002
-	nifMessage            = 0x00000001
-	nifIcon               = 0x00000002
-	nifTip                = 0x00000004
-	tpmRightButton        = 0x0002
-	tpmReturnCmd          = 0x0100
-	mfString              = 0x0000
-	trayOpenStudio        = 1001
-	trayToggleOverlay     = 1002
-	trayPauseBackground   = 1003
-	trayQuit              = 1004
 	overlayHeaderHeight   = 36
 	overlayEdgeHit        = 8
 	overlaySettingsWidth  = 34
@@ -98,7 +82,6 @@ var (
 	gdi32                             = syscall.NewLazyDLL("gdi32.dll")
 	kernel32                          = syscall.NewLazyDLL("kernel32.dll")
 	dwmapi                            = syscall.NewLazyDLL("dwmapi.dll")
-	shell32                           = syscall.NewLazyDLL("shell32.dll")
 	wtsapi32                          = syscall.NewLazyDLL("wtsapi32.dll")
 	pRegisterClassEx                  = user32.NewProc("RegisterClassExW")
 	pCreateWindowEx                   = user32.NewProc("CreateWindowExW")
@@ -139,7 +122,6 @@ var (
 	pCreateSolidBrush                 = gdi32.NewProc("CreateSolidBrush")
 	pCreateFont                       = gdi32.NewProc("CreateFontW")
 	pDwmFlush                         = dwmapi.NewProc("DwmFlush")
-	pShellNotifyIcon                  = shell32.NewProc("Shell_NotifyIconW")
 	pWTSRegisterSessionNotification   = wtsapi32.NewProc("WTSRegisterSessionNotification")
 	pWTSUnregisterSessionNotification = wtsapi32.NewProc("WTSUnRegisterSessionNotification")
 )
@@ -186,23 +168,6 @@ type compositionData struct {
 	pad    int32
 	Data   unsafe.Pointer
 	Size   uintptr
-}
-type notifyIconData struct {
-	Size             uint32
-	Hwnd             uintptr
-	ID               uint32
-	Flags            uint32
-	CallbackMessage  uint32
-	Icon             uintptr
-	Tip              [128]uint16
-	State            uint32
-	StateMask        uint32
-	Info             [256]uint16
-	TimeoutOrVersion uint32
-	InfoTitle        [64]uint16
-	InfoFlags        uint32
-	GUIDItem         [16]byte
-	BalloonIcon      uintptr
 }
 
 var windowMap sync.Map
@@ -307,7 +272,6 @@ func (o *winOverlay) createWindow() error {
 	if err := o.registerHotkeys(); err != nil {
 		nativeSettingError(err.Error())
 	}
-	o.addTrayIcon()
 	pShowWindow.Call(hwnd, swShowNoActivate)
 	pUpdateWindow.Call(hwnd)
 	return nil
@@ -387,9 +351,6 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 	case 0x8005:
 		pShowWindow.Call(o.hwnd.Load(), swHide)
 		return 0
-	case wmAppTray:
-		o.handleTrayMessage(uint32(lparam))
-		return 0
 	case wmPaint:
 		o.paint()
 		return 0
@@ -437,6 +398,10 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 			}
 		case 5:
 			o.toggleVisibility()
+		case 9:
+			if o.cb.Quit != nil {
+				go o.cb.Quit()
+			}
 		case 6, 7, 8:
 			if o.cb.Command != nil {
 				name := map[int]string{6: "screen_context", 7: "screen_decide", 8: "session_pause"}[int(wparam)]
@@ -448,7 +413,6 @@ func (o *winOverlay) wndProc(message uint32, wparam, lparam uintptr) uintptr {
 		user32.NewProc("DestroyWindow").Call(o.hwnd.Load())
 		return 0
 	case wmDestroy:
-		o.removeTrayIcon()
 		o.unregisterLifecycleNotifications()
 		windowMap.Delete(o.hwnd.Load())
 		o.hwnd.Store(0)
@@ -665,86 +629,6 @@ func (o *winOverlay) captureAndAnalyze() {
 		o.cb.Analyze(img)
 	}
 }
-func (o *winOverlay) addTrayIcon() {
-	h := o.hwnd.Load()
-	if h == 0 {
-		return
-	}
-	inst, _, _ := pGetModuleHandle.Call(0)
-	name, _ := syscall.UTF16PtrFromString("APP")
-	icon, _, _ := user32.NewProc("LoadImageW").Call(inst, uintptr(unsafe.Pointer(name)), 1, 16, 16, 0x8000)
-	var n notifyIconData
-	n.Size = uint32(unsafe.Sizeof(n))
-	n.Hwnd = h
-	n.ID = 1
-	n.Flags = nifMessage | nifTip
-	n.CallbackMessage = wmAppTray
-	if icon != 0 {
-		n.Icon = icon
-		n.Flags |= nifIcon
-	}
-	copy(n.Tip[:], syscall.StringToUTF16("AIOverlay — открыть Studio"))
-	pShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&n)))
-}
-func (o *winOverlay) removeTrayIcon() {
-	h := o.hwnd.Load()
-	if h == 0 {
-		return
-	}
-	n := notifyIconData{Size: uint32(unsafe.Sizeof(notifyIconData{})), Hwnd: h, ID: 1}
-	pShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&n)))
-}
-func (o *winOverlay) handleTrayMessage(message uint32) {
-	switch message {
-	case wmLButtonDblClk:
-		if o.cb.Control != nil {
-			go o.cb.Control()
-		}
-	case wmRButtonUp, wmContextMenu:
-		o.showTrayMenu()
-	}
-}
-func (o *winOverlay) showTrayMenu() {
-	create := user32.NewProc("CreatePopupMenu")
-	appendMenu := user32.NewProc("AppendMenuW")
-	track := user32.NewProc("TrackPopupMenu")
-	destroy := user32.NewProc("DestroyMenu")
-	foreground := user32.NewProc("SetForegroundWindow")
-	menu, _, _ := create.Call()
-	if menu == 0 {
-		return
-	}
-	defer destroy.Call(menu)
-	add := func(id uintptr, label string) {
-		p, _ := syscall.UTF16PtrFromString(label)
-		appendMenu.Call(menu, mfString, id, uintptr(unsafe.Pointer(p)))
-	}
-	add(trayOpenStudio, "Открыть Studio")
-	add(trayToggleOverlay, "Показать / скрыть overlay")
-	add(trayPauseBackground, "Пауза / продолжить фон")
-	add(trayQuit, "Выход")
-	var pt point
-	pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-	foreground.Call(o.hwnd.Load())
-	cmd, _, _ := track.Call(menu, tpmRightButton|tpmReturnCmd, uintptr(pt.X), uintptr(pt.Y), 0, o.hwnd.Load(), 0)
-	switch cmd {
-	case trayOpenStudio:
-		if o.cb.Control != nil {
-			go o.cb.Control()
-		}
-	case trayToggleOverlay:
-		o.toggleVisibility()
-	case trayPauseBackground:
-		if o.cb.Command != nil {
-			go o.cb.Command("session_pause")
-		}
-	case trayQuit:
-		if o.cb.Quit != nil {
-			go o.cb.Quit()
-		}
-	}
-}
-
 func settingsRect(client rect) rect {
 	r := client
 	r.Left = max32(client.Left+8, client.Right-overlaySettingsWidth-8)

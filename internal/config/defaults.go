@@ -84,6 +84,7 @@ func Default() domain.Config {
 				"clear":      "Ctrl+Shift+C",
 				"control":    "Ctrl+Shift+O",
 				"visibility": "Ctrl+Shift+H",
+				"quit":       "Ctrl+Shift+Q",
 			},
 		},
 		ControlCenter: domain.ControlConfig{ListenAddress: "127.0.0.1:17891", AutoOpen: false, Theme: "engineering-dark"},

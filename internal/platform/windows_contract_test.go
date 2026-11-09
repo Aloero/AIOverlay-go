@@ -20,9 +20,15 @@ func TestWindowsOverlayRecoveryAndIdentityContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(overlay) + string(common)
-	for _, token := range []string{"AI OVERLAY", "addTrayIcon", "Открыть Studio", "trayToggleOverlay", "settingsRect", `drawText(dc, "⚙"`} {
+	for _, token := range []string{"AI OVERLAY", "settingsRect", `drawText(dc, "⚙"`, "csHRedraw | csVRedraw", "o.cb.Quit != nil"} {
 		if !strings.Contains(s, token) {
 			t.Fatalf("overlay missing %q", token)
+		}
+	}
+	// The notification-area icon was removed on purpose; exit is a hotkey only.
+	for _, banned := range []string{"Shell_NotifyIcon", "addTrayIcon"} {
+		if strings.Contains(s, banned) {
+			t.Fatalf("tray implementation returned: %s", banned)
 		}
 	}
 	if !strings.Contains(string(identity), "SetCurrentProcessExplicitAppUserModelID") || !strings.Contains(string(identity), "--app-user-model-id=") {
