@@ -324,3 +324,18 @@ window rect, protection status, readiness result and fallback decision) to
 prompts or request bodies and is written with owner-only permissions.
 Automated: Windows-target vet/build, full check suite. Not run: capture of a
 real trace on affected hardware (requires the user's machine).
+
+## Studio trace analysis: presentation blocked by capture affinity (2026-11-09)
+
+The first real `studio-diagnostics.json` showed navigation success, a live
+renderer, correct window geometry and no remote session, while the user still
+saw white — ruling out the bundle, the RDP path and the GPU-compositing retry.
+The remaining difference from the working GDI overlay is that Studio runs
+DirectComposition under WDA_EXCLUDEFROMCAPTURE, a known driver-class blank
+presentation bug. Studio now launches with `--disable-direct-composition`
+whenever stealth protection is requested, keeping capture exclusion active.
+The same trace exposed a second bug: the GPU fallback replaced
+WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and destroyed the maintained
+application-identity switch; all writers now merge arguments.
+Automated: Windows-target vet/build, full check suite. Not run: confirmation
+on the affected GPU (requires the user's report after the next test).

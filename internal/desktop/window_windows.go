@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -136,6 +137,23 @@ func (d *studioDiag) writeNow() {
 }
 
 type diagRect struct{ Left, Top, Right, Bottom int32 }
+
+// appendBrowserArgs adds WebView2 browser arguments without overwriting the
+// identity argument that platform.ApplyApplicationIdentity maintains in the
+// same environment variable.
+func appendBrowserArgs(extra string) {
+	args := strings.TrimSpace(os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"))
+	for _, want := range strings.Fields(extra) {
+		if strings.Contains(args, want) {
+			continue
+		}
+		if args != "" {
+			args += " "
+		}
+		args += want
+	}
+	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", args)
+}
 
 func windowRectForDiag(v webview.WebView) any {
 	var r diagRect
@@ -274,7 +292,14 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 	// white; software output stays reliable there.
 	remote := isRemoteSession()
 	if remote {
-		os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu --disable-gpu-compositing")
+		appendBrowserArgs("--disable-gpu --disable-gpu-compositing")
+	} else if options.Stealth {
+		// WDA_EXCLUDEFROMCAPTURE on a DirectComposition tree has a known
+		// driver bug class: the window presents blank (white) locally while
+		// navigation and scripts succeed — exactly the trace users report.
+		// Presenting through the HWND swap-chain keeps capture protection
+		// active and rendering reliable.
+		appendBrowserArgs("--disable-direct-composition")
 	}
 	w.diag.record("session_begin", map[string]any{
 		"index":       w.diagSessions.Add(1),
@@ -409,7 +434,7 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 			if !w.gpuFallbackUsed.Swap(true) {
 				data["decision"] = "restart-with-software-composition"
 				w.diag.record("renderer_timeout", data)
-				os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu --disable-gpu-compositing")
+				appendBrowserArgs("--disable-gpu --disable-gpu-compositing")
 				w.blank.Store(true)
 				v.Dispatch(func() { v.Destroy() })
 				return
