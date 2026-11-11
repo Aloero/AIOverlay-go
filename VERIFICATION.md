@@ -1,6 +1,18 @@
-# Verification · AIOverlay-go 0.2.8
+# Verification · AIOverlay-go 0.2.9
 
-Host: Linux amd64. The latest audit below covers the working copy on 2026-11-09. Earlier dated sections are historical evidence. Current configuration schema is 5; minimum Go version is 1.27.3.
+Host: Linux amd64. The latest audit below covers the working copy on 2026-11-11. Earlier dated sections are historical evidence. Current configuration schema is 6; minimum Go version is 1.27.3.
+
+## Current build audit · 2026-11-11 (commit b45d1da)
+
+- `go test ./...` — 26 packages pass; `go test -race ./internal/...` passes; `go vet ./...` and `gofmt -l` clean.
+- Release gate (`scripts/build.sh` → `cmd/release`): all required artifacts present, `MANIFEST.sha256` verified.
+- UI harness (`scripts/ui-check/run.cjs`, Playwright Chromium): 28 checks, 0 JS errors — includes the readiness panel flow.
+- `npm audit --omit=dev` reports no vulnerabilities; `govulncheck` has no known vulnerability in module requirements.
+- New since last audit: catalog provenance (`Verdict` with sources config < catalog < adapter < host < observed), watched-attempt observations (history only, never block routing), `GET /api/readiness` and the Studio «Почему не готово» panel; `internal/netpolicy` shared same-origin redirect rule; unconditional dark Studio caption on Windows; `internal/singleinstance` session mutex.
+
+## Windows VM run · 2026-11-11
+
+Deployed release archive (exe sha256 `139463f2…`) to a real Windows 11 guest (WIN11-AGENT, build 26300, WebView2 Runtime 1.109.149). Cold boot ~2–3 s; Studio renders; dark title bar verified by screenshot. The readiness panel showed catalog pin `published 1.18.31` equal to the host version (no `Model not found` in this run), keyless models honestly labeled `has no enabled key [конфиг]`, and a watched attempt surfaced as `timeout [история]` without being retired. Upstream free-tier quota exhaustion prevented a successful model answer in that environment; the report stated this truthfully. Full playbook and observations: `/home/alo/main/vms/win11/TESTING-AIOverlay.md`.
 
 ## Current audit · 2026-11-09
 

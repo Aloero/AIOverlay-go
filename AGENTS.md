@@ -6,7 +6,7 @@ Development runs in Linux/WSL; the app targets Windows 10/11 x64 and is built by
 
 - No Windows interop: never run `cmd.exe`, `powershell.exe`, `wine` or any `.exe`; never execute the `*.ps1` scripts (they ship to Windows users).
 - Never read or write `/mnt/c` or any Windows path; never change Windows registry, services, PATH or installed software (e.g. WebView2 Runtime).
-- Testing the built `.exe` on Windows is the user's job; agents may only ask them to run it.
+- Testing the built `.exe` on Windows: never on the WSL host itself. The dedicated WIN11-AGENT VM (`/home/alo/main/vms/win11`, SSH `127.0.0.1:2222`, VNC via `vnc.py`) is an approved agent channel — follow the playbook `/home/alo/main/vms/win11/TESTING-AIOverlay.md`. User-initiated testing on their own machine remains valid too.
 - Correct workflow: `scripts/check.sh`, `scripts/build.sh` (i.e. `GOOS=windows CGO_ENABLED=0 go build`), `go test ./...`. Line endings are fixed by `.gitattributes` (`eol=lf`) — don't change it.
 
 ## 2. Keep the repo clean

@@ -11,6 +11,7 @@ Studio HTML/CSS/JS is compiled into the executable; its JSON requests call the e
 - `netpolicy`: the outbound rules shared by every transport, so a credential-forwarding decision is not made twice.
 - `control`: UI commands, asynchronous JobManager, capture preview and trace endpoints.
 - `desktop`: Win32 WebView2 host, native export dialog, in-process JSON bridge.
+- `singleinstance`: a session kernel mutex; a second copy shows a message and exits instead of racing the first for config, hotkeys and capture. No-op on non-Windows.
 - `platform`: Win32 overlay/hotkeys and capture resource lifetime. Capture algorithms are injected for Linux tests; actual calls live in `capture_windows.go`.
 - `catalog`: bundled Models.dev metadata plus readiness verdicts with named sources (config/catalog/host/observed) and in-memory watched outcomes. Metadata is not proof of live availability.
 - `web`: embedded UI assets. All displayed model/config/error values are escaped; no CDN assets.
@@ -61,7 +62,7 @@ Frontend modules: app.js retains common UI and catalog/trace rendering; connecti
 
 A hidden or iconic Studio is not hidden/restored during capture. Only a visible non-iconic window is temporarily hidden. The GDI capture and native overlay privacy path remain unchanged.
 
-Historical 0.2.3–0.2.5 used schema 1. This was superseded by forward-preserving schema 2 in 0.2.6 and independent scheduling schema 3 in 0.2.7; 0.2.8 retains schema 3 and both migration paths.
+Schema chain: 1 (0.2.3–0.2.5) → 2 (0.2.6, forward-preserving) → 3 (0.2.7/0.2.8, independent scheduling) → 4 and 5 (audio-context fields) → 6 (model host and catalog provenance, 0.2.9). `migrate.go` runs the active loop 1→6, preserving fields at every step; `internal/domain.ConfigVersion` is the single source of the current schema.
 
 
 ## Audit stabilization · 0.2.6

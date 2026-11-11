@@ -4,6 +4,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1" # Monday: catalog drift report (non-blocking)
 
 permissions:
   contents: read
@@ -59,3 +61,7 @@ jobs:
           GOBIN="$RUNNER_TEMP/aioverlay-tools" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           "$RUNNER_TEMP/aioverlay-tools/govulncheck" ./...
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "$RUNNER_TEMP/aioverlay-tools/govulncheck" ./...
+
+      - name: Report catalog drift (non-blocking)
+        continue-on-error: true
+        run: python3 scripts/refresh-catalog.py

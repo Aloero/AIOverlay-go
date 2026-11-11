@@ -111,7 +111,7 @@ func (s *Service) RefreshContext(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "AIOverlay-go/0.2.6")
+	req.Header.Set("User-Agent", "AIOverlay-go")
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("catalog download failed")

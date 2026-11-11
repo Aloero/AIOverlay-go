@@ -14,11 +14,11 @@ Production Studio communicates with Go in-process; no browser fallback, HTTP lis
 
 ## Provider output and cancellation
 
-Raw provider response bodies are never used as public error strings. Structured codes and HTTP status produce normalized errors. Trace snapshots and display text redact configured credentials, including values split across incremental chunks. No redaction system can infer an unknown secret supplied under arbitrary user text; do not put secrets in prompts/labels.
+Raw provider response bodies are never used as public error strings. Structured codes and HTTP status produce normalized errors. Readiness blocker texts and `RequestError.Detail` are bounded in length and sanitized: no keys, no response bodies. Trace snapshots and display text redact configured credentials, including values split across incremental chunks. No redaction system can infer an unknown secret supplied under arbitrary user text; do not put secrets in prompts/labels.
 
 Cancellation owns capture and inference as one operation. A pending screenshot is discarded after cancellation. Cooperative provider workers are joined; an adapter failing to stop within 1500 ms gets a visible cleanup-timeout event. Cancellation of our transport does not prove the remote provider has stopped work or billing. Budgets count application adapter admissions, not a packet-level audit of SDK internal retries and external runtime housekeeping.
 
-Provider HTTP clients follow redirects only within the original scheme, hostname and effective port. Cross-origin redirects are stopped before credentials or request media can be sent to the next server. The policy applies to OpenAI-compatible, Gemini, transcription and local OpenCode clients.
+Provider HTTP clients follow redirects only within the original scheme, hostname and effective port. Cross-origin redirects are stopped before credentials or request media can be sent to the next server. The rule is one shared policy in `internal/netpolicy`, applied to every transport (OpenAI-compatible, Gemini, transcription, the local OpenCode client, catalog fetch); the runtime default client is not used anywhere credential logic depends on.
 
 Child process shutdown releases the process group or Windows Job Object before waiting for inherited output pipes. Natural parent exit has a bounded pipe-drain wait, preventing a surviving descendant from holding shutdown indefinitely.
 
@@ -32,7 +32,7 @@ Requested Windows capture protection, successful API readback and universal invi
 
 `vpn.enabled` defaults false, including when the section is absent. The bundled sing-box engine is launched lazily for an enabled AI request. A random authenticated listener is bound to 127.0.0.1, not LAN. The application never enables TUN, sets the Windows system proxy or alters system routing. Imported inbounds/services/routes are not executed. The standalone outbound's necessary DNS is retained; IPv4 endpoint resolution is enforced. The local authenticated handshake is not a reachability/quality check of the remote tunnel.
 
-Native provider transports use the private proxy explicitly. OpenCode gets it in its isolated HTTP_PROXY/HTTPS_PROXY environment. Failure of our enabled VPN path never silently switches to Direct. However this is not an OS-enforced network sandbox for arbitrary code inside OpenCode. A Windows packet trace and the selected provider/SDK combination are required before making stronger egress claims. Regional access policies of providers are not bypassed by application logic.
+Native provider transports use the private proxy explicitly. OpenCode gets it in its isolated HTTP_PROXY/HTTPS_PROXY environment. The child runtime is pinned to the bundled catalog snapshot (`OPENCODE_MODELS_PATH`, remote catalog fetch disabled), so it cannot silently fetch the upstream live model list, and it runs with dedicated isolated HOME/XDG directories rather than the user's profile. Failure of our enabled VPN path never silently switches to Direct. However this is not an OS-enforced network sandbox for arbitrary code inside OpenCode. A Windows packet trace and the selected provider/SDK combination are required before making stronger egress claims. Regional access policies of providers are not bypassed by application logic.
 
 Child process Job Objects control process lifetime, not network permissions. Processes remain visible to Windows tools. Signed/runtime provenance, hashes and upstream licenses are shipped; antivirus/firewall acceptance is not inferred from cross-compilation.
 
