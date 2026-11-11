@@ -3,6 +3,8 @@
 // key this app already owns, and --format stream-json replaces scraping terminal output. The app
 // deliberately delegates model parameters (reasoning effort and anything the harness adds later)
 // to the harness: parameters are passed as flags the harness defines, not re-implemented here.
+// The harness is the connector to arbitrary upstream models, so a screenshot rides along as the
+// CLI's documented `--image <path>` attachment and a vision-capable route answers it.
 package providers
 
 import (
@@ -127,6 +129,16 @@ func (p *EmbeddedHermes) run(ctx context.Context, r Request, credential string) 
 	if err != nil {
 		return "", hermesTokens{}, err
 	}
+	// The CLI takes one local image per query as a file path, so the screenshot is materialized
+	// inside the isolated home for the duration of the call and removed right after it.
+	if len(r.ImageJPEG) > 0 {
+		imageArg, err := writeHermesImage(home, r.ImageJPEG)
+		if err != nil {
+			return "", hermesTokens{}, err
+		}
+		defer os.Remove(imageArg)
+		args = append(args, "--image", imageArg)
+	}
 	timeout := r.ResponseTimeout
 	if timeout <= 0 {
 		timeout = modelhost.StartupTimeout
@@ -201,6 +213,30 @@ func hermesPrompt(r Request) string {
 		return r.UserPrompt
 	}
 	return r.SystemPrompt + "\n\n" + r.UserPrompt
+}
+
+// writeHermesImage materializes the screenshot inside the isolated home so the CLI can attach it
+// by path, which is the only attachment mode `hermes chat` documents for a single query.
+func writeHermesImage(home string, image []byte) (string, error) {
+	fail := &RequestError{Outcome: domain.OutcomeValidationFailed, Message: "Hermes cannot attach the screenshot"}
+	file, err := os.CreateTemp(home, "aioverlay-image-*.jpg")
+	if err != nil {
+		return "", fail
+	}
+	path := file.Name()
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if _, err = file.Write(image); err != nil {
+		file.Close()
+		os.Remove(path)
+		return "", fail
+	}
+	if err = file.Close(); err != nil {
+		os.Remove(path)
+		return "", fail
+	}
+	return path, nil
 }
 
 // hermesModelID accepts "provider/model" and a bare model id like the OpenCode transport, but the

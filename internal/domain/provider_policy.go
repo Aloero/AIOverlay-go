@@ -105,8 +105,11 @@ var policies = map[ProviderKind]ProviderPolicy{
 		Hosted:         true,
 		Gateway:        true,
 		SingleBody:     true,
-		// The single-query CLI has no image input path, so the transport is text-only.
-		Media: MediaPolicy{},
+		// The harness is the connector to arbitrary models, so the single-query CLI carries a
+		// screenshot with `--image <path>` and a routed vision model answers it natively or via
+		// the configured vision tool. Audio has no one-shot CLI input path, so it stays on the
+		// direct/STT routes until a hosted `hermes serve` front is added.
+		Media: MediaPolicy{Image: true},
 		// Overridable per connection: the harness can front any upstream provider.
 		CatalogProviderID: "hermes",
 	},

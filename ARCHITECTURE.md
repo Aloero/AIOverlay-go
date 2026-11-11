@@ -7,7 +7,7 @@ Studio HTML/CSS/JS is compiled into the executable; its JSON requests call the e
 - `config`: validation and portable JSON load/save/import/export.
 - `engine`: graph routing, credential/model selection, admission budgets, cancellation and stream ownership.
 - `providers`: one endpoint attempt; adapter-specific payloads and normalized errors.
-- `modelhost`: who provides models (process or service lifecycle, credential injection, catalog snapshot, served list) behind an `Endpoint`; `modelhost/opencode` is the bundled runtime, `modelhost/hermes` drives the external Hermes Agent CLI as isolated one-shot runs.
+- `modelhost`: who provides models (process or service lifecycle, credential injection, catalog snapshot, served list) behind an `Endpoint`; `modelhost/opencode` is the bundled runtime, `modelhost/hermes` drives the Hermes Agent harness as isolated one-shot CLI runs, discovering its executable under `runtime/hermes` next to the app first, then PATH and the per-user install.
 - `netpolicy`: the outbound rules shared by every transport, so a credential-forwarding decision is not made twice.
 - `control`: UI commands, asynchronous JobManager, capture preview and trace endpoints.
 - `desktop`: Win32 WebView2 host, native export dialog, in-process JSON bridge.
@@ -184,9 +184,14 @@ its response shape is unverified, and guessing it would report "no models" as tr
 Schema 7 adds the delivery application: every connection names the app that fronts it (`direct`,
 `opencode`, `hermes`; migration derives it from the protocol kind, and validation keeps the two in
 agreement), and a model slot may carry `app_params` — parameters only that application interprets,
-forwarded untouched. `internal/modelhost/hermes` drives the external Hermes Agent harness as
-one-shot `hermes chat --safe-mode --provider custom … --format stream-json` runs with an isolated
-`HERMES_HOME`; there is no server to warm, so its `Endpoint` never blocks and its version probe is
+forwarded untouched. `internal/modelhost/hermes` drives the Hermes Agent harness as one-shot
+`hermes chat --safe-mode --provider custom … --format stream-json` runs with an isolated
+`HERMES_HOME`; the executable is resolved bundled-first (`runtime/hermes` next to the app, the same
+layout as OpenCode) so a packaged release is self-contained. The transport is a multimodal
+connector: text routes as-is, and a screenshot rides to a vision route as the CLI's documented
+`--image <path>` attachment (materialized in the isolated home for the call's duration); audio has
+no one-shot CLI input, so it stays on direct/STT routes pending a hosted `hermes serve` front.
+There is no server to warm, so its `Endpoint` never blocks and its version probe is
 a cached `--version` call that runs only when a connection is actually registered through the
 harness. `GET /api/universe` then serves the single model-settings surface (apps with live
 availability, providers with registration and key state, selectable models) by joining the same

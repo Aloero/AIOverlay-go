@@ -53,7 +53,8 @@ func TestHermesProviderIsValid(t *testing.T) {
 		t.Fatalf("hermes provider rejected: %v", err)
 	}
 	policy := domain.Policy(domain.ProviderEmbeddedHermes)
-	if !policy.Hosted || !policy.SingleBody || policy.Media.Image || policy.TransportLabel != "Via Hermes" {
+	// The harness is the multimodal connector: it carries images (--image) but not audio.
+	if !policy.Hosted || !policy.SingleBody || !policy.Media.Image || policy.Media.Audio || policy.TransportLabel != "Via Hermes" {
 		t.Fatalf("unexpected hermes policy: %+v", policy)
 	}
 	if got := (domain.ProviderConfig{Kind: domain.ProviderEmbeddedHermes}).DeliveryApp(); got != domain.AppHermes {

@@ -8,6 +8,7 @@ package hermes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,21 +48,84 @@ func New(cfg Config) *Host {
 
 func (h *Host) ID() string { return HostID }
 
-// Executable resolves the hermes binary. On Windows the installer may expose `hermes.exe` or a
-// `hermes.cmd` shim; LookPath consults PATHEXT for the bare name first, so only the .cmd case
-// needs a fallback.
+// Executable resolves the hermes binary in a fixed order:
+//  1. an explicit override (Config.Binary, seeded from AIOVERLAY_HERMES_BIN) - tests and
+//     non-standard installs point straight at the file;
+//  2. the runtime/hermes bundle the release archive ships next to the executable, the same
+//     layout as the embedded OpenCode runtime, so the connector is used without any user
+//     install; the executable's directory wins because the overlay also starts from Task
+//     Scheduler, whose working directory is not the app folder, then a relative path for tests;
+//  3. PATH, then the per-user install.ps1 layout (%LOCALAPPDATA%\hermes\bin) for a machine that
+//     installed Hermes outside our bundle.
+//
+// On Windows the harness may be exposed as `hermes.exe` or a `hermes.cmd` shim; LookPath
+// consults PATHEXT for the bare name, so only the direct-path checks need both spellings.
 func (h *Host) Executable() (string, error) {
-	name := h.cfg.Binary
-	if name == "" {
-		name = "hermes"
+	if override := strings.TrimSpace(h.cfg.Binary); override != "" {
+		for _, name := range []string{override, override + ".cmd"} {
+			if st, err := os.Stat(name); err == nil && !st.IsDir() {
+				return filepath.Abs(name)
+			}
+		}
+		if p, err := exec.LookPath(override); err == nil {
+			return p, nil
+		}
+		// An explicit override is a statement of intent: falling back to another copy would
+		// hide a typo or a removed install, so an unusable override is the error.
+		return "", fmt.Errorf("configured Hermes executable %q is not usable", override)
 	}
-	if p, err := exec.LookPath(name); err == nil {
+	if p, ok := h.bundled(); ok {
 		return p, nil
 	}
-	if p, err := exec.LookPath(name + ".cmd"); err == nil {
-		return p, nil
+	for _, p := range []string{"hermes", "hermes.cmd"} {
+		if found, err := exec.LookPath(p); err == nil {
+			return found, nil
+		}
 	}
-	return "", errors.New("Hermes is not installed or not on PATH")
+	if local := localInstallDir(); local != "" {
+		for _, name := range []string{"hermes.exe", "hermes.cmd", "hermes"} {
+			p := filepath.Join(local, name)
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return p, nil
+			}
+		}
+	}
+	return "", errors.New("Hermes is not installed: bundle it under runtime/hermes or put it on PATH")
+}
+
+// bundled finds the runtime/hermes executable shipped next to the app, mirroring the OpenCode
+// host's lookup so a packaged release is self-contained.
+func (h *Host) bundled() (string, bool) {
+	candidates := []string{}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		candidates = append(candidates,
+			filepath.Join(dir, "runtime", "hermes", "hermes.exe"),
+			filepath.Join(dir, "runtime", "hermes", "hermes.cmd"),
+			filepath.Join(dir, "runtime", "hermes", "hermes"))
+	}
+	candidates = append(candidates,
+		filepath.Join("runtime", "hermes", "hermes.exe"),
+		filepath.Join("runtime", "hermes", "hermes.cmd"),
+		filepath.Join("runtime", "hermes", "hermes"))
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			if abs, err := filepath.Abs(p); err == nil {
+				return abs, true
+			}
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// localInstallDir is where the PowerShell installer drops the CLI entrypoint; empty when the
+// environment variable is absent (non-Windows, or a stripped environment).
+func localInstallDir() string {
+	if root := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); root != "" {
+		return filepath.Join(root, "hermes", "bin")
+	}
+	return ""
 }
 
 // Home returns the isolated profile directory, creating it on first use. A one-shot safe-mode

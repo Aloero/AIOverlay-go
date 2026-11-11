@@ -111,6 +111,62 @@ printf '{"type":"result","session_id":"s","exit_code":0,"text":"hello","tokens":
 	}
 }
 
+func TestHermesImageAttachmentRemoved(t *testing.T) {
+	adapter, argsPath := hermesFixture(t, `printf '%s\n' "$@" > "$AIO_TEST_ARGS"
+prev=""
+for a in "$@"; do
+	if [ "$prev" = "--image" ]; then cp "$a" "$AIO_TEST_IMAGE"; fi
+	prev="$a"
+done
+cat > /dev/null
+printf '{"type":"system","subtype":"init","model":"m","session_id":"s"}\n'
+printf '{"type":"result","session_id":"s","exit_code":0,"text":"ok","tokens":{"input":1,"output":2,"total":3}}\n'`)
+	imagePath := filepath.Join(t.TempDir(), "received.jpg")
+	t.Setenv("AIO_TEST_IMAGE", imagePath)
+	if !adapter.Capabilities().Image {
+		t.Fatal("hermes transport does not accept images")
+	}
+	_, _, err := collect(t, adapter, Request{ModelID: "openrouter/m", UserPrompt: "what is on screen", ImageJPEG: []byte("fake-jpeg-bytes")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(imagePath)
+	if err != nil {
+		t.Fatalf("CLI never saw the attachment: %v", err)
+	}
+	if string(body) != "fake-jpeg-bytes" {
+		t.Fatalf("attachment bytes %q", body)
+	}
+	// The path in argv is the temp file itself; after the call the adapter must have removed it.
+	lines := strings.Split(readArgs(t, argsPath), "\n")
+	for i, line := range lines {
+		if line != "--image" {
+			continue
+		}
+		if i+1 >= len(lines) {
+			t.Fatal("--image without a path")
+		}
+		if _, err := os.Stat(lines[i+1]); !os.IsNotExist(err) {
+			t.Fatalf("screenshot temp file survived the call: %s", lines[i+1])
+		}
+		return
+	}
+	t.Fatalf("args missing --image:\n%s", strings.Join(lines, " "))
+}
+
+func TestHermesTextOnlyRequestHasNoImageFlag(t *testing.T) {
+	adapter, argsPath := hermesFixture(t, `printf '%s\n' "$@" > "$AIO_TEST_ARGS"
+cat > /dev/null
+printf '{"type":"system","subtype":"init","model":"m","session_id":"s"}\n'
+printf '{"type":"result","session_id":"s","exit_code":0,"text":"ok","tokens":{"input":1,"output":2,"total":3}}\n'`)
+	if _, _, err := collect(t, adapter, Request{ModelID: "openrouter/m", UserPrompt: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if args := readArgs(t, argsPath); strings.Contains(args, "--image") {
+		t.Fatalf("text-only call attached an image:\n%s", args)
+	}
+}
+
 func TestHermesResultErrorMapping(t *testing.T) {
 	adapter, _ := hermesFixture(t, `cat > /dev/null
 printf '{"type":"result","session_id":"s","exit_code":1,"error":"HTTP 429: rate limit exceeded"}\n'
