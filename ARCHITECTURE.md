@@ -187,10 +187,12 @@ agreement), and a model slot may carry `app_params` — parameters only that app
 forwarded untouched. `internal/modelhost/hermes` drives the Hermes Agent harness as one-shot
 `hermes chat --safe-mode --provider custom … --format stream-json` runs with an isolated
 `HERMES_HOME`; the executable is resolved bundled-first (`runtime/hermes` next to the app, the same
-layout as OpenCode) so a packaged release is self-contained. The transport is a multimodal
-connector: text routes as-is, and a screenshot rides to a vision route as the CLI's documented
-`--image <path>` attachment (materialized in the isolated home for the call's duration); audio has
-no one-shot CLI input, so it stays on direct/STT routes pending a hosted `hermes serve` front.
+layout as OpenCode) so a packaged release is self-contained. The harness is the connector to
+arbitrary upstream models; the adapter sends the screenshot as the CLI's documented `--image
+<path>` attachment whenever the transport declares image support, but the gateway authority that
+answers headless one-shot runs rejects that flag on the current harness build (verified on the
+installed 2026.9.24 stable), so the policy keeps the route text-only until the front can carry
+pixels — audio likewise stays on direct/STT routes pending a hosted `hermes serve` front.
 There is no server to warm, so its `Endpoint` never blocks and its version probe is
 a cached `--version` call that runs only when a connection is actually registered through the
 harness. `GET /api/universe` then serves the single model-settings surface (apps with live

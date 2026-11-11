@@ -111,7 +111,7 @@ printf '{"type":"result","session_id":"s","exit_code":0,"text":"hello","tokens":
 	}
 }
 
-func TestHermesImageAttachmentRemoved(t *testing.T) {
+func TestHermesImageAttachmentSentWhenPolicyAllows(t *testing.T) {
 	adapter, argsPath := hermesFixture(t, `printf '%s\n' "$@" > "$AIO_TEST_ARGS"
 prev=""
 for a in "$@"; do
@@ -121,37 +121,57 @@ done
 cat > /dev/null
 printf '{"type":"system","subtype":"init","model":"m","session_id":"s"}\n'
 printf '{"type":"result","session_id":"s","exit_code":0,"text":"ok","tokens":{"input":1,"output":2,"total":3}}\n'`)
-	imagePath := filepath.Join(t.TempDir(), "received.jpg")
-	t.Setenv("AIO_TEST_IMAGE", imagePath)
-	if !adapter.Capabilities().Image {
-		t.Fatal("hermes transport does not accept images")
+	if adapter.Capabilities().Image {
+		// The harness front gained pixel support: the attachment path must light up.
+		imagePath := filepath.Join(t.TempDir(), "received.jpg")
+		t.Setenv("AIO_TEST_IMAGE", imagePath)
+		if _, _, err := collect(t, adapter, Request{ModelID: "openrouter/m", UserPrompt: "what is on screen", ImageJPEG: []byte("fake-jpeg-bytes")}); err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(imagePath)
+		if err != nil {
+			t.Fatalf("CLI never saw the attachment: %v", err)
+		}
+		if string(body) != "fake-jpeg-bytes" {
+			t.Fatalf("attachment bytes %q", body)
+		}
+		// The path in argv is the temp file itself; after the call the adapter must have removed it.
+		lines := strings.Split(readArgs(t, argsPath), "\n")
+		for i, line := range lines {
+			if line == "--image" && i+1 < len(lines) {
+				if _, err := os.Stat(lines[i+1]); !os.IsNotExist(err) {
+					t.Fatalf("screenshot temp file survived the call: %s", lines[i+1])
+				}
+				return
+			}
+		}
+		t.Fatalf("args missing --image:\n%s", strings.Join(lines, " "))
 	}
-	_, _, err := collect(t, adapter, Request{ModelID: "openrouter/m", UserPrompt: "what is on screen", ImageJPEG: []byte("fake-jpeg-bytes")})
+	// Current harness builds: the gateway authority rejects --image for headless one-shot runs
+	// (verified on the installed 2026.9.24 stable), so the adapter must degrade to text and
+	// never fail a vision job on an option the transport did not declare.
+	if _, _, err := collect(t, adapter, Request{ModelID: "openrouter/m", UserPrompt: "what is on screen", ImageJPEG: []byte("fake-jpeg-bytes")}); err != nil {
+		t.Fatal(err)
+	}
+	if args := readArgs(t, argsPath); strings.Contains(args, "--image") {
+		t.Fatalf("image attached although the policy is text-only:\n%s", args)
+	}
+}
+
+func TestHermesWriteImageRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path, err := writeHermesImage(dir, []byte("jpeg-bytes"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(imagePath)
-	if err != nil {
-		t.Fatalf("CLI never saw the attachment: %v", err)
+	if !filepath.IsAbs(path) {
+		t.Fatalf("attachment path not absolute: %s", path)
 	}
-	if string(body) != "fake-jpeg-bytes" {
-		t.Fatalf("attachment bytes %q", body)
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "jpeg-bytes" {
+		t.Fatalf("attachment content %q (%v)", body, err)
 	}
-	// The path in argv is the temp file itself; after the call the adapter must have removed it.
-	lines := strings.Split(readArgs(t, argsPath), "\n")
-	for i, line := range lines {
-		if line != "--image" {
-			continue
-		}
-		if i+1 >= len(lines) {
-			t.Fatal("--image without a path")
-		}
-		if _, err := os.Stat(lines[i+1]); !os.IsNotExist(err) {
-			t.Fatalf("screenshot temp file survived the call: %s", lines[i+1])
-		}
-		return
-	}
-	t.Fatalf("args missing --image:\n%s", strings.Join(lines, " "))
+	os.Remove(path)
 }
 
 func TestHermesTextOnlyRequestHasNoImageFlag(t *testing.T) {

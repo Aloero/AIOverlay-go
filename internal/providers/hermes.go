@@ -3,8 +3,10 @@
 // key this app already owns, and --format stream-json replaces scraping terminal output. The app
 // deliberately delegates model parameters (reasoning effort and anything the harness adds later)
 // to the harness: parameters are passed as flags the harness defines, not re-implemented here.
-// The harness is the connector to arbitrary upstream models, so a screenshot rides along as the
-// CLI's documented `--image <path>` attachment and a vision-capable route answers it.
+// The harness is the connector to arbitrary models; the screenshot is passed as the CLI's
+// documented `--image <path>` attachment as soon as the transport declares image support (the
+// gateway authority of the current harness build rejects that flag for headless runs, so the
+// policy keeps the route text-only until the front can carry pixels).
 package providers
 
 import (
@@ -130,8 +132,11 @@ func (p *EmbeddedHermes) run(ctx context.Context, r Request, credential string) 
 		return "", hermesTokens{}, err
 	}
 	// The CLI takes one local image per query as a file path, so the screenshot is materialized
-	// inside the isolated home for the duration of the call and removed right after it.
-	if len(r.ImageJPEG) > 0 {
+	// inside the isolated home for the duration of the call and removed right after it. Only
+	// transports whose media policy carries images reach this with bytes attached; the flag is
+	// sent conditionally because the gateway authority rejects `--image` for headless one-shot
+	// runs on the current harness build, and a route must never fail on an option it declared.
+	if len(r.ImageJPEG) > 0 && p.Capabilities().Image {
 		imageArg, err := writeHermesImage(home, r.ImageJPEG)
 		if err != nil {
 			return "", hermesTokens{}, err

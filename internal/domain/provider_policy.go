@@ -105,11 +105,13 @@ var policies = map[ProviderKind]ProviderPolicy{
 		Hosted:         true,
 		Gateway:        true,
 		SingleBody:     true,
-		// The harness is the connector to arbitrary models, so the single-query CLI carries a
-		// screenshot with `--image <path>` and a routed vision model answers it natively or via
-		// the configured vision tool. Audio has no one-shot CLI input path, so it stays on the
-		// direct/STT routes until a hosted `hermes serve` front is added.
-		Media: MediaPolicy{Image: true},
+		// The harness is the connector to arbitrary models, and the CLI documents `--image
+		// <path>` for a single query — the adapter materializes the screenshot and passes it.
+		// However, the gateway authority that answers headless one-shot runs (checked on the
+		// installed 2026.9.24 stable, and still on main) refuses `--image` there ("use
+		// `hermes --tui` or the Desktop app"), so until the front can carry pixels the route
+		// stays text-only and vision jobs are not offered through it.
+		Media: MediaPolicy{},
 		// Overridable per connection: the harness can front any upstream provider.
 		CatalogProviderID: "hermes",
 	},
