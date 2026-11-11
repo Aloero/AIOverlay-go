@@ -1,6 +1,9 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"aioverlay/internal/domain"
@@ -73,4 +76,49 @@ func containsApp(apps []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// The lazy-loading rule: opening the settings page must not launch a harness the user has not
+// registered through. Only a registered Hermes connection may pay for `hermes --version`; the
+// chip itself is allowed the cheap executable lookup, because the page offers registration.
+func TestUniverseBootsHarnessesOnlyWhenRegistered(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "hermes")
+	body := "#!/bin/sh\necho called >> \"" + log + "\"\necho hermes-test 1.0\n"
+	if runtime.GOOS == "windows" {
+		script += ".cmd"
+		body = "@echo off\r\necho called>>\"" + log + "\"\r\necho hermes-test 1.0\r\n"
+	}
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AIOVERLAY_HERMES_BIN", script)
+
+	a := studioTestApp(t)
+	universe := a.Universe()
+	if _, err := os.Stat(log); err == nil {
+		t.Fatal("hermes was launched although no provider is registered through it")
+	}
+	for _, item := range universe.Apps {
+		if item.ID == string(domain.AppHermes) && !item.Available {
+			t.Fatalf("the PATH-resolvable harness must read available for registration: %+v", item)
+		}
+	}
+
+	a.mu.Lock()
+	a.cfg.Providers = append(a.cfg.Providers, domain.ProviderConfig{
+		ID: "hermes-x", Label: "Hermes X", Kind: domain.ProviderEmbeddedHermes,
+		App: domain.AppHermes, Enabled: true, BaseURL: "https://upstream.test/v1",
+	})
+	a.mu.Unlock()
+	universe = a.Universe()
+	if _, err := os.Stat(log); err != nil {
+		t.Fatal("a registered hermes connection must version-probe its harness")
+	}
+	for _, item := range universe.Apps {
+		if item.ID == string(domain.AppHermes) && item.Version == "" {
+			t.Fatalf("the registered harness version must be shown: %+v", item)
+		}
+	}
 }

@@ -46,7 +46,16 @@ func (a *App) Universe() contracts.Universe {
 	if _, err := probe.Executable(); err == nil {
 		hermesAvailable = true
 	}
-	apps = append(apps, contracts.UniverseApp{ID: string(domain.AppHermes), Label: "Hermes", Available: hermesAvailable, Version: probe.Version()})
+	// The version probe is the one part that launches a process. The lazy-loading rule says a
+	// runtime is only started when an application registered through it exists — a LookPath on
+	// an unregistered harness stays, so the page can still offer registration through it.
+	hermesVersion := ""
+	if hermesAvailable && slices.ContainsFunc(cfg.Providers, func(p domain.ProviderConfig) bool {
+		return p.Enabled && p.DeliveryApp() == domain.AppHermes
+	}) {
+		hermesVersion = probe.Version()
+	}
+	apps = append(apps, contracts.UniverseApp{ID: string(domain.AppHermes), Label: "Hermes", Available: hermesAvailable, Version: hermesVersion})
 
 	// Models: every configured route, deduplicated per catalog reference, with the union of
 	// applications that can carry it.

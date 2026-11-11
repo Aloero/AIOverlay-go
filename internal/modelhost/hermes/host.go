@@ -38,7 +38,12 @@ type Host struct {
 	probed  bool
 }
 
-func New(cfg Config) *Host { return &Host{cfg: cfg} }
+func New(cfg Config) *Host {
+	if cfg.Binary == "" {
+		cfg.Binary = strings.TrimSpace(os.Getenv("AIOVERLAY_HERMES_BIN"))
+	}
+	return &Host{cfg: cfg}
+}
 
 func (h *Host) ID() string { return HostID }
 
@@ -95,7 +100,13 @@ func (h *Host) Version() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	// A .cmd shim cannot be launched directly (CreateProcess); the version probe must route it
+	// through cmd.exe the same way the request transport does.
+	cmd := exec.CommandContext(ctx, path, "--version")
+	if ext := strings.ToLower(filepath.Ext(path)); ext == ".cmd" || ext == ".bat" {
+		cmd = exec.CommandContext(ctx, "cmd.exe", "/d", "/c", path, "--version")
+	}
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
