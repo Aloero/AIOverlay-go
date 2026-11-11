@@ -38,8 +38,10 @@ function updateApplyState(){
  if(!state.config)return;
  const dirtyNow=appliedConfig?configDigest(state.config)!==appliedJSON:state.dirty;
  state.dirty=dirtyNow;
- const indicator=$('#saveState');if(indicator){indicator.className='save-state'+(dirtyNow?' dirty':'');indicator.innerHTML='<i></i>'+(dirtyNow?'Черновик':'Применено');}
- const save=$('#saveConfig');if(save){save.disabled=!!savePromise||!!importPromise||!!state.job?.running;save.title=state.job?.running?'Сначала остановите текущий запрос. Черновик можно редактировать.':'Сохранить config.json и применить к следующему снимку (Ctrl+S)';}
+ // Индикатор и кнопка живут только вместе с черновиком: «Применено» — не то
+ // состояние, которое стоит показывать, а кнопка без сохранения бессмысленна.
+ const indicator=$('#saveState');if(indicator){indicator.className='save-state'+(dirtyNow?' dirty':' hidden');indicator.innerHTML='<i></i>Черновик';}
+ const save=$('#saveConfig');if(save){save.classList.toggle('hidden',!dirtyNow);save.disabled=!!savePromise||!!importPromise||!!state.job?.running;save.title=state.job?.running?'Сначала остановите текущий запрос. Черновик можно редактировать.':'Сохранить config.json и применить к следующему снимку (Ctrl+S)';}
  const applied=appliedConfig?.pipelines.find(p=>p.id===appliedConfig.active_pipeline_id),summary=$('#appliedSummary');
  if(summary){summary.textContent='Следующий снимок: '+(applied?.name||'—');summary.title='Оверлей использует сохранённую конфигурацию, а не открытый черновик.';}
  const hint=$('#applyHint');if(hint){hint.textContent=state.job?.running?'Запрос выполняется. Применение доступно после завершения.':dirtyNow?'Изменения ещё не применены.':'Сохранённая конфигурация';hint.classList.toggle('warning-text',dirtyNow);}

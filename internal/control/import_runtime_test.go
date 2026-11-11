@@ -31,6 +31,7 @@ func (backend *importAwareBackend) RunBenchmark(context.Context, BenchmarkReques
 	return BenchmarkReport{}, nil
 }
 func (backend *importAwareBackend) Traces() []domain.ExecutionTrace { return nil }
+func (backend *importAwareBackend) Readiness() ReadinessReport      { return ReadinessReport{} }
 func (backend *importAwareBackend) ImportConfig(cfg domain.Config) error {
 	backend.imported = true
 	backend.cfg = cfg

@@ -10,3 +10,4 @@ type BenchmarkRun = contracts.BenchmarkRun
 type BenchmarkReport = contracts.BenchmarkReport
 type TestRequest = contracts.TestRequest
 type StudioState = contracts.StudioState
+type ReadinessReport = contracts.ReadinessReport

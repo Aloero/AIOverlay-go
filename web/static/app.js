@@ -68,12 +68,10 @@ function guarded(fn) {return (...args) => Promise.resolve().then(() => fn(...arg
 function dirty() {
  configRevision++;
  state.dirty = true;
- $('#saveState').className = 'save-state dirty'; $('#saveState').innerHTML = '<i></i>Есть изменения';
  recordDraft();
 }
 function saved() {
  state.dirty = false;
- $('#saveState').className = 'save-state'; $('#saveState').innerHTML = '<i></i>Сохранено';
  updateApplyState();
 }
 function pipe() {return state.config.pipelines.find(p => p.id === state.pipeline) || state.config.pipelines[0];}

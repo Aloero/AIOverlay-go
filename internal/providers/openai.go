@@ -28,6 +28,21 @@ func NewOpenAI(cfg domain.ProviderConfig, resolver ...ProxyResolver) *OpenAIComp
 	}
 	return &OpenAICompatible{cfg: cfg, client: &http.Client{CheckRedirect: checkProviderRedirect}, proxy: proxy}
 }
+
+// Capabilities is this adapter's own declaration of what it can carry. It is reported to the
+// scheduler and to Studio, so no layer has to infer modality support from the provider's name.
+func (p *OpenAICompatible) Capabilities() MediaCapabilities { return Media(p.cfg) }
+
+func init() {
+	Register(Factory{
+		Kind: domain.ProviderOpenAICompatible,
+		New: func(p domain.ProviderConfig, deps Deps) (Provider, MediaCapabilities, error) {
+			adapter := NewOpenAI(p, deps.Proxy)
+			return adapter, adapter.Capabilities(), nil
+		},
+	})
+}
+
 func (p *OpenAICompatible) ID() string { return p.cfg.ID }
 
 func (p *OpenAICompatible) Stream(ctx context.Context, r Request, credential string) (<-chan Event, <-chan error) {

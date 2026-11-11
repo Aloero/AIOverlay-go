@@ -32,6 +32,20 @@ func NewOpenAILive(cfg domain.ProviderConfig, proxy ProxyResolver) *OpenAILive {
 	return &OpenAILive{cfg: cfg, connector: newRealtimeConnector(proxy, timeout)}
 }
 
+// Capabilities is this adapter's own declaration of what it can carry. It is reported to the
+// scheduler and to Studio, so no layer has to infer modality support from the provider's name.
+func (provider *OpenAILive) Capabilities() MediaCapabilities { return Media(provider.cfg) }
+
+func init() {
+	Register(Factory{
+		Kind: domain.ProviderOpenAILive,
+		New: func(p domain.ProviderConfig, deps Deps) (Provider, MediaCapabilities, error) {
+			adapter := NewOpenAILive(p, deps.Proxy)
+			return adapter, adapter.Capabilities(), nil
+		},
+	})
+}
+
 func (provider *OpenAILive) ID() string { return provider.cfg.ID }
 
 func (provider *OpenAILive) Stream(context.Context, Request, string) (<-chan Event, <-chan error) {

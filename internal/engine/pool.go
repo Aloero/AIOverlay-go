@@ -260,7 +260,10 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 	if pool.Task == "transcribe" {
 		input.image = nil
 	}
-	caps := providers.Media(pc)
+	// The registry answers first: an adapter may declare less than its kind table allows, and the
+	// transport that will speak the protocol is the authority. selection.go, which has no registry,
+	// keeps reading the table - the same facts, with the same default answer.
+	caps := r.engine.registry.Media(pc)
 	if caps.TranscriptionOnly && pool.Task != "transcribe" {
 		return "", domain.OutcomeUnsupportedModality, &providers.RequestError{Outcome: domain.OutcomeUnsupportedModality, Message: "Choose a transcription stage for this transport"}
 	}
@@ -296,11 +299,10 @@ func (r *runner) attemptModel(ctx context.Context, n domain.Node, pool domain.Mo
 	}
 	keys := r.allowedCredentials(m.ProviderID, r.engine.orderCredentials(m.ProviderID, pc.CredentialPool))
 	if len(keys) == 0 {
-		switch {
-		case pc.Kind == domain.ProviderEmbeddedOpenCode && (pc.OpenCodeProviderID == "" || pc.OpenCodeProviderID == "opencode"):
-			keys = []domain.Credential{{ID: "keyless", Enabled: true}}
-		case pc.Kind == domain.ProviderLocalSTT:
-			keys = []domain.Credential{{ID: "local", Enabled: true}}
+		// Which connections may run with no key, and what that key is called, is a fact about the
+		// kind plus the upstream it fronts - see domain.ProviderConfig.AnonymousCredential.
+		if anonymous, ok := pc.AnonymousCredential(); ok {
+			keys = []domain.Credential{anonymous}
 		}
 	}
 	limit := pc.CredentialPool.MaxKeysPerRequest

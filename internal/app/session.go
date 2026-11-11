@@ -157,7 +157,7 @@ func (a *App) PreviewLocalSTT(ctx context.Context, audioConfig domain.AudioSourc
 		}
 	}
 	a.mu.RUnlock()
-	if !found || providerConfig.Kind != domain.ProviderLocalSTT || providerConfig.LocalSTT == nil {
+	if !found || !domain.Policy(providerConfig.Kind).LocalRuntime || providerConfig.LocalSTT == nil {
 		return session.LocalSTTPreview{}, fmt.Errorf("enabled local STT provider %q not found", providerID)
 	}
 	adapter, ok := registry.Get(providerID)

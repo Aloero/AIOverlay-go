@@ -24,13 +24,13 @@ func TestOpenCodeDisabledAndPaidModelsNotReadyWithoutKey(t *testing.T) {
 	}
 	cfg := config.Default()
 	for _, r := range s.Routes(cfg) {
-		if r.Transport == "Via OpenCode" && !r.Model.Free && r.Ready {
+		if r.Transport == "Via OpenCode" && !r.Model.Free && r.Ready() {
 			t.Fatal("paid model ready without key")
 		}
 	}
 	cfg.Providers[0].Enabled = false
 	for _, r := range s.Routes(cfg) {
-		if r.ConfigID == cfg.Providers[0].ID && r.Ready {
+		if r.ConfigID == cfg.Providers[0].ID && r.Ready() {
 			t.Fatal("disabled keyless route ready")
 		}
 	}

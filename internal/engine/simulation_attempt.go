@@ -1,8 +1,10 @@
 package engine
 
 import (
-	"aioverlay/internal/domain"
 	"fmt"
+
+	"aioverlay/internal/domain"
+	"aioverlay/internal/providers"
 )
 
 func (s *simulator) admit(n domain.Node, c *simChain) error {
@@ -43,11 +45,8 @@ func (s *simulator) admit(n domain.Node, c *simChain) error {
 		if c.ref.CredentialAlias == "" {
 			c.ref.CredentialAlias = k.ID
 		}
-		switch c.provider.Kind {
-		case domain.ProviderEmbeddedOpenCode:
-			c.ref.Transport = "Via OpenCode"
-		case domain.ProviderLocalSTT:
-			c.ref.Transport = "Local STT"
+		if label := domain.Policy(c.provider.Kind).TransportLabel; label != "" {
+			c.ref.Transport = label
 		}
 		s.emit(domain.TraceEvent{Kind: "attempt_start", NodeID: n.ID, Attempt: c.ref})
 		key := n.ID + "/" + c.model.ProviderID + "/" + c.model.ModelID
@@ -69,7 +68,11 @@ func (s *simulator) admit(n domain.Node, c *simChain) error {
 		if c.text == "" {
 			c.text = "42"
 		}
-		buffered := c.provider.Kind == domain.ProviderEmbeddedOpenCode
+		// A simulated run must model the same delivery shape the real transport has, or the
+		// first-token outcome it predicts would not be the one the user gets. The adapter is the
+		// only authority on that, and answering costs no request.
+		adapter, _ := s.r.engine.registry.Get(c.provider.ID)
+		buffered := !providers.StreamsTokens(c.provider, adapter)
 		if c.outcome == domain.OutcomeTimeout || script.DurationMS > lim.ResponseMS {
 			c.finish = s.now + int64(lim.ResponseMS)
 			c.outcome = domain.OutcomeTimeout

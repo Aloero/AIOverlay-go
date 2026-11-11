@@ -23,3 +23,14 @@ func (s *Server) handleCatalogSelection(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, page)
 }
+
+// handleReadiness serves the aggregated "почему не готово" report. It is read-only and assembles
+// verdicts the layers already hold, so no request goes out and no state changes - the panel a user
+// opens while something is broken must never itself be a thing that can break a run.
+func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, s.backend.Readiness())
+}

@@ -43,6 +43,6 @@ func (a *App) ProbeConnection(ctx context.Context, req engine.ConnectionProbe, o
 	e := a.engine
 	a.mu.RUnlock()
 	result, err := e.Probe(ctx, req, opt)
-	a.recordRecentUsage(result.Trace)
+	a.recordAttemptEvidence(result.Trace)
 	return result, err
 }

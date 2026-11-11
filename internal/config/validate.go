@@ -80,7 +80,7 @@ func Validate(cfg domain.Config) error {
 }
 
 func validateCredentials(p domain.ProviderConfig) error {
-	if p.Kind == domain.ProviderLocalSTT && len(p.CredentialPool.Keys) != 0 {
+	if domain.Policy(p.Kind).ForbidsKeys && len(p.CredentialPool.Keys) != 0 {
 		return fmt.Errorf("provider %s local STT does not use credentials", p.ID)
 	}
 	ids := map[string]struct{}{}
@@ -218,7 +218,7 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 			if !ok {
 				return fmt.Errorf("pool %s catalog references unknown provider %q", nodeID, id)
 			}
-			if kind.Kind == domain.ProviderOpenAILive {
+			if domain.Policy(kind.Kind).RealtimeProtocol {
 				return fmt.Errorf("pool %s cannot use persistent OpenAI Live as a stateless catalog route", nodeID)
 			}
 			if seenProviders[id] {
@@ -246,7 +246,7 @@ func validatePool(pipelineID, nodeID string, pool *domain.ModelPoolConfig, provi
 		if !ok {
 			return fmt.Errorf("pipeline %s pool %s references unknown provider %q", pipelineID, nodeID, m.ProviderID)
 		}
-		if kind.Kind == domain.ProviderOpenAILive {
+		if domain.Policy(kind.Kind).RealtimeProtocol {
 			return fmt.Errorf("pipeline %s pool %s cannot use persistent OpenAI Live as an ordinary model call", pipelineID, nodeID)
 		}
 		if strings.TrimSpace(m.ModelID) == "" {

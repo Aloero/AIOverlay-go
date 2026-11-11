@@ -27,6 +27,21 @@ func NewGemini(cfg domain.ProviderConfig, resolver ...ProxyResolver) *Gemini {
 	}
 	return &Gemini{cfg: cfg, client: &http.Client{CheckRedirect: checkProviderRedirect}, proxy: proxy}
 }
+
+// Capabilities is this adapter's own declaration of what it can carry. It is reported to the
+// scheduler and to Studio, so no layer has to infer modality support from the provider's name.
+func (p *Gemini) Capabilities() MediaCapabilities { return Media(p.cfg) }
+
+func init() {
+	Register(Factory{
+		Kind: domain.ProviderGemini,
+		New: func(p domain.ProviderConfig, deps Deps) (Provider, MediaCapabilities, error) {
+			adapter := NewGemini(p, deps.Proxy)
+			return adapter, adapter.Capabilities(), nil
+		},
+	})
+}
+
 func (p *Gemini) ID() string { return p.cfg.ID }
 func (p *Gemini) Stream(ctx context.Context, r Request, key string) (<-chan Event, <-chan error) {
 	e := make(chan Event, 16)

@@ -352,6 +352,11 @@ type ModelMeta struct {
 	OutputCost       float64  `json:"output_cost"`
 	Ready            bool     `json:"ready"`
 	Status           string   `json:"status"`
+	// Evidence is the strongest layer that asserted readiness; Blockers explains why it is not ready.
+	// "ready: false" without them could not distinguish an unconfigured connection from a model the
+	// runtime refused a minute ago, which is the difference the user acts on.
+	Evidence Provenance `json:"evidence,omitempty"`
+	Blockers []Blocker  `json:"blockers,omitempty"`
 }
 
 func (m ModelMeta) HasImageInput() bool {

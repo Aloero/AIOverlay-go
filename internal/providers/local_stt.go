@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"aioverlay/internal/childprocess"
 	"aioverlay/internal/domain"
 )
 
@@ -28,6 +29,20 @@ type LocalSTT struct {
 }
 
 func NewLocalSTT(cfg domain.ProviderConfig) *LocalSTT { return &LocalSTT{cfg: cfg} }
+
+// Capabilities is this adapter's own declaration of what it can carry. It is reported to the
+// scheduler and to Studio, so no layer has to infer modality support from the provider's name.
+func (provider *LocalSTT) Capabilities() MediaCapabilities { return Media(provider.cfg) }
+
+func init() {
+	Register(Factory{
+		Kind: domain.ProviderLocalSTT,
+		New: func(p domain.ProviderConfig, deps Deps) (Provider, MediaCapabilities, error) {
+			adapter := NewLocalSTT(p)
+			return adapter, adapter.Capabilities(), nil
+		},
+	})
+}
 
 func (provider *LocalSTT) ID() string        { return provider.cfg.ID }
 func (provider *LocalSTT) Incremental() bool { return false }
@@ -159,7 +174,7 @@ func (provider *LocalSTT) helperCommand() (*exec.Cmd, error) {
 	command := exec.Command(helperPath, append([]string(nil), cfg.Args...)...)
 	configureHiddenChild(command)
 	command.Dir = filepath.Dir(helperPath)
-	command.Env = append(sanitizedEnv(),
+	command.Env = append(childprocess.SanitizedEnv(),
 		"AIO_STT_PROTOCOL="+localSTTProtocol,
 		"AIO_STT_MODEL="+modelPath,
 		"AIO_STT_MODEL_ID="+cfg.ModelID,

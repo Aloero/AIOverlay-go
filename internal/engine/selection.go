@@ -76,7 +76,7 @@ func PlanMediaPool(cfg domain.Config, cat *catalog.Service, pool domain.ModelPoo
 				continue
 			}
 			seen[key] = true
-			if !route.Ready {
+			if !route.Ready() {
 				plan.Skipped["not_configured"]++
 				continue
 			}

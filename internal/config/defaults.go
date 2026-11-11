@@ -106,9 +106,9 @@ func defaultRequestDefaults() domain.RequestDefaults {
 
 func strongVisionModels() []domain.ModelSlot {
 	return []domain.ModelSlot{
-		{ID: "mimo", ProviderID: "opencode", ModelID: "opencode/mimo-v2.5-free", Enabled: true, Priority: 100, Weight: 1.4, QualityScore: 90, TimeoutMS: 14000, FirstTokenTimeoutMS: 8000, MaxAttempts: 1},
-		{ID: "muse13", ProviderID: "opencode", ModelID: "opencode/muse-spark-1.3-contributor-free", Enabled: true, Priority: 90, Weight: 1.0, QualityScore: 84, TimeoutMS: 14000, FirstTokenTimeoutMS: 8000, MaxAttempts: 1},
-		{ID: "muse12", ProviderID: "opencode", ModelID: "opencode/muse-spark-1.2-contributor-free", Enabled: true, Priority: 85, Weight: 0.8, QualityScore: 82, TimeoutMS: 14000, FirstTokenTimeoutMS: 8000, MaxAttempts: 1},
+		{ID: "supervl", ProviderID: "opencode", ModelID: "opencode/nemotron-3.5-super-vl-free", Enabled: true, Priority: 100, Weight: 1.4, QualityScore: 88, TimeoutMS: 14000, FirstTokenTimeoutMS: 8000, MaxAttempts: 1},
+		{ID: "minimax", ProviderID: "opencode", ModelID: "opencode/minimax-m3.1-flash-free", Enabled: true, Priority: 90, Weight: 1.0, QualityScore: 86, TimeoutMS: 14000, FirstTokenTimeoutMS: 8000, MaxAttempts: 1},
+		{ID: "longcat", ProviderID: "opencode", ModelID: "opencode/longcat-2.5-free", Enabled: true, Priority: 85, Weight: 0.8, QualityScore: 84, TimeoutMS: 14000, FirstTokenTimeoutMS: 8000, MaxAttempts: 1},
 	}
 }
 
@@ -155,7 +155,7 @@ func vlmLLMTemplate() domain.Pipeline {
 		Policy: domain.PoolRoundRobin, QualityFloor: 80, MaxParallel: 2, MaxCalls: 3, HedgeDelayMS: 1500,
 		Prompt: domain.PromptConfig{System: DefaultSystemPrompt, User: DefaultTextPrompt},
 		Models: []domain.ModelSlot{
-			{ID: "ling", ProviderID: "opencode", ModelID: "opencode/ling-3.0-flash-fin-free", Enabled: true, Priority: 100, Weight: 1, QualityScore: 86, TimeoutMS: 14000, FirstTokenTimeoutMS: 8000, MaxAttempts: 1},
+			{ID: "lightning", ProviderID: "opencode", ModelID: "opencode/nemotron-3.5-lightning-free", Enabled: true, Priority: 100, Weight: 1, QualityScore: 80, TimeoutMS: 14000, FirstTokenTimeoutMS: 8000, MaxAttempts: 1},
 		},
 	}
 	vision := visionPool(domain.PoolStaggered)

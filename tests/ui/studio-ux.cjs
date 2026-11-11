@@ -96,7 +96,7 @@ async function save(){await page.click('#saveConfig');await page.waitForFunction
   await page.evaluate(()=>{window.__fixtureJob=null;state.job={};updateApplyState();});
   for(const viewport of [{width:1024,height:768},{width:820,height:614}]){
    await page.setViewportSize(viewport);await page.click('[data-page="pipelines"]');await page.waitForSelector('#canvas');
-   for(const selector of ['#saveConfig','#canvas','#inspector','#findSetting','#helpToggle']){const b=await page.locator(selector).boundingBox();check(b&&b.x>=0&&b.y>=0&&b.x+b.width<=viewport.width+1&&b.y+b.height<=viewport.height+1,'layout fits '+selector+' at '+viewport.width);}
+   for(const selector of ['#saveConfig','#canvas','#inspector','#findSetting','#helpToggle']){if(await page.locator(selector).isHidden())continue;const b=await page.locator(selector).boundingBox();check(b&&b.x>=0&&b.y>=0&&b.x+b.width<=viewport.width+1&&b.y+b.height<=viewport.height+1,'layout fits '+selector+' at '+viewport.width);}
    await page.screenshot({path:path.join(artifacts,'workspace-'+viewport.width+'.png')});
   }
   await page.click('#aboutStudio');await page.waitForSelector('.about-grid');check((await page.locator('.about-grid').textContent()).includes('Win32'),'technical details available in About');

@@ -44,12 +44,11 @@ func (r *runner) newModelAttempt(ctx context.Context, node domain.Node, model do
 		ID: newID("attempt"), SlotID: model.ID, ProviderID: model.ProviderID,
 		ModelID: model.ModelID, CredentialID: key.ID, CredentialAlias: key.Label, Transport: "Direct",
 	}
+	// The label is a fact about the kind, not a scheduler branch, so the trace stays honest when a
+	// new transport is added: one policy row, nothing to remember here.
 	if provider, ok := findProvider(r.engine.cfg, model.ProviderID); ok {
-		switch provider.Kind {
-		case domain.ProviderEmbeddedOpenCode:
-			ref.Transport = "Via OpenCode"
-		case domain.ProviderLocalSTT:
-			ref.Transport = "Local STT"
+		if label := domain.Policy(provider.Kind).TransportLabel; label != "" {
+			ref.Transport = label
 		}
 	}
 	if ref.CredentialAlias == "" {
@@ -71,8 +70,8 @@ func (a *modelAttempt) run(pool domain.ModelPoolConfig, input nodeValue, provide
 		events: events, errors: errs, request: req, started: a.started,
 		emit: a.emit, push: a.pushDelta,
 	}
-	if mode, ok := provider.(interface{ Incremental() bool }); ok {
-		stream.buffered = !mode.Incremental()
+	if pc, ok := findProvider(a.runner.engine.cfg, a.model.ProviderID); ok {
+		stream.buffered = !providers.StreamsTokens(pc, provider)
 	}
 	defer a.cleanupProvider(cancel, resources, stream)
 	if outcome, err := stream.consume(ctx, a.ctx, cancel); err != nil {

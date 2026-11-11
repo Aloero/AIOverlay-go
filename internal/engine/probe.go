@@ -25,11 +25,10 @@ func (e *Engine) Probe(ctx context.Context, req ConnectionProbe, opt RunOptions)
 	if !ok || !pc.Enabled {
 		return Result{}, fmt.Errorf("saved connection is missing or disabled")
 	}
-	switch pc.Kind {
-	case domain.ProviderLocalSTT:
-		return Result{}, fmt.Errorf("local STT must be tested through the audio transcription preview")
-	case domain.ProviderOpenAILive:
-		return Result{}, fmt.Errorf("OpenAI Live must be tested through a persistent Live source")
+	// A kind that cannot be probed with one request says so in its policy row, so no new transport
+	// can be added without deciding what its probe does.
+	if reason := domain.Policy(pc.Kind).ProbeBlockedReason; reason != "" {
+		return Result{}, fmt.Errorf("%s", reason)
 	}
 	var chosen domain.Credential
 	found := false
@@ -40,7 +39,11 @@ func (e *Engine) Probe(ctx context.Context, req ConnectionProbe, opt RunOptions)
 			break
 		}
 	}
-	anonymous := pc.Kind == domain.ProviderEmbeddedOpenCode && (pc.OpenCodeProviderID == "" || pc.OpenCodeProviderID == "opencode") && req.CredentialID == "keyless"
+	// Probing the pool's own keyless route is allowed: the host serves it without a credential.
+	anonymous := false
+	if allowed, ok := pc.AnonymousCredential(); ok {
+		anonymous = req.CredentialID == allowed.ID
+	}
 	if !found && !anonymous {
 		return Result{}, fmt.Errorf("choose an enabled saved key")
 	}
@@ -50,7 +53,7 @@ func (e *Engine) Probe(ctx context.Context, req ConnectionProbe, opt RunOptions)
 		}
 		ready := false
 		for _, route := range e.catalog.Routes(e.cfg) {
-			if route.ConfigID == pc.ID && route.ModelID == req.ModelID && route.Ready && route.Model.Free {
+			if route.ConfigID == pc.ID && route.ModelID == req.ModelID && route.Ready() && route.Model.Free {
 				ready = true
 				break
 			}

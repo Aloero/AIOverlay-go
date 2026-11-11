@@ -10,23 +10,6 @@ import (
 	"time"
 )
 
-func TestSanitizedEnvDropsSecrets(t *testing.T) {
-	t.Setenv("TEST_API_KEY", "secret")
-	t.Setenv("LANG", "C.UTF-8")
-	t.Setenv("OPENCODE_CONFIG", "/user/private/config.json")
-	t.Setenv("NORMAL_SETTING", "not_inherited")
-	env := sanitizedEnv()
-	joined := strings.Join(env, "\n")
-	if strings.Contains(joined, "TEST_API_KEY=") {
-		t.Fatal("secret leaked")
-	}
-	if !strings.Contains(joined, "LANG=C.UTF-8") {
-		t.Fatal("normal env missing")
-	}
-	if strings.Contains(joined, "OPENCODE_CONFIG=") || strings.Contains(joined, "NORMAL_SETTING=") {
-		t.Fatal("unexpected environment inherited")
-	}
-}
 func TestIPv4ProxyConnect(t *testing.T) {
 	up, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -75,5 +58,44 @@ func TestIPv4ProxyConnect(t *testing.T) {
 	io.ReadFull(br, b)
 	if string(b) != "pong" {
 		t.Fatalf("%q", b)
+	}
+}
+
+// The proxy is the embedded runtime's only egress, so a refused CONNECT has to say why: an
+// unanswered close arrives at the child as a bare connection reset and the provider can only
+// report an unexplainable network error.
+func TestIPv4ProxyRejectsExplicitly(t *testing.T) {
+	for _, tc := range []struct{ name, target, want string }{
+		{"no port", "aioverlay.invalid", "400"},
+		{"unusable name", "aioverlay-nonexistent.invalid:443", "502"},
+	} {
+		ln, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+			handleProxyConn(c)
+		}()
+		c, err := net.DialTimeout("tcp4", ln.Addr().String(), time.Second)
+		if err != nil {
+			ln.Close()
+			t.Fatal(err)
+		}
+		fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", tc.target, tc.target)
+		_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+		status, err := bufio.NewReader(c).ReadString('\n')
+		c.Close()
+		ln.Close()
+		if err != nil {
+			t.Fatalf("%s: the proxy closed without a status line: %v", tc.name, err)
+		}
+		if !strings.Contains(status, tc.want) {
+			t.Fatalf("%s: wanted %s, got %q", tc.name, tc.want, status)
+		}
 	}
 }

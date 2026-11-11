@@ -22,6 +22,21 @@ type Transcription struct {
 func NewTranscription(c domain.ProviderConfig, p ProxyResolver) *Transcription {
 	return &Transcription{c, p}
 }
+
+// Capabilities is this adapter's own declaration of what it can carry. It is reported to the
+// scheduler and to Studio, so no layer has to infer modality support from the provider's name.
+func (p *Transcription) Capabilities() MediaCapabilities { return Media(p.cfg) }
+
+func init() {
+	Register(Factory{
+		Kind: domain.ProviderTranscription,
+		New: func(p domain.ProviderConfig, deps Deps) (Provider, MediaCapabilities, error) {
+			adapter := NewTranscription(p, deps.Proxy)
+			return adapter, adapter.Capabilities(), nil
+		},
+	})
+}
+
 func (p *Transcription) ID() string        { return p.cfg.ID }
 func (p *Transcription) Incremental() bool { return false }
 func (p *Transcription) Stream(ctx context.Context, r Request, key string) (<-chan Event, <-chan error) {

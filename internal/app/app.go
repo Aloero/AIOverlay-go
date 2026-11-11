@@ -359,7 +359,7 @@ func (a *App) Run(ctx context.Context, pipelineID string, input engine.Input, op
 		}
 	}
 	result, err := eng.Execute(ctx, pipelineID, input, opt)
-	a.recordRecentUsage(result.Trace)
+	a.recordAttemptEvidence(result.Trace)
 	return result, err
 }
 

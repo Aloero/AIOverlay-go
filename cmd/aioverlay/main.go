@@ -18,6 +18,7 @@ import (
 	"aioverlay/internal/desktop"
 	"aioverlay/internal/domain"
 	"aioverlay/internal/platform"
+	"aioverlay/internal/singleinstance"
 )
 
 func main() {
@@ -26,6 +27,10 @@ func main() {
 	hidden := flag.Bool("no-browser", false, "legacy flag: start embedded Studio hidden (never opens a browser)")
 	devToken := flag.String("headless-token", "", "development-only bearer token (at least 32 characters)")
 	flag.Parse()
+	if !singleinstance.Ensure() {
+		desktop.ShowError("AIOverlay", "AIOverlay уже запущен. Вторая копия закрыта, чтобы не спорить с первой за config.json, горячие клавиши и захват экрана.")
+		return
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	a, err := app.New(*configPath, resourcePath("runtime", "catalog", "models-dev-api.json"))

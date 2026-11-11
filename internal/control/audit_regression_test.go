@@ -29,6 +29,7 @@ func (a *auditBackend) RunBenchmark(context.Context, BenchmarkRequest) (Benchmar
 	return BenchmarkReport{}, nil
 }
 func (a *auditBackend) Traces() []domain.ExecutionTrace { return nil }
+func (a *auditBackend) Readiness() ReadinessReport      { return ReadinessReport{} }
 func (a *auditBackend) Run(context.Context, string, engine.Input, engine.RunOptions) (engine.Result, error) {
 	a.started <- struct{}{}
 	return engine.Result{}, nil

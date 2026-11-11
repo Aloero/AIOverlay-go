@@ -29,6 +29,8 @@ type Backend interface {
 	RunTest(context.Context, TestRequest) (engine.Result, error)
 	RunBenchmark(context.Context, BenchmarkRequest) (BenchmarkReport, error)
 	Traces() []domain.ExecutionTrace
+	// Readiness answers "why is it not ready" as one aggregated report; see contracts.
+	Readiness() ReadinessReport
 }
 
 type Server struct {
@@ -134,6 +136,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/catalog", s.handleCatalog)
 	mux.HandleFunc("/api/catalog/selection", s.handleCatalogSelection)
 	mux.HandleFunc("/api/catalog/refresh", s.handleCatalogRefresh)
+	mux.HandleFunc("/api/readiness", s.handleReadiness)
 	mux.HandleFunc("/api/run", s.handleRun)
 	mux.HandleFunc("/api/benchmark", s.handleBenchmark)
 	mux.HandleFunc("/api/traces", s.handleTraces)

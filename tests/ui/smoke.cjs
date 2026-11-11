@@ -76,6 +76,9 @@ function ok(c,m){assert.ok(c,m);checks++}
   click('#addVisionModel');await wait(()=>$('#catalogRows [data-select-model]'),'vision catalog');
   ok($('#catVision').checked&&$('#catVision').disabled,'VLM picker image filter mandatory');
   ok(!$('#catalogRows').textContent.includes('TEXT ONLY'),'VLM picker excludes text-only');
+  click('#catWhy');await wait(()=>!$('#catWhyPanel').hidden&&$('#catWhyPanel').textContent.includes('published'),'readiness report opens');
+  ok($('#catWhy').getAttribute('aria-expanded')==='true','readiness toggle announces state');
+  click('#catWhy');await wait(()=>$('#catWhyPanel').hidden,'readiness report closes');
   $('#catalogRows [data-select-model]').click();await wait(()=>!$('#dialog').open,'catalog pick');
   ok($('#visionModels').children.length===1,'vision inserted');
   ok(w.document.querySelectorAll('#enableVision').length===1,'one vision switch');

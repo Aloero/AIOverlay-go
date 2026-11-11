@@ -7,10 +7,12 @@ Studio HTML/CSS/JS is compiled into the executable; its JSON requests call the e
 - `config`: validation and portable JSON load/save/import/export.
 - `engine`: graph routing, credential/model selection, admission budgets, cancellation and stream ownership.
 - `providers`: one endpoint attempt; adapter-specific payloads and normalized errors.
+- `modelhost`: who provides models (process or service lifecycle, credential injection, catalog snapshot, served list) behind an `Endpoint`; `modelhost/opencode` is the bundled runtime.
+- `netpolicy`: the outbound rules shared by every transport, so a credential-forwarding decision is not made twice.
 - `control`: UI commands, asynchronous JobManager, capture preview and trace endpoints.
 - `desktop`: Win32 WebView2 host, native export dialog, in-process JSON bridge.
 - `platform`: Win32 overlay/hotkeys and capture resource lifetime. Capture algorithms are injected for Linux tests; actual calls live in `capture_windows.go`.
-- `catalog`: bundled Models.dev metadata. Metadata is not proof of live availability.
+- `catalog`: bundled Models.dev metadata plus readiness verdicts with named sources (config/catalog/host/observed) and in-memory watched outcomes. Metadata is not proof of live availability.
 - `web`: embedded UI assets. All displayed model/config/error values are escaped; no CDN assets.
 
 `CreateDIBSection` replaces GetDIBits; capture remains on a locked OS thread until the DIB's pixels have been copied and the handles released. JPEG encoding can then run independently.
@@ -47,11 +49,11 @@ The frameless Win32 overlay owns its chrome instead of relying on a framework ti
 
 `ModelPoolConfig.Selection` is an optional, additive source selector. Old configs with no selection retain manual pools. A catalog-only pool is valid without pinned slots. The engine owns ordering and fallback; providers still execute one adapter attempt.
 
-`catalog/routes.go` separates Models.dev identity from configured transport. `ProviderID` is a configuration mapping, not a scheduler branch. Directory metadata supplies provider name, model count and credential environment. `engine/selection.go` builds a candidate plan from configured routes, modality, cost filter, explicit quality and overrides. The same pure planner is used by the Studio draft preview and execution. Preview does not consume keys, rotate cursors or send model requests.
+`catalog/routes.go` separates Models.dev identity from configured transport. `ProviderID` is a thin call to `domain.ProviderConfig.CatalogProvider`, so identity is a configuration fact, not a scheduler branch. Directory metadata supplies provider name, model count and credential environment. `engine/selection.go` builds a candidate plan from configured routes, modality, cost filter, explicit quality and overrides. The same pure planner is used by the Studio draft preview and execution. Preview does not consume keys, rotate cursors or send model requests.
 
 Admission records distinct providers together with actual adapter calls and credentials. Typed budget scopes distinguish whole-pool exhaustion from a single provider/key constraint. An already admitted race winner may still complete when a competing candidate reaches the call budget. Candidate/hedge events are distinct from admitted attempt_start events. Trace references carry an attempt ID, transport and credential alias.
 
-`providers/runtime_pool.go` leases OpenCode instances by credential. Concurrent attempts with another key cannot stop an in-use process; only one idle process per provider is retained. Process configuration passes only the selected provider's key, with isolated HOME/XDG directories, denied tools and the existing IPv4 CONNECT proxy. OpenCode error envelopes are parsed structurally; raw response bodies are not shown. Session abort/delete is best-effort cleanup, not an assurance of zero third-party disk persistence.
+`modelhost.Pool` leases host instances by the key the host itself composes. Concurrent attempts with another key cannot stop an in-use process; only one idle process is retained. Process configuration passes only the selected provider's key, with isolated HOME/XDG directories, denied tools and the existing IPv4 CONNECT proxy. OpenCode error envelopes are parsed structurally by the adapter; raw response bodies are not shown. Session abort/delete is best-effort cleanup, not an assurance of zero third-party disk persistence.
 
 `app/settings.go` serializes provider-only changes and pipeline activation against execution. Activating an existing saved pipeline writes the selected ID without rebuilding the provider registry or resetting scheduler state. The application resolves an empty run ID against the current active pipeline.
 
@@ -145,3 +147,87 @@ realtime, screen and budget checks while preserving validation order and error
 text. VPN share-link conversion separates URI parsing from protocol, TLS and
 transport construction. These are local refactorings: they add no provider
 protocol, runtime dependency, configuration schema, network probe or UI framework.
+
+
+## Model host boundary and provider policy
+
+Two things varied together and could not be replaced separately: the *application that provides
+models* (the bundled OpenCode runtime, the private whisper binary, a remote endpoint) and the
+*protocol used to speak to one* (OpenAI-compatible SSE, Gemini, OpenAI Realtime WS, OpenCode HTTP).
+`providers.EmbeddedOpenCode` owned both, so an upgrade or a replacement runtime was an edit to a
+transport, and the app and the runtime each kept their own model list: the overlay marked a model
+ready from its own catalog while the runtime answered `Model not found … Did you mean: <retired
+model>`. Nothing in the contract could express that disagreement.
+
+`internal/modelhost` is the boundary. `Host` owns process or service lifecycle, private storage,
+credential injection, its catalog snapshot and the models it says it serves; `Endpoint` is
+everything an adapter needs to reach one live instance (base URL, control credentials, egress proxy,
+host and version, so a trace can name what answered). `Pool` retains instances; `StartupTimeout`
+bounds a cold boot *outside* the attempt budget, because booting a ~180 MB runtime is infrastructure
+and charging it to `timeout_ms` made the provider unstartable on a slow VM while the next request
+would have found a warm process. `DoJSON` keeps authentication, the shared `netpolicy` redirect rule,
+the egress proxy and a response size cap identical for every adapter, and marks an unusable body with
+`ErrInvalidResponse` so a cause, not a string, reaches the outcome mapping.
+
+`internal/modelhost/opencode` is the only file that knows about `opencode serve`: the command line,
+the isolated profile, the health route, `VERSION.txt`, and the catalog pin (`OPENCODE_MODELS_PATH`
+plus `OPENCODE_DISABLE_MODELS_FETCH`, applied only to a snapshot that exists and is plausibly
+complete, because the disable flag without a usable path leaves the runtime with an empty catalog).
+The pin is part of the instance key through the snapshot's size and mtime, so a catalog refresh
+retires a warm runtime instead of serving a list the app has already replaced. `providers` keeps only
+the protocol: request shape, response parsing, and `RequestError` outcomes. `Host.Served` is the seam
+where "the host accepts this model" is supposed to surface; it currently returns
+`ErrServedUnsupported` on purpose, because `GET /config/providers` exists in the shipped binary but
+its response shape is unverified, and guessing it would report "no models" as truth.
+
+`domain.ProviderPolicy` is the other half. Kind facts must be readable by things that may not build
+an adapter - the pure candidate planner, the config validator, the trace renderer, the catalog - so
+they live in one table: transport label, whether the endpoint is hosted or must be a `wss` session,
+whether the runtime forbids network settings or keys, the delivery shape, media capabilities, the
+catalog provider, the synthetic key a connection runs without credentials, and what a one-shot probe
+cannot test. `ProviderConfig.CatalogProvider`, `ModelRef`, `StripModelRef` and
+`AnonymousCredential` are the accessors. Fourteen `switch kind` blocks disappeared, three of them
+verbatim duplicates; a test fails if the policy table and the adapter factories cover different
+kinds. An adapter still *declares* its own media and delivery shape, and its declaration wins over
+the table, which is the readable default for a planner or a simulation that has no registry.
+
+Adding a runtime is therefore: one policy row, one `Factory` registration, and either a new protocol
+adapter or a `Deps.HostFactory` that supplies a different `Host` behind an existing one. Swapping
+OpenCode for another engine that speaks its HTTP API is a wiring change; upgrading the bundled
+runtime touches `runtime/opencode` and its `VERSION.txt` only. Neither requires a scheduler edit.
+
+
+## Provenance and the readiness report
+
+A readiness boolean with no author cannot be questioned. The VM incident that proved it: the catalog
+said a model was configured, the runtime knew it was out of quota, the engine deadline fired first,
+and the user saw `timeout: context deadline exceeded` - three truthful layers, one useless answer.
+
+`domain.Provenance` names the author of every readiness claim, ordered weakest to strongest:
+config (an intention) < catalog (metadata) < adapter (what the compiled transport can carry) < host
+(what the running host publishes) < observed (what a real attempt returned). A `domain.Verdict` is a
+decision plus its evidence and a list of `domain.Blocker` reasons, each with its own code, text and
+source; `NotReady` derives the verdict's evidence from the strongest blocker, so a caller cannot
+mislabel it, and `Reason()` returns the most authoritative text first.
+
+The catalog is the only writer of verdicts. `Route.Verdict` replaces the old `Ready` field (the
+`Ready()` method remains for callers), and `Annotated` merges verdicts across connections - ready if
+any route is ready, naming the strongest author, otherwise every distinct reason survives. The
+strongest class is *observed*: `Service.Observe` records what a finished attempt returned, in memory
+only, bounded and expired after 15 minutes. A refusal seen by a previous process describes a previous
+moment; reviving it would recreate the original bug. A timeout is recorded as history but never
+blocks - it explains a request, not a model - so only model-level outcomes (not-found, quota, rate
+limit) retire a route, and only for the TTL. `catalog.replace` (a refresh) clears observations: they
+described data that no longer exists.
+
+Evidence flows one way: the app calls `recordAttemptEvidence` after every real run (one call site,
+feeding both the recent-usage list and the catalog), and the catalog is the only store. Providers
+keep the reason text honest: `RequestError.Detail` carries one bounded, single-line quote of the
+provider's own words (never the raw body, never a credential), and the capability report names the
+layer that declared each modality set plus the host and version behind the connection.
+
+`/api/readiness` (`contracts.ReadinessReport`, the Studio «Почему не готово» panel in the catalog
+modal) is a pure join of what the layers already assert: catalog snapshot facts (which published
+snapshot, which runtime version), per-connection verdicts beside the adapter capabilities, per-pool
+model verdicts with `used_by`, and the recent watched history. It decides nothing new and requests
+nothing - an aggregator with its own opinion is how two answers start disagreeing again.

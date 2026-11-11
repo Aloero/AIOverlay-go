@@ -67,16 +67,32 @@ func handleProxyConn(client net.Conn) {
 	}
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {
+		rejectProxy(client, "400 Bad Request", "malformed CONNECT target")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", host)
-	if err != nil || len(ips) == 0 {
+	if err != nil {
+		rejectProxy(client, "502 Bad Gateway", "IPv4 lookup failed: "+err.Error())
 		return
 	}
-	up, err := (&net.Dialer{Timeout: 6 * time.Second}).DialContext(ctx, "tcp4", net.JoinHostPort(ips[0].String(), port))
-	if err != nil {
+	if len(ips) == 0 {
+		// The app forces every child request through here, so a name with only AAAA records
+		// would otherwise look like a provider outage.
+		rejectProxy(client, "502 Bad Gateway", "no IPv4 address for "+host)
+		return
+	}
+	dialer := &net.Dialer{Timeout: 6 * time.Second}
+	var up net.Conn
+	for _, ip := range ips {
+		up, err = dialer.DialContext(ctx, "tcp4", net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			break
+		}
+	}
+	if up == nil {
+		rejectProxy(client, "502 Bad Gateway", "connect failed: "+err.Error())
 		return
 	}
 	defer up.Close()
@@ -89,4 +105,11 @@ func handleProxyConn(client net.Conn) {
 	<-done
 }
 
-var _ = fmt.Sprintf
+// rejectProxy answers a CONNECT this proxy cannot fulfil. Closing the socket without a status
+// line reaches the child as a bare connection reset, which the provider can only report as an
+// unexplainable network error - and this proxy is the child's only egress. A 502 with a reason
+// makes the cause visible where the request fails.
+func rejectProxy(client io.Writer, status, reason string) {
+	body := fmt.Sprintf("HTTP/1.1 %s\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", status, len(reason), reason)
+	_, _ = io.WriteString(client, body)
+}

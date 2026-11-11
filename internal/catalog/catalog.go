@@ -21,43 +21,58 @@ import (
 const LiveURL = "https://models.dev/api.json"
 
 type Service struct {
-	refreshMu     sync.Mutex
-	lastRefresh   time.Time
-	lastError     string
-	mu            sync.RWMutex
-	models        []domain.ModelMeta
-	byRef         map[string]domain.ModelMeta
-	client        *http.Client
-	path          string
-	opencodeReady map[string]bool
+	refreshMu   sync.Mutex
+	lastRefresh time.Time
+	lastError   string
+	mu          sync.RWMutex
+	models      []domain.ModelMeta
+	byRef       map[string]domain.ModelMeta
+	client      *http.Client
+	path        string
+	// offered holds the model references the bundled host publishes for itself, i.e. the models it
+	// will serve without any key of ours. It is a snapshot of the host's own statement, written by
+	// scripts/refresh-catalog.py; a host that could answer Host.Served would replace this file.
+	offered map[string]bool
+	// offeredSnapshot names the published-offerings snapshot (its version field), so a blocker can say
+	// which statement it relied on instead of asserting timelessly.
+	offeredSnapshot string
+	// observed holds what live attempts actually returned, per connection. It is the only evidence in
+	// this service that a running host produced, and it is never persisted.
+	observed *observations
+	now      func() time.Time
 }
 
 func New(path string) (*Service, error) {
-	s := &Service{path: path, client: &http.Client{Timeout: 10 * time.Second}, opencodeReady: map[string]bool{}}
-	s.loadOpenCodeReady()
+	s := &Service{
+		path: path, client: &http.Client{Timeout: 10 * time.Second},
+		offered: map[string]bool{}, observed: newObservations(), now: time.Now,
+	}
+	s.loadHostOfferings()
 	if err := s.LoadSnapshot(); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Service) loadOpenCodeReady() {
+func (s *Service) loadHostOfferings() {
 	path := filepath.Join(filepath.Dir(s.path), "opencode-enabled.json")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
 	var data struct {
-		Models []struct {
+		Version string `json:"version"`
+		Models  []struct {
 			Ref string `json:"ref"`
 		} `json:"models"`
 	}
 	if json.Unmarshal(b, &data) != nil {
 		return
 	}
+	s.offeredSnapshot = strings.TrimSpace(data.Version)
 	for _, row := range data.Models {
 		if row.Ref != "" {
-			s.opencodeReady[row.Ref] = true
+			s.offered[row.Ref] = true
 		}
 	}
 }
@@ -137,7 +152,37 @@ func (s *Service) replace(models []domain.ModelMeta) {
 	s.mu.Lock()
 	s.models = models
 	s.byRef = by
+	// A replaced list invalidates every watched refusal: those failures described the data that is
+	// now gone, and reviving them would block models the refreshed catalog has just re-added.
+	s.observed.clear()
 	s.mu.Unlock()
+}
+
+// Observe records what one real attempt or confirmed probe returned for a model on a connection.
+// The engine already emits the outcome; this is where it stops being only trace history and starts
+// informing what the application is willing to claim. Keyed by connection, because the same model
+// name served by two endpoints can genuinely behave differently.
+func (s *Service) Observe(connectionID, ref string, outcome domain.Outcome, text string) {
+	if strings.TrimSpace(connectionID) == "" || strings.TrimSpace(ref) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observed.record(connectionID, ref, outcome, text, s.now())
+}
+
+// Observations reports the watched outcomes, newest first, for the readiness report.
+func (s *Service) Observations() []Observation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Observation, 0, len(s.observed.order))
+	for _, key := range s.observed.order {
+		if watch, found := s.observed.byRef[key]; found {
+			out = append(out, watch)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Recorded.After(out[j].Recorded) })
+	return out
 }
 
 func (s *Service) Models() []domain.ModelMeta {

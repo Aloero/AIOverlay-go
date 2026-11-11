@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"aioverlay/internal/domain"
@@ -52,14 +53,22 @@ type RequestError struct {
 	Outcome    domain.Outcome
 	StatusCode int
 	Message    string
-	Retryable  bool
+	// Detail is a bounded reason quoted from the provider when it stated one - a quota limit, a
+	// retired model. Message stays the stable sentence the UI and the tests match on; Detail is the
+	// evidence a human acts on. It is never the raw response body and never a credential.
+	Detail    string
+	Retryable bool
 }
 
 func (e *RequestError) Error() string {
+	head := string(e.Outcome)
 	if e.StatusCode != 0 {
-		return fmt.Sprintf("%s (HTTP %d): %s", e.Outcome, e.StatusCode, e.Message)
+		head = fmt.Sprintf("%s (HTTP %d)", e.Outcome, e.StatusCode)
 	}
-	return fmt.Sprintf("%s: %s", e.Outcome, e.Message)
+	if strings.TrimSpace(e.Detail) != "" {
+		return fmt.Sprintf("%s: %s - %s", head, e.Message, e.Detail)
+	}
+	return fmt.Sprintf("%s: %s", head, e.Message)
 }
 
 func OutcomeOf(err error) domain.Outcome {

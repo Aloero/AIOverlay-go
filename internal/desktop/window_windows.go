@@ -324,6 +324,7 @@ func (w *desktopWindow) runSession(ctx context.Context) error {
 		v.SetSize(studioMinWidthDIP, studioMinHeightDIP, webview.HintMin)
 	}
 	w.applyIdentity(v)
+	applyDarkCaption(v)
 	// Studio is deliberately never hidden from screen capture: it is a config
 	// editor the user opens, edits and closes, and WDA_EXCLUDEFROMCAPTURE on a
 	// WebView2 window can blank presentation on some drivers. Stealth applies
@@ -585,6 +586,21 @@ func (w *desktopWindow) applyIdentity(v webview.WebView) {
 		ico, _, _ := user32.NewProc("LoadImageW").Call(h, uintptr(unsafe.Pointer(name)), 1, size, size, 0x8000)
 		if ico != 0 {
 			user32.NewProc("SendMessageW").Call(uintptr(v.Window()), 0x80, uintptr(i), ico)
+		}
+	}
+}
+
+// applyDarkCaption puts the non-client area (title bar) into the same dark mode as the page.
+// Studio has no light theme - the page background is always dark - so a system-light caption is
+// always wrong here, and Windows draws it white by default. 20 is DWMWA_USE_IMMERSIVE_DARK_MODE;
+// 19 is the same attribute under its pre-20H1 number. A failure would be cosmetic only, but trying
+// both makes one call enough on every supported Windows.
+func applyDarkCaption(v webview.WebView) {
+	set := syscall.NewLazyDLL("dwmapi.dll").NewProc("DwmSetWindowAttribute")
+	enabled := int32(1)
+	for _, attribute := range []uintptr{20, 19} {
+		if hr, _, _ := set.Call(uintptr(v.Window()), attribute, uintptr(unsafe.Pointer(&enabled)), unsafe.Sizeof(enabled)); int32(hr) >= 0 {
+			return
 		}
 	}
 }

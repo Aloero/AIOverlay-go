@@ -2,6 +2,7 @@ package providers
 
 import (
 	"aioverlay/internal/domain"
+	"aioverlay/internal/modelhost"
 	"context"
 	"fmt"
 )
@@ -124,15 +125,62 @@ type RealtimeOpenRequest struct {
 }
 
 type AdapterCapabilities struct {
-	ProviderID string                  `json:"provider_id"`
-	Label      string                  `json:"label"`
-	Kind       domain.ProviderKind     `json:"kind"`
-	Media      MediaCapabilities       `json:"media"`
-	Realtime   RealtimeCapabilities    `json:"realtime"`
-	LocalSTT   *LocalSTTResourceStatus `json:"local_stt,omitempty"`
+	ProviderID string              `json:"provider_id"`
+	Label      string              `json:"label"`
+	Kind       domain.ProviderKind `json:"kind"`
+	Media      MediaCapabilities   `json:"media"`
+	// MediaSource names the layer that asserted the modalities: "adapter" when the built transport
+	// declared it, "config" when only the kind table could answer. A capability with no author is how
+	// the app came to believe a model could see a screenshot it never could.
+	MediaSource domain.Provenance `json:"media_source"`
+	// Host/HostVersion identify the model host behind this connection, so Studio can show what is
+	// actually running rather than what the provider kind is called. Both are empty when the
+	// connection is a plain remote endpoint with no host of its own.
+	Host        string `json:"host,omitempty"`
+	HostVersion string `json:"host_version,omitempty"`
+	// Realtime is always adapter-declared: only the transport knows whether it can hold a session.
+	Realtime RealtimeCapabilities    `json:"realtime"`
+	LocalSTT *LocalSTTResourceStatus `json:"local_stt,omitempty"`
 }
 
-func adapterCapabilities(config domain.ProviderConfig, adapter Provider) AdapterCapabilities {
+// adapterCapabilities assembles what Studio is told about one connection. Media comes from the
+// adapter's own declaration when it has one - the transport that will speak the protocol is the
+// only authority - and from the config table otherwise.
+// capabilitySource picks the narrowest truthful capability set: an adapter may declare less than
+// the kind table allows (a build without audio support), never more by accident of naming.
+func capabilitySource(config domain.ProviderConfig, adapter Provider, declared []MediaCapabilities) MediaCapabilities {
+	if len(declared) > 0 {
+		return declared[0]
+	}
+	if reporter, ok := adapter.(interface{ Capabilities() MediaCapabilities }); ok {
+		return reporter.Capabilities()
+	}
+	return Media(config)
+}
+
+// capabilityProvenance says which of those two answers is in the reported set, and hostIdentity names
+// the runtime behind the connection. Both are answers the UI must show next to the claim, not in a
+// separate panel: "it can see images" and "the compiled transport says so, from opencode 1.18.31" are
+// one statement.
+func capabilityProvenance(adapter Provider, declared []MediaCapabilities) domain.Provenance {
+	if len(declared) > 0 {
+		return domain.ProvenanceAdapter
+	}
+	if _, ok := adapter.(interface{ Capabilities() MediaCapabilities }); ok {
+		return domain.ProvenanceAdapter
+	}
+	return domain.ProvenanceConfig
+}
+
+func hostIdentity(adapter Provider) (string, string) {
+	reporter, ok := adapter.(interface{ Host() modelhost.Host })
+	if !ok || reporter.Host() == nil {
+		return "", ""
+	}
+	return reporter.Host().ID(), reporter.Host().Version()
+}
+
+func adapterCapabilities(config domain.ProviderConfig, adapter Provider, declared ...MediaCapabilities) AdapterCapabilities {
 	realtime := UnsupportedRealtime("Persistent realtime transport is not implemented for this adapter")
 	if capabilityProvider, ok := adapter.(RealtimeCapabilityProvider); ok {
 		realtime = normalizeRealtimeCapabilities(capabilityProvider.RealtimeCapabilities())
@@ -143,13 +191,15 @@ func adapterCapabilities(config domain.ProviderConfig, adapter Provider) Adapter
 		}
 	}
 	capabilities := AdapterCapabilities{
-		ProviderID: config.ID,
-		Label:      config.Label,
-		Kind:       config.Kind,
-		Media:      Media(config),
-		Realtime:   realtime,
+		ProviderID:  config.ID,
+		Label:       config.Label,
+		Kind:        config.Kind,
+		Media:       capabilitySource(config, adapter, declared),
+		MediaSource: capabilityProvenance(adapter, declared),
+		Realtime:    realtime,
 	}
-	if config.Kind == domain.ProviderLocalSTT {
+	capabilities.Host, capabilities.HostVersion = hostIdentity(adapter)
+	if domain.Policy(config.Kind).LocalRuntime {
 		status := localSTTResourceStatus(config)
 		if statusProvider, ok := adapter.(interface{ LocalSTTStatus() LocalSTTResourceStatus }); ok {
 			status = statusProvider.LocalSTTStatus()

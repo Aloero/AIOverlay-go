@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,19 +72,55 @@ func TestOpenCodeFreeReadyUsesBundledRuntimeList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	models := s.Annotated(config.Default())
-	var mimoReady bool
-	for _, m := range models {
-		ref := m.ProviderID + "/" + m.ModelID
-		if ref == "opencode/mimo-v2.5-free" {
-			mimoReady = m.Ready
-		}
-		if ref == "opencode/deepseek-v4-flash-free" && m.Ready {
-			t.Fatal("catalog-only DeepSeek must not be READY")
+	// The allow-list is refreshed with scripts/refresh-catalog.py, so pick the fixtures out of the
+	// shipped files instead of naming models that upstream retires over time.
+	enabled := struct {
+		Models []struct {
+			Ref  string `json:"ref"`
+			Name string `json:"name"`
+		} `json:"models"`
+	}{}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(path), "opencode-enabled.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if len(enabled.Models) == 0 {
+		t.Fatal("the bundled OpenCode allow-list is empty")
+	}
+	listed := map[string]bool{}
+	for _, row := range enabled.Models {
+		listed[row.Ref] = true
+	}
+	servedRef := enabled.Models[0].Ref
+	catalogOnlyRef := ""
+	for ref := range s.byRef {
+		if strings.HasPrefix(ref, "opencode/") && !listed[ref] {
+			catalogOnlyRef = ref
+			break
 		}
 	}
-	if !mimoReady {
-		t.Fatal("bundled MiMo should be READY")
+	if catalogOnlyRef == "" {
+		t.Fatal("need at least one catalog-only OpenCode model to prove the gate")
+	}
+	var servedReady *bool
+	for _, m := range s.Annotated(config.Default()) {
+		ref := m.ProviderID + "/" + m.ModelID
+		if ref == servedRef {
+			value := m.Ready
+			servedReady = &value
+		}
+		if ref == catalogOnlyRef && m.Ready {
+			t.Fatalf("%s is catalog-only and must not be READY", catalogOnlyRef)
+		}
+	}
+	if servedReady == nil {
+		t.Fatalf("%s is in the bundled allow-list but was not annotated", servedRef)
+	}
+	if !*servedReady {
+		t.Fatalf("%s is in the bundled allow-list and must be READY", servedRef)
 	}
 }
 

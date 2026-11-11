@@ -65,6 +65,7 @@ async function readConfig(){const r=await fetch(base+'/api/config',{headers:{Aut
   cfg=await readConfig();ok(!!cfg.control_center.layout?.[cfg.active_pipeline_id],'canvas layout persists in portable config');
   // Control rectangles must stay inside the work area at the minimum target size.
   for(const selector of ['#inspector','#canvas','#saveConfig','#helpToggle']) {
+   if(await page.locator(selector).isHidden())continue; // save controls join the draft
    const r=await page.locator(selector).boundingBox();ok(r&&r.x>=0&&r.y>=0&&r.x+r.width<=1025&&r.y+r.height<=769,'1024x768 fits '+selector);
   }
   await page.screenshot({path:path.join(artifacts,'pipeline-1024x768.png')});
@@ -99,6 +100,7 @@ async function readConfig(){const r=await fetch(base+'/api/config',{headers:{Aut
   await page.setViewportSize({width:1320,height:880});await page.click('#fitGraph');await page.screenshot({path:path.join(artifacts,'pipeline-1320x880.png')});
   await page.setViewportSize({width:820,height:614});await page.click('#fitGraph');
   for(const selector of ['#inspector','#canvas','#saveConfig','#helpToggle']) {
+   if(await page.locator(selector).isHidden())continue; // save controls join the draft
    const r=await page.locator(selector).boundingBox();ok(r&&r.width>0&&r.x>=0&&r.y>=0&&r.x+r.width<=821&&r.y+r.height<=615,'compact logical viewport fits '+selector);
   }
   await page.screenshot({path:path.join(artifacts,'pipeline-820x614.png')});

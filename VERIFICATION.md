@@ -414,3 +414,27 @@ Not run: the physical Windows Studio rendering check — please confirm on the
 affected machine that Studio paints and that `studio-diagnostics.json` shows
 `renderer_ready` with a visible window.
 
+
+## Single-instance guard, draft-only save controls, desktop text selection (2026-11-10)
+
+A second `AIOverlay.exe` copy raced the first over `config.json`, hotkeys and
+capture targets. `internal/singleinstance` now takes a session kernel mutex
+(`Local\AIOverlay-go.single-instance`); a rejected launch reports through the
+existing native dialog and exits. The handle is never closed on purpose: the
+OS releases the mutex on exit, so a crash cannot leave a stale lock; a failing
+API never blocks a valid start-up. Non-Windows builds are no-ops so headless
+development and UI test hosts can still run.
+
+Studio header: «Применено» with its green dot was removed — a steady state is
+not an event. `#saveState`/`#saveConfig` (including the initial markup) are
+shown only while the draft differs from the applied configuration; the legacy
+app.js writers now flow through `updateApplyState()`. DOM/Chromium suites
+updated accordingly.
+
+The WebView2 page now behaves like a desktop app: text is not selectable
+outside content surfaces (inputs, outputs, help/notes, toasts, error banner,
+table cells, monospace references, dialogs).
+
+Automated: full check suite including DOM and Chromium UI suites, Windows
+cross-build, single-instance source contract test. Not run: physical double-
+launch dialog on Windows (requires the user machine).

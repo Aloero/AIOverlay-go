@@ -30,6 +30,11 @@ func (l *countingCallLease) Commit()  { l.commits.Add(1) }
 func (l *countingCallLease) Release() { l.releases.Add(1) }
 
 func (f *fakeProvider) ID() string { return f.id }
+
+// Incremental declares this fake a streaming transport. The delivery shape is the adapter's own
+// fact, so a fake must state it instead of inheriting it from the kind of the provider id it
+// replaces - a streaming fake on the "opencode" connection still streams.
+func (f *fakeProvider) Incremental() bool { return true }
 func (f *fakeProvider) Stream(ctx context.Context, r providers.Request, key string) (<-chan providers.Event, <-chan error) {
 	e := make(chan providers.Event, 4)
 	er := make(chan error, 1)

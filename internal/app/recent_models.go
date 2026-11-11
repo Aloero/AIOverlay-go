@@ -1,10 +1,8 @@
 package app
 
 import (
-	"aioverlay/internal/catalog"
 	"aioverlay/internal/domain"
 	"slices"
-	"strings"
 )
 
 func mergeRecent(groups ...[]string) []string {
@@ -44,12 +42,8 @@ func (a *App) recordRecentUsage(t domain.ExecutionTrace) {
 		if !ok {
 			continue
 		}
-		id := catalog.ProviderID(p)
-		model := ev.Attempt.ModelID
-		if p.Kind == domain.ProviderEmbeddedOpenCode {
-			model = strings.TrimPrefix(model, id+"/")
-		}
-		refs = append(refs, id+"/"+model)
+		id := p.CatalogProvider()
+		refs = append(refs, id+"/"+p.StripModelRef(ev.Attempt.ModelID))
 	}
 	next := mergeRecent(refs, a.recentModels, a.cfg.ControlCenter.RecentModels)
 	if !slices.Equal(next, a.recentModels) {

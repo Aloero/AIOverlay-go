@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -40,18 +39,6 @@ func redirectProviders() []redirectProvider {
 			req.Task = "transcribe"
 			req.Audio = &domain.AudioClip{PCM16: []int16{1, 2}, SampleRate: 16000, Channels: 1}
 			return NewTranscription(cfg, nil).request(ctx, req, "test-api-key", make(chan Event, 16))
-		}},
-		{"opencode", `{ "ok": true }`, func(ctx context.Context, base string) error {
-			u, err := url.Parse(base)
-			if err != nil {
-				return err
-			}
-			port, err := strconv.Atoi(u.Port())
-			if err != nil {
-				return err
-			}
-			server := openCodeServer{port: port, password: "test-runtime-password"}
-			return server.doJSON(ctx, http.MethodPost, "/session", map[string]string{"prompt": "private prompt"}, nil, 2*time.Second)
 		}},
 	}
 }

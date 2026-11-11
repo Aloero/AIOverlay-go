@@ -58,7 +58,8 @@ func (v sourceValidator) validateRealtimeSource(s domain.EventSource) error {
 		return fmt.Errorf("source %s realtime session requires an audio source", s.ID)
 	}
 	provider, ok := v.providers[s.Realtime.ProviderID]
-	if !ok || !provider.Enabled || provider.Kind != domain.ProviderOpenAILive {
+	// A persistent session can only be driven by a provider whose protocol is a session.
+	if !ok || !provider.Enabled || !domain.Policy(provider.Kind).RealtimeProtocol {
 		return fmt.Errorf("source %s realtime provider is missing, disabled or not openai_live", s.ID)
 	}
 	if strings.TrimSpace(s.Realtime.ModelID) == "" || len(s.Realtime.ModelID) > 2048 || strings.ContainsRune(s.Realtime.ModelID, 0) {

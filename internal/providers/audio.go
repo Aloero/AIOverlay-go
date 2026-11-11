@@ -13,21 +13,29 @@ type MediaCapabilities struct {
 	TranscriptionOnly bool `json:"transcription_only"`
 }
 
+// Media reports what one connection can carry. The facts come from domain.ProviderPolicy - the
+// table that is readable without constructing an adapter, because the pure candidate planner and
+// the config validator need them and may not touch the provider registry. AudioFromCfg is the one
+// per-connection refinement: the OpenAI-compatible family carries audio optionally, and only the
+// operator knows whether this endpoint does.
 func Media(p domain.ProviderConfig) MediaCapabilities {
-	switch p.Kind {
-	case domain.ProviderGemini:
-		return MediaCapabilities{Audio: true, Image: true}
-	case domain.ProviderTranscription, domain.ProviderLocalSTT:
-		return MediaCapabilities{Audio: true, TranscriptionOnly: true}
-	case domain.ProviderOpenAICompatible:
-		return MediaCapabilities{Audio: p.AudioInput, Image: true}
-	case domain.ProviderEmbeddedOpenCode:
-		return MediaCapabilities{Image: true}
-	case domain.ProviderOpenAILive:
-		return MediaCapabilities{Audio: true}
-	default:
-		return MediaCapabilities{}
+	policy := domain.Policy(p.Kind)
+	return MediaCapabilities{
+		Audio:             policy.Media.Audio || (policy.AudioFromCfg && p.AudioInput),
+		Image:             policy.Media.Image,
+		TranscriptionOnly: policy.Media.TranscriptionOnly,
 	}
+}
+
+// StreamsTokens reports whether a connection delivers its answer as tokens rather than as one
+// body. It decides whether a first-token deadline means anything, so the adapter that will actually
+// speak the protocol answers when it is available, and the kind table answers when it is not - the
+// same split as Media, and the reason a simulation without adapters still predicts the real shape.
+func StreamsTokens(cfg domain.ProviderConfig, adapter Provider) bool {
+	if reporter, ok := adapter.(interface{ Incremental() bool }); ok {
+		return reporter.Incremental()
+	}
+	return !domain.Policy(cfg.Kind).SingleBody
 }
 
 func validateAudioRequest(p domain.ProviderConfig, r Request) error {

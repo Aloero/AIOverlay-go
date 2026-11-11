@@ -21,35 +21,40 @@ func enum[T ~string](v T, values ...T) bool {
 func within(v, min, max int) bool { return v >= min && v <= max }
 func score(v float64) bool        { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 100 }
 func validateProvider(p domain.ProviderConfig) error {
-	if !enum(p.Kind, domain.ProviderOpenAICompatible, domain.ProviderGemini, domain.ProviderEmbeddedOpenCode, domain.ProviderTranscription, domain.ProviderOpenAILive, domain.ProviderLocalSTT) {
+	if !domain.KnownProviderKind(p.Kind) {
 		return fmt.Errorf("provider %s has unsupported protocol", p.ID)
 	}
+	policy := domain.Policy(p.Kind)
 	if !enum(p.CredentialPool.Policy, domain.CredentialRoundRobin, domain.CredentialSequential, domain.CredentialSticky, domain.CredentialRandom) {
 		return fmt.Errorf("provider %s has invalid key policy", p.ID)
 	}
 	if !within(p.CredentialPool.MaxKeysPerRequest, 0, 1000) || !within(p.CredentialPool.RateLimitCooldownS, 0, 86400) {
 		return fmt.Errorf("provider key limits invalid")
 	}
-	if p.Kind == domain.ProviderLocalSTT {
+	// Three endpoint shapes, decided by the kind's policy: a purely local runtime must not be
+	// given URLs at all, a network transport must have a valid one, a hosted runtime brings its
+	// own endpoint and so needs none.
+	switch {
+	case policy.ForbidsNetworkSettings:
 		if p.BaseURL != "" || p.ModelsURL != "" {
 			return fmt.Errorf("provider %s local STT must not configure network URLs", p.ID)
 		}
-	} else if p.BaseURL != "" {
+	case p.BaseURL != "":
 		u, err := url.Parse(p.BaseURL)
 		if err != nil {
 			return fmt.Errorf("provider %s has invalid base URL", p.ID)
 		}
 		validScheme := enum(u.Scheme, "https", "http")
-		if p.Kind == domain.ProviderOpenAILive {
+		if policy.RealtimeProtocol {
 			validScheme = u.Scheme == "wss" && u.RawQuery == ""
 		}
 		if u.Hostname() == "" || !validScheme || u.User != nil || u.Fragment != "" {
 			return fmt.Errorf("provider %s has invalid base URL", p.ID)
 		}
-	} else if p.Kind != domain.ProviderEmbeddedOpenCode && p.Enabled {
+	case p.Enabled && !policy.Hosted:
 		return fmt.Errorf("provider %s requires base URL", p.ID)
 	}
-	if p.Kind == domain.ProviderOpenAILive {
+	if policy.RealtimeProtocol {
 		if p.AudioInput {
 			return fmt.Errorf("provider %s live audio capability is defined by its adapter, not audio_input", p.ID)
 		}
@@ -64,7 +69,7 @@ func validateProvider(p domain.ProviderConfig) error {
 	} else if p.Realtime != nil {
 		return fmt.Errorf("provider %s realtime settings require openai_live protocol", p.ID)
 	}
-	if p.Kind == domain.ProviderLocalSTT {
+	if policy.LocalRuntime {
 		if p.CatalogProviderID != "" || len(p.Headers) != 0 || len(p.CredentialEnv) != 0 {
 			return fmt.Errorf("provider %s local STT cannot keep remote catalog, header or credential settings", p.ID)
 		}
