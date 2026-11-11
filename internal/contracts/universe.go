@@ -40,6 +40,8 @@ type UniverseModel struct {
 	ModelID         string   `json:"model_id"`
 	InputModalities []string `json:"input_modalities"`
 	Free            bool     `json:"free"`
+	Reasoning       bool     `json:"reasoning"`
+	Context         int      `json:"context,omitempty"`
 	Ready           bool     `json:"ready"`
 	Reason          string   `json:"reason,omitempty"`
 	Apps            []string `json:"apps"`

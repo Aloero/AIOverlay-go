@@ -197,10 +197,10 @@ async function importConfig(e) {
 function renderPage() {
  if (!state.config) return;
  $$('[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === state.page));
- $('#breadcrumb').textContent = {pipelines:'Пайплайны',providers:'Провайдеры',runs:'Запуски',settings:'Приложение'}[state.page];
+ $('#breadcrumb').textContent = {pipelines:'Пайплайны',models:'Модели',providers:'Провайдеры',runs:'Запуски',settings:'Приложение'}[state.page];
  $('#providerCount').textContent = state.config.providers.filter(p => p.enabled).length;
  renderPipelineList();
- ({pipelines:renderPipeline,providers:renderProviders,runs:renderRuns,settings:renderSettings}[state.page])();
+ ({pipelines:renderPipeline,models:renderModels,providers:renderProviders,runs:renderRuns,settings:renderSettings}[state.page])();
  applyWorkspaceLayout();updateApplyState();
 }
 function renderPipelineList() {

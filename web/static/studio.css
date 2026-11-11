@@ -142,3 +142,22 @@
 #benchmarkRuns {width:62px;padding:5px}
 .answer-preview {white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;font:12px/1.6 Consolas,monospace}
 @media(max-width:900px){.benchmark-panel .section-line {align-items:flex-start;flex-wrap:wrap}}
+
+/* Model settings page (Настройка моделей). */
+.models-apps {display:flex;flex-wrap:wrap;gap:9px;padding:0 26px 14px;align-items:center}
+.app-chip {display:flex;flex-direction:column;gap:2px;align-items:flex-start;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 13px;min-width:120px}
+.app-chip strong {font-size:12px}
+.app-chip small {color:var(--muted);font-size:10px}
+.app-chip.live {border-color:#325449}
+.app-chip.selected {border-color:#b0a5ff;box-shadow:0 0 0 2px #b0a5ff1f}
+.models-layout {display:grid;grid-template-columns:280px 1fr;gap:18px;padding:0 26px;min-height:0;flex:1;overflow:hidden}
+.models-providers,.models-list {display:flex;flex-direction:column;min-height:0}
+.models-providers > div,.models-list > div:last-child {overflow:auto;flex:1}
+.model-card {border:1px solid #344056;border-radius:7px;padding:10px 12px;margin-bottom:8px;background:#1e2838;display:flex;flex-direction:column;gap:7px}
+.model-card-head {display:flex;flex-direction:column;min-width:0}
+.model-card-head strong {font-size:13px;word-break:break-word}
+.model-card .tags {margin:0}
+.provider-app {display:inline-flex;padding:2px 6px;font:9px/1.5 Consolas,monospace;border:1px solid #394357;border-radius:4px;color:#adb8ca;background:#2a3140;cursor:pointer}
+.provider-app.active {color:#c9c5ff;border-color:#6a63a5;background:#2a2c47}
+.saved-connection.selected {border-color:#b0a5ff}
+@media (max-width:1150px) {.models-layout {grid-template-columns:230px 1fr}}

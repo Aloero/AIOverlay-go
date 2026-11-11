@@ -67,6 +67,7 @@ func (a *App) Universe() contracts.Universe {
 			target = &entry{model: contracts.UniverseModel{
 				Ref: ref, ProviderID: route.Model.ProviderID, ModelID: route.Model.ModelID,
 				InputModalities: route.Model.InputModalities, Free: route.Model.Free,
+				Reasoning: route.Model.Reasoning, Context: route.Model.Context,
 			}}
 			entries[ref] = target
 		}
