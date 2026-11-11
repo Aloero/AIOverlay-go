@@ -121,6 +121,17 @@ func Migrate(cfg *domain.Config) error {
 				}
 			}
 			cfg.Version = 6
+		case 6:
+			// Schema 7 names the delivery application explicitly, so the UI can present
+			// "provider → app → registration" without re-deriving it from protocol kinds.
+			// Every existing connection keeps its behavior: opencode connections become app
+			// "opencode", everything else is "direct".
+			for i := range cfg.Providers {
+				if cfg.Providers[i].App == "" {
+					cfg.Providers[i].App = cfg.Providers[i].DeliveryApp()
+				}
+			}
+			cfg.Version = 7
 		default:
 			return fmt.Errorf("unsupported old config schema %d", cfg.Version)
 		}

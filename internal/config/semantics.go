@@ -24,6 +24,14 @@ func validateProvider(p domain.ProviderConfig) error {
 	if !domain.KnownProviderKind(p.Kind) {
 		return fmt.Errorf("provider %s has unsupported protocol", p.ID)
 	}
+	// The delivery app must agree with the protocol kind: "opencode"/"hermes" front their own
+	// transports, "direct" is only for the app's own protocol adapters.
+	if p.App != "" && !domain.ValidDeliveryApp(p.App) {
+		return fmt.Errorf("provider %s has unknown delivery app %s", p.ID, p.App)
+	}
+	if p.App != "" && p.App != domain.AppForKind(p.Kind) {
+		return fmt.Errorf("provider %s: app %s does not match protocol %s", p.ID, p.App, p.Kind)
+	}
 	policy := domain.Policy(p.Kind)
 	if !enum(p.CredentialPool.Policy, domain.CredentialRoundRobin, domain.CredentialSequential, domain.CredentialSticky, domain.CredentialRandom) {
 		return fmt.Errorf("provider %s has invalid key policy", p.ID)
@@ -53,6 +61,10 @@ func validateProvider(p domain.ProviderConfig) error {
 		}
 	case p.Enabled && !policy.Hosted:
 		return fmt.Errorf("provider %s requires base URL", p.ID)
+	case p.Enabled && p.Kind == domain.ProviderEmbeddedHermes:
+		// A Hermes connection fronts an upstream through the harness' custom endpoint, so the
+		// endpoint is part of the connection - unlike OpenCode, which speaks to its own runtime.
+		return fmt.Errorf("provider %s (Hermes) requires the upstream base URL", p.ID)
 	}
 	if policy.RealtimeProtocol {
 		if p.AudioInput {

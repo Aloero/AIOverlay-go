@@ -26,6 +26,7 @@ func (a *modelAttempt) request(pool domain.ModelPoolConfig, input nodeValue, lim
 	return providers.Request{
 		Audio: input.audio, Task: pool.Task, ProviderID: a.model.ProviderID, ModelID: a.model.ModelID,
 		SystemPrompt: system, UserPrompt: user, ImageJPEG: input.image, TextInput: input.text,
+		AppParams:       a.model.AppParams,
 		MaxOutputTokens: limits.MaxOutputTokens, ConnectTimeout: durationMS(limits.ConnectMS),
 		FirstTokenTimeout: durationMS(limits.FirstTokenMS), ResponseTimeout: durationMS(limits.ResponseMS),
 		StreamIdleTimeout: durationMS(limits.IdleMS),

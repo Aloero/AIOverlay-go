@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = 6
+const ConfigVersion = 7
 
 type ProviderKind string
 
@@ -14,9 +14,34 @@ const (
 	ProviderGemini           ProviderKind = "gemini"
 	ProviderTranscription    ProviderKind = "audio_transcription"
 	ProviderEmbeddedOpenCode ProviderKind = "embedded_opencode"
+	ProviderEmbeddedHermes   ProviderKind = "embedded_hermes"
 	ProviderOpenAILive       ProviderKind = "openai_live"
 	ProviderLocalSTT         ProviderKind = "local_stt"
 )
+
+// DeliveryApp is the application (harness) through which a provider is registered and used.
+// "direct" means the app's own protocol adapters; an external app owns the provider
+// registration and interprets that model's parameters — the app deliberately does not
+// replicate per-harness parameter logic.
+type DeliveryApp string
+
+const (
+	AppDirect   DeliveryApp = "direct"
+	AppOpenCode DeliveryApp = "opencode"
+	AppHermes   DeliveryApp = "hermes"
+)
+
+func ValidDeliveryApp(a DeliveryApp) bool { return enum(a, AppDirect, AppOpenCode, AppHermes) }
+
+// enum lives in the config package's terms; domain keeps its own copy for the checks above.
+func enum(v DeliveryApp, values ...DeliveryApp) bool {
+	for _, x := range values {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
 
 type CredentialPolicy string
 
@@ -95,22 +120,25 @@ type AppConfig struct {
 }
 
 type ProviderConfig struct {
-	AudioInput         bool                       `json:"audio_input,omitempty"`
-	Extra              map[string]json.RawMessage `json:"-"`
-	CatalogProviderID  string                     `json:"catalog_provider_id,omitempty"`
-	ID                 string                     `json:"id"`
-	Label              string                     `json:"label"`
-	Kind               ProviderKind               `json:"kind"`
-	Enabled            bool                       `json:"enabled"`
-	BaseURL            string                     `json:"base_url,omitempty"`
-	ModelsURL          string                     `json:"models_url,omitempty"`
-	OpenCodeProviderID string                     `json:"opencode_provider_id,omitempty"`
-	CredentialEnv      []string                   `json:"credential_env,omitempty"`
-	Headers            map[string]string          `json:"headers,omitempty"`
-	CredentialPool     CredentialPool             `json:"credential_pool"`
-	RequestDefaults    RequestDefaults            `json:"request_defaults"`
-	Realtime           *RealtimeProviderConfig    `json:"realtime,omitempty"`
-	LocalSTT           *LocalSTTProviderConfig    `json:"local_stt,omitempty"`
+	AudioInput        bool                       `json:"audio_input,omitempty"`
+	Extra             map[string]json.RawMessage `json:"-"`
+	CatalogProviderID string                     `json:"catalog_provider_id,omitempty"`
+	ID                string                     `json:"id"`
+	Label             string                     `json:"label"`
+	Kind              ProviderKind               `json:"kind"`
+	// App records which application fronts this provider. Empty means "derived from Kind" and
+	// is normalized by migration; DeliveryApp() is the accessor to use.
+	App                DeliveryApp             `json:"app,omitempty"`
+	Enabled            bool                    `json:"enabled"`
+	BaseURL            string                  `json:"base_url,omitempty"`
+	ModelsURL          string                  `json:"models_url,omitempty"`
+	OpenCodeProviderID string                  `json:"opencode_provider_id,omitempty"`
+	CredentialEnv      []string                `json:"credential_env,omitempty"`
+	Headers            map[string]string       `json:"headers,omitempty"`
+	CredentialPool     CredentialPool          `json:"credential_pool"`
+	RequestDefaults    RequestDefaults         `json:"request_defaults"`
+	Realtime           *RealtimeProviderConfig `json:"realtime,omitempty"`
+	LocalSTT           *LocalSTTProviderConfig `json:"local_stt,omitempty"`
 }
 
 type LocalSTTProviderConfig struct {
@@ -236,10 +264,13 @@ type ModelPoolConfig struct {
 }
 
 type ModelSlot struct {
-	Extra               map[string]json.RawMessage `json:"-"`
-	ID                  string                     `json:"id"`
-	ProviderID          string                     `json:"provider_id"`
-	ModelID             string                     `json:"model_id"`
+	Extra      map[string]json.RawMessage `json:"-"`
+	ID         string                     `json:"id"`
+	ProviderID string                     `json:"provider_id"`
+	ModelID    string                     `json:"model_id"`
+	// AppParams are model parameters owned by the delivery application (reasoning effort,
+	// thinking mode, …). The app forwards them untouched; only the application interprets them.
+	AppParams           map[string]json.RawMessage `json:"app_params,omitempty"`
 	Enabled             bool                       `json:"enabled"`
 	Priority            int                        `json:"priority"`
 	Weight              float64                    `json:"weight"`

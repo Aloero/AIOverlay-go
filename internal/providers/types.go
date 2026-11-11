@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,14 +12,17 @@ import (
 )
 
 type Request struct {
-	Audio             *domain.AudioClip
-	Task              string
-	ProviderID        string
-	ModelID           string
-	SystemPrompt      string
-	UserPrompt        string
-	ImageJPEG         []byte
-	TextInput         string
+	Audio        *domain.AudioClip
+	Task         string
+	ProviderID   string
+	ModelID      string
+	SystemPrompt string
+	UserPrompt   string
+	ImageJPEG    []byte
+	TextInput    string
+	// AppParams are interpreted solely by the delivery application of a harness transport
+	// (reasoning effort, thinking mode); direct protocol adapters ignore them.
+	AppParams         map[string]json.RawMessage
 	MaxOutputTokens   int
 	ConnectTimeout    time.Duration
 	FirstTokenTimeout time.Duration

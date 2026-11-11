@@ -68,6 +68,7 @@ type MediaPolicy struct {
 
 const (
 	openCodeTransport = "Via OpenCode"
+	hermesTransport   = "Via Hermes"
 	localSTTTransport = "Local STT"
 	liveProbeBlocked  = "OpenAI Live must be tested through a persistent Live source"
 	localProbeBlocked = "local STT must be tested through the audio transcription preview"
@@ -99,6 +100,16 @@ var policies = map[ProviderKind]ProviderPolicy{
 		// Overridable per connection: the runtime can front any upstream provider.
 		CatalogProviderID: "opencode",
 	},
+	ProviderEmbeddedHermes: {
+		TransportLabel: hermesTransport,
+		Hosted:         true,
+		Gateway:        true,
+		SingleBody:     true,
+		// The single-query CLI has no image input path, so the transport is text-only.
+		Media: MediaPolicy{},
+		// Overridable per connection: the harness can front any upstream provider.
+		CatalogProviderID: "hermes",
+	},
 	ProviderOpenAILive: {
 		RealtimeProtocol:   true,
 		Media:              MediaPolicy{Audio: true},
@@ -129,6 +140,27 @@ func Policy(kind ProviderKind) ProviderPolicy {
 func KnownProviderKind(kind ProviderKind) bool {
 	_, ok := policies[kind]
 	return ok
+}
+
+// AppForKind is the application a protocol kind requires of its own.
+func AppForKind(kind ProviderKind) DeliveryApp {
+	switch kind {
+	case ProviderEmbeddedOpenCode:
+		return AppOpenCode
+	case ProviderEmbeddedHermes:
+		return AppHermes
+	}
+	return AppDirect
+}
+
+// DeliveryApp resolves the application fronting the provider. An empty field (pre-schema-7
+// configs) derives from the kind, so the accessor is total while validation still rejects a
+// field that contradicts the protocol.
+func (p ProviderConfig) DeliveryApp() DeliveryApp {
+	if ValidDeliveryApp(p.App) {
+		return p.App
+	}
+	return AppForKind(p.Kind)
 }
 
 // ProviderRegistrations lists the kinds the shipped policies cover; it keeps the policy table and
