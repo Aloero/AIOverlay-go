@@ -11,3 +11,4 @@ type BenchmarkReport = contracts.BenchmarkReport
 type TestRequest = contracts.TestRequest
 type StudioState = contracts.StudioState
 type ReadinessReport = contracts.ReadinessReport
+type Universe = contracts.Universe

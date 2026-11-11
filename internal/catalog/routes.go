@@ -64,6 +64,11 @@ func (s *Service) Directory() []domain.ProviderMeta {
 	return out
 }
 
+// RuntimePresent reports whether the bundled OpenCode runtime file exists and is usable. It is
+// the host fact the settings page needs to decide whether "via OpenCode" is a live option; the
+// offered model list is a separate question the verdicts already answer.
+func (s *Service) RuntimePresent() bool { return s.runtimePresent() }
+
 func (s *Service) runtimePresent() bool {
 	paths := []string{filepath.Join(filepath.Dir(s.path), "..", "opencode", "opencode.exe")}
 	if p := strings.TrimSpace(os.Getenv("AIOVERLAY_OPENCODE_BIN")); p != "" {

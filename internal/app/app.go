@@ -16,6 +16,7 @@ import (
 	"aioverlay/internal/contracts"
 	"aioverlay/internal/domain"
 	"aioverlay/internal/engine"
+	hermeshost "aioverlay/internal/modelhost/hermes"
 	"aioverlay/internal/providers"
 	"aioverlay/internal/session"
 	tracestore "aioverlay/internal/trace"
@@ -39,6 +40,8 @@ type App struct {
 	beforeConfigSave  func(domain.Config) (func(), error)
 	maintenanceCancel context.CancelFunc
 	maintenanceDone   chan struct{}
+	hermesOnce        sync.Once
+	hermesHost        *hermeshost.Host
 }
 
 func New(configPath, catalogPath string) (*App, error) {

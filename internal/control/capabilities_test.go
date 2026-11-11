@@ -30,6 +30,7 @@ func (*capabilityTestBackend) RunBenchmark(context.Context, BenchmarkRequest) (B
 }
 func (*capabilityTestBackend) Traces() []domain.ExecutionTrace { return nil }
 func (*capabilityTestBackend) Readiness() ReadinessReport      { return ReadinessReport{} }
+func (*capabilityTestBackend) Universe() Universe              { return Universe{} }
 func (*capabilityTestBackend) ProviderCapabilities() []providers.AdapterCapabilities {
 	return []providers.AdapterCapabilities{{
 		ProviderID: "direct",

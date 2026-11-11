@@ -34,3 +34,13 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, s.backend.Readiness())
 }
+
+// handleUniverse serves the model/settings surface. Like readiness it is a pure read over facts
+// the layers already hold, so opening the page never changes engine state or reaches the network.
+func (s *Server) handleUniverse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, s.backend.Universe())
+}

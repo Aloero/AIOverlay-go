@@ -31,6 +31,8 @@ type Backend interface {
 	Traces() []domain.ExecutionTrace
 	// Readiness answers "why is it not ready" as one aggregated report; see contracts.
 	Readiness() ReadinessReport
+	// Universe is the single model/settings surface: apps, providers and selectable models.
+	Universe() Universe
 }
 
 type Server struct {
@@ -137,6 +139,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/catalog/selection", s.handleCatalogSelection)
 	mux.HandleFunc("/api/catalog/refresh", s.handleCatalogRefresh)
 	mux.HandleFunc("/api/readiness", s.handleReadiness)
+	mux.HandleFunc("/api/universe", s.handleUniverse)
 	mux.HandleFunc("/api/run", s.handleRun)
 	mux.HandleFunc("/api/benchmark", s.handleBenchmark)
 	mux.HandleFunc("/api/traces", s.handleTraces)
