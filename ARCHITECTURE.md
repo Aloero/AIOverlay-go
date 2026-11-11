@@ -7,7 +7,7 @@ Studio HTML/CSS/JS is compiled into the executable; its JSON requests call the e
 - `config`: validation and portable JSON load/save/import/export.
 - `engine`: graph routing, credential/model selection, admission budgets, cancellation and stream ownership.
 - `providers`: one endpoint attempt; adapter-specific payloads and normalized errors.
-- `modelhost`: who provides models (process or service lifecycle, credential injection, catalog snapshot, served list) behind an `Endpoint`; `modelhost/opencode` is the bundled runtime.
+- `modelhost`: who provides models (process or service lifecycle, credential injection, catalog snapshot, served list) behind an `Endpoint`; `modelhost/opencode` is the bundled runtime, `modelhost/hermes` drives the external Hermes Agent CLI as isolated one-shot runs.
 - `netpolicy`: the outbound rules shared by every transport, so a credential-forwarding decision is not made twice.
 - `control`: UI commands, asynchronous JobManager, capture preview and trace endpoints.
 - `desktop`: Win32 WebView2 host, native export dialog, in-process JSON bridge.
@@ -62,7 +62,7 @@ Frontend modules: app.js retains common UI and catalog/trace rendering; connecti
 
 A hidden or iconic Studio is not hidden/restored during capture. Only a visible non-iconic window is temporarily hidden. The GDI capture and native overlay privacy path remain unchanged.
 
-Schema chain: 1 (0.2.3–0.2.5) → 2 (0.2.6, forward-preserving) → 3 (0.2.7/0.2.8, independent scheduling) → 4 and 5 (audio-context fields) → 6 (model host and catalog provenance, 0.2.9). `migrate.go` runs the active loop 1→6, preserving fields at every step; `internal/domain.ConfigVersion` is the single source of the current schema.
+Schema chain: 1 (0.2.3–0.2.5) → 2 (0.2.6, forward-preserving) → 3 (0.2.7/0.2.8, independent scheduling) → 4 and 5 (audio-context fields) → 6 (model host and catalog provenance, 0.2.9) → 7 (delivery application per connection and app-owned model parameters; forward-preserving, every connection keeps its behavior). `migrate.go` runs the active loop 1→7, preserving fields at every step; `internal/domain.ConfigVersion` is the single source of the current schema.
 
 
 ## Audit stabilization · 0.2.6
@@ -180,6 +180,18 @@ the protocol: request shape, response parsing, and `RequestError` outcomes. `Hos
 where "the host accepts this model" is supposed to surface; it currently returns
 `ErrServedUnsupported` on purpose, because `GET /config/providers` exists in the shipped binary but
 its response shape is unverified, and guessing it would report "no models" as truth.
+
+Schema 7 adds the delivery application: every connection names the app that fronts it (`direct`,
+`opencode`, `hermes`; migration derives it from the protocol kind, and validation keeps the two in
+agreement), and a model slot may carry `app_params` — parameters only that application interprets,
+forwarded untouched. `internal/modelhost/hermes` drives the external Hermes Agent harness as
+one-shot `hermes chat --safe-mode --provider custom … --format stream-json` runs with an isolated
+`HERMES_HOME`; there is no server to warm, so its `Endpoint` never blocks and its version probe is
+a cached `--version` call that runs only when a connection is actually registered through the
+harness. `GET /api/universe` then serves the single model-settings surface (apps with live
+availability, providers with registration and key state, selectable models) by joining the same
+`catalog.Routes` verdicts the scheduler uses — it aggregates, never adds opinions, which is what
+keeps the page and the engine unable to disagree.
 
 `domain.ProviderPolicy` is the other half. Kind facts must be readable by things that may not build
 an adapter - the pure candidate planner, the config validator, the trace renderer, the catalog - so

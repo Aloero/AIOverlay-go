@@ -1,12 +1,20 @@
 # Verification · AIOverlay-go 0.2.9
 
-Host: Linux amd64. The latest audit below covers the working copy on 2026-11-11. Earlier dated sections are historical evidence. Current configuration schema is 6; minimum Go version is 1.27.3.
+Host: Linux amd64. The latest audit below covers the working copy on 2026-11-11. Earlier dated sections are historical evidence. Current configuration schema is 7; minimum Go version is 1.27.3.
+
+## Model-layer redesign audit · 2026-11-11 (commits 3025533…a57a2c1)
+
+- Schema 7 (`DeliveryApp`, `app_params`, `embedded_hermes`), the Hermes model host and CLI adapter, `GET /api/universe`, the Studio «Настройка моделей» page and the removal of the stage source-mode picker.
+- `go test ./...` — 27 packages pass; `go test -race` over app/control/providers/modelhost/config/domain/engine passes; `go vet ./...` and `gofmt -l` clean; `GOOS=windows CGO_ENABLED=0 go build ./...` passes.
+- New tests: `delivery_app_test.go` (migration 6→7, app/kind consistency, hermes URL requirement, `app_params` round trip), `modelhost/hermes` host tests, `providers/hermes_test.go` (fake CLI: success/429/mismatch/empty/cancel), `app/universe_test.go` (aggregation + harness boots only when registered), desktop-bundle inclusion of the new script.
+- UI harness (`tests/ui/run.cjs`): all six suites pass, 0 JS errors — 150 named checks in the reporting suites plus the review/audio suites; covers the new page (chips, rail, FREE/all/search/filters, ⚙ parameter round trip), stage seeding, rejection of empty strict lists and the catalog picker's «Via Hermes» route.
+- `GET /api/universe` measured against the headless server with the default config: five requests, 12–21 ms each, zero child processes of the app (`tests/ui/measure-universe.cjs`).
 
 ## Current build audit · 2026-11-11 (commit b45d1da)
 
 - `go test ./...` — 26 packages pass; `go test -race ./internal/...` passes; `go vet ./...` and `gofmt -l` clean.
 - Release gate (`scripts/build.sh` → `cmd/release`): all required artifacts present, `MANIFEST.sha256` verified.
-- UI harness (`scripts/ui-check/run.cjs`, Playwright Chromium): 28 checks, 0 JS errors — includes the readiness panel flow.
+- UI harness (`tests/ui/run.cjs`, Playwright Chromium): 28 checks, 0 JS errors — includes the readiness panel flow.
 - `npm audit --omit=dev` reports no vulnerabilities; `govulncheck` has no known vulnerability in module requirements.
 - New since last audit: catalog provenance (`Verdict` with sources config < catalog < adapter < host < observed), watched-attempt observations (history only, never block routing), `GET /api/readiness` and the Studio «Почему не готово» panel; `internal/netpolicy` shared same-origin redirect rule; unconditional dark Studio caption on Windows; `internal/singleinstance` session mutex.
 
