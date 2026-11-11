@@ -147,26 +147,51 @@ function findUniverseModel(ref){
 	return list.find(m=>m.ref===ref);
 }
 
-function addUniverseModelToPool(pool,model){
+// universeConnection picks the transport that can actually carry a universe model: the app the
+// universe listed wins, otherwise any enabled connection for that catalog provider.
+function universeConnection(model){
+	const usable=p=>p.enabled&&p.kind!=='local_stt'&&p.kind!=='openai_live';
+	const byID=p=>catalogProviderID(p)===model.provider_id;
+	const providers=state.config.providers;
+	if((model.apps||[]).includes('opencode')){const oc=providers.find(p=>usable(p)&&p.kind==='embedded_opencode'&&byID(p));if(oc)return oc;}
+	if((model.apps||[]).includes('hermes')){const hm=providers.find(p=>usable(p)&&p.kind==='embedded_hermes'&&byID(p));if(hm)return hm;}
+	return providers.find(p=>usable(p)&&!['embedded_opencode','embedded_hermes'].includes(p.kind)&&byID(p))||providers.find(p=>usable(p)&&byID(p));
+}
+
+function addUniverseModelToPool(pool,model,quiet){
 	if(!pool||!model)throw new Error('Модель не найдена.');
-	const app=(model.apps||[])[0]||'direct';
-	let connection=state.config.providers.find(p=>p.enabled&&p.kind!=='local_stt'&&p.kind!=='openai_live'&&p.opencode_provider_id===model.provider_id&&p.kind==='embedded_opencode');
-	if(app!=='opencode')connection=state.config.providers.find(p=>p.enabled&&p.catalog_provider_id===model.provider_id&&p.kind!=='embedded_opencode'&&p.kind!=='local_stt'&&p.kind!=='openai_live');
-	if(!connection)connection=state.config.providers.find(p=>p.enabled&&p.kind!=='local_stt'&&p.kind!=='openai_live'&&catalogProviderID(p)===model.provider_id);
+	const connection=universeConnection(model);
 	if(!connection){
 		// An all-catalog model whose provider is not registered yet: the action is registration,
 		// not a half-added slot that cannot answer.
 		const native=state.config.providers.find(p=>catalogProviderID(p)===model.provider_id&&!['embedded_opencode','embedded_hermes','local_stt','openai_live'].includes(p.kind));
-		if(native){notify('Подключение «'+native.label+'» сейчас не готово: '+(model.reason||'нет маршрута'));return;}
+		if(quiet)return false;
+		if(native){notify('Подключение «'+native.label+'» сейчас не готово: '+(model.reason||'нет маршрута'));return false;}
 		registerProviderApp({id:model.provider_id,name:model.provider_name||model.provider_id,credential_env:[]},'direct');
-		return;
+		return false;
 	}
-	if(!connection.enabled)throw new Error('Подключение к провайдеру выключено.');
-	const id=connection.kind==='embedded_opencode'?model.provider_id+'/'+model.model_id:model.model_id;
+	const id=(connection.kind==='embedded_opencode'||connection.kind==='embedded_hermes')?model.provider_id+'/'+model.model_id:model.model_id;
 	pool.models=pool.models||[];
-	if(pool.models.some(s=>s.provider_id===connection.id&&s.model_id===id)){notify('Модель уже в списке.');return;}
+	if(pool.models.some(s=>s.provider_id===connection.id&&s.model_id===id))return quiet?false:(notify('Модель уже в списке.'),false);
 	pool.models.push({id:uid('model'),provider_id:connection.id,model_id:id,enabled:true,priority:100-pool.models.length,weight:1,quality_score:80,timeout_ms:0,first_token_timeout_ms:0,max_attempts:1});
-	dirty();notify('Модель добавлена в '+pool.result_name);
+	dirty();
+	if(!quiet)notify('Модель добавлена в '+(pool.result_name||'этот этап'));
+	return true;
+}
+
+// seedPoolFromUniverse fills a stage with the default model list the «Модели» page defines as
+// usable: ready first, free as the fallback, in stable reference order, bounded to 12 so a stage
+// never becomes a wall of slots.
+async function seedPoolFromUniverse(pool,modality){
+	if(!pool)return 0;
+	let list=modelSpace.snapshot?.models;
+	if(!list){const universe=await api('/api/universe');if(!modelSpace.snapshot)modelSpace.snapshot=universe;list=universe.models||[];}
+	const fits=m=>!modality||(m.input_modalities||[]).includes(modality);
+	let candidates=(list||[]).filter(m=>m.ready&&fits(m));
+	if(!candidates.length)candidates=(list||[]).filter(m=>m.free&&fits(m));
+	let added=0;
+	for(const model of candidates.slice(0,12)){if(addUniverseModelToPool(pool,model,true))added++;}
+	return added;
 }
 
 // openProviderApps: choose the application that fronts a provider, then register through it. The
